@@ -33,7 +33,9 @@ from src.config import Config  # noqa: E402
 from src.discovery.websocket_manager import get_ws_manager  # noqa: E402
 from src.exceptions.handlers import register_exception_handlers  # noqa: E402
 from src.logging import RequestLoggingMiddleware, get_logger, setup_logging  # noqa: E402
-from src.middleware import RateLimitConfig, RateLimitMiddleware, SecurityHeadersMiddleware  # noqa: E402
+from src.middleware import (  # noqa: E402
+    PublicOAuthCORSMiddleware, RateLimitConfig, RateLimitMiddleware, SecurityHeadersMiddleware,
+)
 from src.scheduler import get_scheduler  # noqa: E402
 from src.version import __build_commit__, __build_time__, __version__  # noqa: E402
 
@@ -94,6 +96,9 @@ def create_app() -> FastAPI:
         CORSMiddleware, allow_origins=cors.allowed_origins, allow_methods=cors.allow_methods,
         allow_headers=cors.allow_headers, allow_credentials=cors.allow_credentials,
     )
+    # Added after the console policy so it runs outside it: the OAuth protocol surface
+    # (discovery, registration, token) is open to any origin, without credentials.
+    app.add_middleware(PublicOAuthCORSMiddleware)
 
     rl = Config.get_rate_limit_config()
     sec = Config.get_security_config()
