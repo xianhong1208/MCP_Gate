@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from db import get_db
 from db.models import AdminUser
-from src.adapters import MCPToolAdapter, ServiceAdapter, normalize_service_host
+from src.adapters import MCPToolAdapter, ServiceAdapter, fallback_service_name, sanitize_server_name
 from src.api.schemas import DiscoveredServiceInfo, ScanRequest, ScanResponse, VerifyRequest, VerifyResponse
 from src.audit import ActorType, AuditService, AuditStatus, ResourceType
 from src.discovery.scanner import get_scanner
@@ -70,9 +70,9 @@ async def scan_services(request: ScanRequest, http_request: Request, db: Session
                 if request.service_name:
                     service_name = request.service_name
                 elif vr and vr.server_name and vr.server_name != "(requires auth)":
-                    service_name = vr.server_name.replace(" ", "-").replace("/", "-")
+                    service_name = sanitize_server_name(vr.server_name)
                 else:
-                    service_name = f"mcp-{normalize_service_host(svc.host).replace('.', '-')}-{svc.port}"
+                    service_name = fallback_service_name(svc.host, svc.port)
 
                 existing = ServiceAdapter.get_by_host_port(db, svc.host, svc.port)
                 if existing:

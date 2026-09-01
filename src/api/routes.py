@@ -246,10 +246,14 @@ async def check_service_health(service_id: str, db: Session = Depends(get_db), _
         auth_token=resolve_service_auth_token(db, service),
     )
     previous = service.health_status
+    adopted = None
     if result.success:
         new_status, error_message = "online", None
+        # A generated placeholder name (from a scan that could not read the server) is replaced by the
+        # real name; a name the operator chose is never touched.
+        adopted = ServiceAdapter.adopt_server_name(db, service, result.server_name)
         # Refresh the description only for auto-discovered services (or when it is empty); a description
-        # the operator wrote is theirs. The name is never touched.
+        # the operator wrote is theirs.
         if result.server_name and result.server_name != "(requires auth)" \
                 and (not service.description or service.source == "auto_discovered"):
             desc = result.server_description or f"{result.server_name}" + (
@@ -262,7 +266,7 @@ async def check_service_health(service_id: str, db: Session = Depends(get_db), _
         new_status, error_message = ("offline" if fail_count >= 3 else "error"), result.error
         ServiceAdapter.update_health(db, service_id, status=new_status, response_time_ms=result.response_time_ms,
                                      error_message=error_message, increment_fail_count=True)
-    return ServiceHealthCheckResponse(service_name=service.name, status=new_status,
+    return ServiceHealthCheckResponse(service_name=adopted or service.name, status=new_status,
                                       response_time_ms=result.response_time_ms, error_message=error_message,
                                       previous_status=previous, status_changed=new_status != previous)
 

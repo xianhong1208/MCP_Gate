@@ -25,7 +25,7 @@ from src.adapters.oauth_adapter import (
     OAuthTokenAdapter,
     TokenUsageAdapter,
 )
-from src.adapters.service_adapter import ServiceAdapter
+from src.adapters.service_adapter import ServiceAdapter, fallback_service_name, sanitize_server_name
 
 __all__ = [
     "ServiceAdapter",
@@ -43,5 +43,7 @@ __all__ = [
     "OAuthTokenAdapter",
     "OAuthConsentAdapter",
     "normalize_service_host",
+    "fallback_service_name",
+    "sanitize_server_name",
     "normalize_audience",
 ]
