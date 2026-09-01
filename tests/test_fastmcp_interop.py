@@ -89,7 +89,7 @@ def mcp_server(center):
         authorization_servers=[AnyHttpUrl(center["url"])],
         base_url=base_url,
     )
-    mcp = FastMCP("interop-demo", auth=auth)
+    mcp = FastMCP("interop-demo", instructions="MCP Center demo server", auth=auth)
 
     @mcp.tool
     def hello(name: str) -> str:
@@ -228,3 +228,19 @@ def test_scan_inspects_server_protected_by_this_center(center, mcp_server):
         registered = r.json()
         assert registered["requires_auth"] is True
         assert registered["tools_count"] == 1
+
+
+def test_health_check_keeps_operator_description(center, mcp_server):
+    """A manual health check fills an empty description with the server's summary but never overwrites a
+    description the operator wrote, and never dumps the full `instructions` text."""
+    sid = mcp_server["service"]["id"]
+    with httpx.Client(base_url=center["url"], cookies={"mcp_session": center["cookie"]}, timeout=60) as c:
+        r = c.post(f"/api/services/{sid}/health-check")
+        assert r.status_code == 200 and r.json()["status"] == "online", r.text
+        desc = c.get(f"/api/services/{sid}").json()["description"]
+        assert desc == "MCP Center demo server"  # the demo server's one-line instructions
+
+        r = c.put(f"/api/services/{sid}", json={"description": "Mine, hands off"})
+        assert r.status_code == 200, r.text
+        c.post(f"/api/services/{sid}/health-check")
+        assert c.get(f"/api/services/{sid}").json()["description"] == "Mine, hands off"

@@ -85,6 +85,36 @@ class ScannerSSRFError(Exception):
 TokenFactory = Callable[[str], Optional[str]]
 
 
+def summarize_instructions(text: Optional[str], limit: int = 200) -> Optional[str]:
+    """Reduce an MCP server's `instructions` (often a long Markdown brief for the model) to one line.
+
+    Takes the first paragraph that is not a heading, table or list; falls back to the H1 text. The
+    result is what the console shows as the service description, so it must stay short.
+    """
+    if not text:
+        return None
+    paragraphs = [p.strip() for p in text.replace("\r\n", "\n").split("\n\n")]
+    title = None
+    for para in paragraphs:
+        if not para:
+            continue
+        first = para.lstrip()
+        if first.startswith("#"):
+            if title is None:
+                title = first.lstrip("#").strip()
+            continue
+        if first.startswith(("|", "-", "*", "```", ">", "1.")):
+            continue
+        summary = " ".join(line.strip() for line in para.splitlines() if line.strip())
+        break
+    else:
+        summary = title
+    if not summary:
+        return None
+    summary = summary.strip("*_ ")
+    return summary if len(summary) <= limit else summary[: limit - 1].rstrip() + "…"
+
+
 def _is_bearer_challenge(www_authenticate: Optional[str]) -> bool:
     """True when a 401 carries the standard MCP/OAuth challenge (`WWW-Authenticate: Bearer ...`).
 
@@ -395,7 +425,8 @@ class MCPScanner:
                             )
 
                         server_version = server_info.get("version")
-                        server_description = init_result.get("instructions") or server_info.get("description")
+                        server_description = summarize_instructions(init_result.get("instructions")) \
+                            or server_info.get("description")
                         logger.info(f"MCP service verified: name={server_name}, version={server_version}")
                         return MCPVerifyResult(
                             success=True, reachable=True,

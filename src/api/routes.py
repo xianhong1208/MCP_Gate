@@ -248,13 +248,13 @@ async def check_service_health(service_id: str, db: Session = Depends(get_db), _
     previous = service.health_status
     if result.success:
         new_status, error_message = "online", None
-        if result.server_name and result.server_name != "(requires auth)":
-            desc = f"MCP service: {result.server_name}"
-            if result.server_version:
-                desc += f" v{result.server_version}"
-            if result.server_description:
-                desc += f"\n\n{result.server_description}"
-            ServiceAdapter.update(db, service_id, description=desc)  # Do not overwrite the user-chosen name
+        # Refresh the description only for auto-discovered services (or when it is empty); a description
+        # the operator wrote is theirs. The name is never touched.
+        if result.server_name and result.server_name != "(requires auth)" \
+                and (not service.description or service.source == "auto_discovered"):
+            desc = result.server_description or f"{result.server_name}" + (
+                f" v{result.server_version}" if result.server_version else "")
+            ServiceAdapter.update(db, service_id, description=desc)
         ServiceAdapter.update_health(db, service_id, status=new_status, response_time_ms=result.response_time_ms,
                                      error_message=None, reset_fail_count=True)
     else:

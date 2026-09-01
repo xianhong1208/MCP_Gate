@@ -65,3 +65,19 @@ async def test_tools_skipped_when_locked_out():
     found = await scanner.discover_services(["127.0.0.1"], [5055], verify=True, get_tools=True)
     scanner.get_tools_list.assert_not_awaited()
     assert found[0].requires_auth is True
+
+
+def test_summarize_instructions_takes_first_paragraph():
+    from src.discovery.scanner import summarize_instructions
+
+    text = (
+        "# AnyDoc — document format conversion service\n\n"
+        "Converts the user's uploaded files into the format they need,\nand provides PDF splitting.\n\n"
+        "## When to use\n\n| a | b |\n|---|---|\n\n- bullet\n"
+    )
+    assert summarize_instructions(text) == (
+        "Converts the user's uploaded files into the format they need, and provides PDF splitting.")
+    assert summarize_instructions("# Only a title\n\n## Section\n\n- list") == "Only a title"
+    assert summarize_instructions("") is None and summarize_instructions(None) is None
+    long = "x" * 500
+    assert len(summarize_instructions(long)) == 200 and summarize_instructions(long).endswith("…")
