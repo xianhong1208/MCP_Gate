@@ -695,6 +695,23 @@ def mint_scanner_token(db: Session, service: Service) -> Optional[str]:
     return token
 
 
+def mint_audience_token(db: Session, audience: str) -> Optional[str]:
+    """Scanner token for a server that is not registered yet (audience = its MCP URL); not recorded.
+
+    Used while scanning: a peer that answers 401 with a Bearer challenge may be protected by this very
+    authorization server, in which case a token for its URL lets the scanner read its name and tools.
+    """
+    aud = normalize_audience(audience)
+    if not aud:
+        return None
+    scope = resolve_scope(db, DEFAULT_SCANNER_SCOPES, None, None)
+    token, _, _ = issue_access_token(
+        db, sub=SCANNER_CLIENT_ID, client_id=SCANNER_CLIENT_ID, scope=scope, audience=aud,
+        ttl_seconds=SCANNER_TOKEN_TTL_SECONDS, record=False,
+    )
+    return token
+
+
 def build_metadata(db: Session) -> dict:
     """RFC 8414 Authorization Server Metadata。"""
     base = issuer()

@@ -149,6 +149,7 @@ class DiscoveredServiceInfo(BaseModel):
     server_description: Optional[str] = None
     protocol_version: Optional[str] = None
     tools_count: int = 0
+    requires_auth: bool = False
     registered: bool = False
     service_name: Optional[str] = None
     service_id: Optional[str] = None

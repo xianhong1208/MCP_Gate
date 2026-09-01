@@ -487,7 +487,8 @@
       "requiresAuthLabel": "Requires authentication - register first, then create token",
       "toolsCount": "{{n}} tools",
       "registered": "Registered",
-      "alreadyExists": "Already exists"
+      "alreadyExists": "Already exists",
+      "protectedLabel": "protected by MCP Center"
     },
     "detail": {
       "backToServices": "Back to Services",

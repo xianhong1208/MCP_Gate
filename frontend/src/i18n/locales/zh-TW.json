@@ -487,7 +487,8 @@
       "requiresAuthLabel": "需要認證 - 請先註冊服務並建立 token",
       "toolsCount": "{{n}} 個 tools",
       "registered": "已註冊",
-      "alreadyExists": "已存在"
+      "alreadyExists": "已存在",
+      "protectedLabel": "由 MCP Center 保護"
     },
     "detail": {
       "backToServices": "返回服務列表",

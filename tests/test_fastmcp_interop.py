@@ -202,3 +202,29 @@ async def test_full_oauth_flow_with_fastmcp_client(center, mcp_server):
         tokens = c.get("/api/oauth/tokens", params={"kind": "access"}).json()["tokens"]
         assert any(t["audience"] == mcp_server["url"] and t["client_name"] == "interop-test-client" for t in tokens)
         assert c.get("/api/oauth/consents").json()["total"] == 1
+
+
+def test_scan_inspects_server_protected_by_this_center(center, mcp_server):
+    """Scanning finds a FastMCP server that trusts MCP Center, reads its name and tools and registers it
+    as requiring authentication - without the operator supplying a token."""
+    port = int(urlparse(mcp_server["base_url"]).port)
+    with httpx.Client(base_url=center["url"], cookies={"mcp_session": center["cookie"]}, timeout=60) as c:
+        # Forget the registration made by the fixture so the scan sees an unknown peer
+        r = c.delete(f"/api/services/{mcp_server['service']['id']}")
+        assert r.status_code in (200, 204), r.text
+
+        r = c.post("/api/discovery/scan", json={"hosts": ["127.0.0.1"], "ports": [port], "auto_register": True})
+        assert r.status_code == 200, r.text
+        found = r.json()["discovered"]
+        assert len(found) == 1, found
+        svc = found[0]
+        assert svc["server_name"] == "interop-demo"
+        assert svc["requires_auth"] is True
+        assert svc["tools_count"] == 1
+        assert svc["registered"] is True
+
+        r = c.get(f"/api/services/{svc['service_id']}")
+        assert r.status_code == 200, r.text
+        registered = r.json()
+        assert registered["requires_auth"] is True
+        assert registered["tools_count"] == 1

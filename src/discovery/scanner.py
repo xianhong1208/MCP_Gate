@@ -12,7 +12,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Callable
 
 import aiohttp
 
@@ -38,6 +38,13 @@ class MCPVerifyResult:
     capabilities: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
     response_time_ms: float = 0.0
+    # The peer answered over HTTP (any status). Distinguishes "wrong protocol / port closed" from
+    # "reachable but rejected", so callers do not retry over HTTPS against a plain-HTTP server.
+    reachable: bool = False
+    # The peer demanded a bearer token (401 with a Bearer challenge or a JSON-RPC 401 body).
+    requires_auth: bool = False
+    # Token that satisfied the peer during verification (self-minted); reused for tools/list.
+    auth_token: Optional[str] = None
 
 
 @dataclass
@@ -58,6 +65,8 @@ class DiscoveredService:
         If tools were fetched successfully (without an auth_token), authentication is not required.
         """
         if self.verify_result:
+            if self.verify_result.requires_auth:
+                return True
             # server_name == "(requires auth)" means the service returned 401
             if self.verify_result.server_name == "(requires auth)":
                 return True
@@ -70,6 +79,20 @@ class DiscoveredService:
 
 class ScannerSSRFError(Exception):
     """Connection target address rejected by SSRF protection"""
+
+
+# audience (the peer's MCP URL) -> short-lived bearer token, or None when MCP Center cannot mint one
+TokenFactory = Callable[[str], Optional[str]]
+
+
+def _is_bearer_challenge(www_authenticate: Optional[str]) -> bool:
+    """True when a 401 carries the standard MCP/OAuth challenge (`WWW-Authenticate: Bearer ...`).
+
+    MCP servers built on FastMCP (and the MCP authorization spec in general) answer unauthenticated
+    requests with an empty 401 body and a Bearer challenge that points at their protected-resource
+    metadata. That header, not a JSON-RPC body, is the signal that the peer speaks MCP behind OAuth.
+    """
+    return bool(www_authenticate) and www_authenticate.strip().lower().startswith("bearer")
 
 
 def _resolve_validated_ip(host: str) -> Optional[str]:
@@ -239,12 +262,17 @@ class MCPScanner:
         port: int,
         path: str = "/mcp",
         protocol: str = "http",
-        auth_token: Optional[str] = None
+        auth_token: Optional[str] = None,
+        token_factory: Optional[TokenFactory] = None,
     ) -> MCPVerifyResult:
         """Verify an MCP service.
 
         Uses a JSON-RPC initialize request to check whether the service is a valid MCP service.
+        When the peer answers 401 with a Bearer challenge and `token_factory` is given, a token for the
+        peer's MCP URL is minted (MCP Center is the authorization server) and the probe is retried once,
+        so servers protected by MCP Center still report their real name, version and tools.
         """
+        public_url = f"{protocol}://{_url_host(host)}:{port}{path}"
         # SSRF protection (AUDIT-1): resolve and validate once, pin the connection to that IP (prevents
         # DNS rebinding), and keep the original Host header so vhost routing is unaffected.
         connect_host = _resolve_validated_ip(host) or host
@@ -289,33 +317,45 @@ class MCPScanner:
 
                     # Handle non-200 status codes
                     # Note: a 401 alone must not be taken as an MCP service, since any protected HTTP
-                    # endpoint may return 401. Only a valid JSON-RPC response confirms an MCP service.
+                    # endpoint may return 401. Two signals confirm MCP behind auth: a Bearer challenge
+                    # (the MCP authorization spec) or a JSON-RPC formatted 401 body.
                     if response.status == 401:
-                        # Try to parse the response to see whether it is JSON-RPC formatted
-                        try:
-                            content_type = response.headers.get("Content-Type", "")
-                            if "application/json" in content_type or "text/event-stream" in content_type:
-                                body = await self._read_jsonrpc(response)
-                                # Check whether this is a JSON-RPC formatted error response
-                                if body and isinstance(body, dict) and ("jsonrpc" in body or "error" in body):
-                                    return MCPVerifyResult(
-                                        success=True,
-                                        server_name="(requires auth)",
-                                        error="Service requires authentication (401)",
-                                        response_time_ms=elapsed_ms
-                                    )
-                        except Exception:
-                            pass
-                        # A 401 that is not JSON-RPC formatted is not treated as an MCP service
+                        is_mcp_auth = _is_bearer_challenge(response.headers.get("WWW-Authenticate"))
+                        if not is_mcp_auth:
+                            try:
+                                content_type = response.headers.get("Content-Type", "")
+                                if "application/json" in content_type or "text/event-stream" in content_type:
+                                    body = await self._read_jsonrpc(response)
+                                    is_mcp_auth = bool(body) and isinstance(body, dict) and \
+                                        ("jsonrpc" in body or "error" in body)
+                            except Exception:
+                                pass
+                        if not is_mcp_auth:
+                            return MCPVerifyResult(
+                                success=False, reachable=True,
+                                error="HTTP 401 (not MCP - no Bearer challenge or JSON-RPC response)",
+                                response_time_ms=elapsed_ms,
+                            )
+                        # MCP Center is the authorization server: mint a token for this URL and look inside
+                        if token_factory is not None and not auth_token:
+                            minted = token_factory(public_url)
+                            if minted:
+                                retry = await self.verify_mcp_service(host, port, path, protocol, minted)
+                                if retry.success:
+                                    retry.requires_auth = True
+                                    retry.auth_token = minted
+                                    return retry
+                                logger.info(f"Self-minted scanner token rejected by {public_url}: {retry.error}")
                         return MCPVerifyResult(
-                            success=False,
-                            error="HTTP 401 (not MCP - no JSON-RPC response)",
-                            response_time_ms=elapsed_ms
+                            success=True, reachable=True, requires_auth=True,
+                            server_name="(requires auth)",
+                            error="Service requires authentication (401)",
+                            response_time_ms=elapsed_ms,
                         )
 
                     if response.status != 200:
                         return MCPVerifyResult(
-                            success=False,
+                            success=False, reachable=True,
                             error=f"HTTP {response.status}",
                             response_time_ms=elapsed_ms
                         )
@@ -325,14 +365,14 @@ class MCPScanner:
 
                     if not result:
                         return MCPVerifyResult(
-                            success=False,
+                            success=False, reachable=True,
                             error="Empty response",
                             response_time_ms=elapsed_ms
                         )
 
                     if "error" in result:
                         return MCPVerifyResult(
-                            success=False,
+                            success=False, reachable=True,
                             error=result["error"].get("message", str(result["error"])),
                             response_time_ms=elapsed_ms
                         )
@@ -349,7 +389,7 @@ class MCPScanner:
                         # At least protocolVersion or serverInfo.name is needed to confirm MCP
                         if not protocol_version and not server_name:
                             return MCPVerifyResult(
-                                success=False,
+                                success=False, reachable=True,
                                 error="Response missing MCP indicators (no protocolVersion or serverInfo.name)",
                                 response_time_ms=elapsed_ms
                             )
@@ -358,7 +398,7 @@ class MCPScanner:
                         server_description = init_result.get("instructions") or server_info.get("description")
                         logger.info(f"MCP service verified: name={server_name}, version={server_version}")
                         return MCPVerifyResult(
-                            success=True,
+                            success=True, reachable=True,
                             protocol_version=protocol_version,
                             server_name=server_name,
                             server_version=server_version,
@@ -368,7 +408,7 @@ class MCPScanner:
                         )
 
                     return MCPVerifyResult(
-                        success=False,
+                        success=False, reachable=True,
                         error="Invalid response format",
                         response_time_ms=elapsed_ms
                     )
@@ -507,7 +547,8 @@ class MCPScanner:
         ports: List[int],
         verify: bool = True,
         get_tools: bool = True,
-        auth_token: Optional[str] = None
+        auth_token: Optional[str] = None,
+        token_factory: Optional[TokenFactory] = None,
     ) -> List[DiscoveredService]:
         """Discover MCP services.
 
@@ -517,6 +558,8 @@ class MCPScanner:
             verify: Whether to verify MCP services
             get_tools: Whether to fetch the tool list
             auth_token: Bearer token (optional, for MCP services that require authentication)
+            token_factory: Mints a token for a peer's MCP URL so servers protected by MCP Center itself
+                can be inspected without the caller supplying a token
 
         Returns:
             List of DiscoveredService
@@ -537,22 +580,25 @@ class MCPScanner:
                 )
 
                 if verify:
-                    # Try HTTP
-                    result = await self.verify_mcp_service(host, port, "/mcp", "http", auth_token)
-                    if not result.success:
-                        # Try HTTPS
-                        result = await self.verify_mcp_service(host, port, "/mcp", "https", auth_token)
+                    # Try HTTP first; only fall back to HTTPS when the port did not answer HTTP at all
+                    # (a TLS handshake against a plain-HTTP server just produces noise in its logs).
+                    result = await self.verify_mcp_service(host, port, "/mcp", "http", auth_token, token_factory)
+                    if not result.success and not result.reachable:
+                        result = await self.verify_mcp_service(host, port, "/mcp", "https", auth_token, token_factory)
                         if result.success:
                             service.protocol = "https"
 
                     service.verify_result = result
 
-                    # Only fetch tools when verification succeeded and no authentication is required
-                    requires_auth = result.server_name == "(requires auth)"
-                    if result.success and get_tools and not requires_auth:
+                    # Fetch tools when verification succeeded and we hold a token the peer accepts
+                    # (the caller's, or the one minted during verification); a bare "(requires auth)"
+                    # placeholder means we could not get in.
+                    tools_token = auth_token or result.auth_token
+                    can_list = not result.requires_auth or bool(tools_token)
+                    if result.success and get_tools and can_list and result.server_name != "(requires auth)":
                         try:
                             tools = await self.get_tools_list(
-                                host, port, "/mcp", service.protocol, auth_token
+                                host, port, "/mcp", service.protocol, tools_token
                             )
                             service.tools = tools
                         except PermissionError:

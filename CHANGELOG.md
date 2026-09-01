@@ -17,6 +17,7 @@ First public release. MCP Center is an OAuth 2.1 authorization server and manage
 - Email/password sign-in with a first-run setup wizard; pluggable GitHub and Google sign-in (experimental).
 - Dashboard, MCP server registry with health monitoring and tool sync, token management, OAuth client management, scope registry, key rotation, audit log.
 - Marketplace and bring-your-own MCP server deployment through Docker.
+- Network scan recognises OAuth-protected servers by their `WWW-Authenticate: Bearer` challenge and, for servers that trust this MCP Center, mints a scanner token to read their name and tools; no HTTPS retry against ports that already answered HTTP.
 - Design system "Navy Trust" (dark-first, Fira Sans / Fira Code), app-shell layout with global search.
 
 ### Platform

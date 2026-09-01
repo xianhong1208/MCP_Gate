@@ -11,6 +11,7 @@ from src.adapters import MCPToolAdapter, ServiceAdapter, normalize_service_host
 from src.api.schemas import DiscoveredServiceInfo, ScanRequest, ScanResponse, VerifyRequest, VerifyResponse
 from src.audit import ActorType, AuditService, AuditStatus, ResourceType
 from src.discovery.scanner import get_scanner
+from src.oauth import service as oauth_service
 from src.discovery.websocket_manager import get_ws_manager
 from src.identity import get_current_user
 from src.identity.session import SESSION_COOKIE, resolve_user_from_token
@@ -18,6 +19,24 @@ from src.identity.session import SESSION_COOKIE, resolve_user_from_token
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/discovery", tags=["Discovery"])
+
+
+def _scanner_token_factory(db: Session):
+    """Give the scanner a way to mint tokens for peers protected by this authorization server.
+
+    Registered services keep their own audience / scope limits; unknown peers get a token whose
+    audience is their MCP URL, which is what a FastMCP server registered later would expect.
+    """
+    def mint(audience: str):
+        try:
+            service = ServiceAdapter.get_by_audience(db, audience)
+            if service is not None:
+                return oauth_service.mint_scanner_token(db, service)
+            return oauth_service.mint_audience_token(db, audience)
+        except Exception as e:  # never let token minting break a scan
+            logger.warning(f"Scanner token for {audience} not minted: {e}")
+            return None
+    return mint
 
 
 @router.post("/scan", response_model=ScanResponse)
@@ -33,6 +52,7 @@ async def scan_services(request: ScanRequest, http_request: Request, db: Session
 
         discovered = await scanner.discover_services(
             hosts=request.hosts, ports=ports, verify=True, get_tools=True, auth_token=request.auth_token,
+            token_factory=_scanner_token_factory(db),
         )
 
         discovered_info = []
@@ -44,6 +64,7 @@ async def scan_services(request: ScanRequest, http_request: Request, db: Session
                 server_name=vr.server_name if vr else None, server_version=vr.server_version if vr else None,
                 server_description=vr.server_description if vr else None,
                 protocol_version=vr.protocol_version if vr else None, tools_count=len(svc.tools),
+                requires_auth=svc.requires_auth,
             )
             if request.auto_register:
                 if request.service_name:
@@ -106,12 +127,13 @@ async def scan_services(request: ScanRequest, http_request: Request, db: Session
 
 
 @router.post("/verify", response_model=VerifyResponse)
-async def verify_service(request: VerifyRequest, _: AdminUser = Depends(get_current_user)):
+async def verify_service(request: VerifyRequest, db: Session = Depends(get_db),
+                         _: AdminUser = Depends(get_current_user)):
     """Check whether host:port serves MCP and return its server info."""
     try:
         result = await get_scanner().verify_mcp_service(
             host=request.host, port=request.port, path=request.mcp_path, protocol=request.protocol,
-            auth_token=request.auth_token,
+            auth_token=request.auth_token, token_factory=_scanner_token_factory(db),
         )
         return VerifyResponse(
             success=result.success, protocol_version=result.protocol_version, server_name=result.server_name,

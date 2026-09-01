@@ -243,6 +243,10 @@ function ScanModal({ onClose, onScanComplete }) {
                         <p className="truncate font-mono text-xs text-foreground">{svc.protocol}://{svc.host}:{svc.port}{svc.mcp_path}</p>
                         {requiresAuth ? (
                           <p className="mt-0.5 text-xs text-warning">{t('services.scan.requiresAuthLabel')}</p>
+                        ) : svc.requires_auth && svc.server_name ? (
+                          <p className="mt-0.5 text-xs text-muted-foreground">
+                            {svc.server_name}{svc.server_version ? ` v${svc.server_version}` : ''} · {t('services.scan.protectedLabel')}
+                          </p>
                         ) : svc.server_name && (
                           <p className="mt-0.5 text-xs text-muted-foreground">{svc.server_name} {svc.server_version && `v${svc.server_version}`}</p>
                         )}

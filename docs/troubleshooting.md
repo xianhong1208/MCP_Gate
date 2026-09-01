@@ -39,6 +39,12 @@ EOF
 **`404 {"error": "Frontend not built"}` at `/`**
 The console bundle is missing. Run `cd frontend && npm install && npm run build`, then restart.
 
+**Scan does not find a server that is clearly running**
+The scanner sends a JSON-RPC `initialize` to `/mcp`. A server that answers `401` with `WWW-Authenticate: Bearer …` (any FastMCP server with `RemoteAuthProvider`) is recognised as MCP behind OAuth; if it trusts this MCP Center, the scanner mints a short-lived token for `http://<host>:<port>/mcp` and reads the real name and tools. That token only matches when the host you scan is exactly the one the server uses as its audience (`127.0.0.1` vs `localhost` matters). Servers protected by a different authorization server, or by a static bearer token, show up as *requires authentication* — register them and add the token on the service page. A `401` without a Bearer challenge or JSON-RPC body is not treated as MCP.
+
+**The scanned server logs `Invalid HTTP request received`**
+That was the scanner's HTTPS probe hitting a plain-HTTP port; since 1.0.0 it is skipped whenever the HTTP probe got any answer. Update MCP Center if you still see it.
+
 **Signed out unexpectedly**
 Sessions expire after 12 hours, after 30 minutes idle in the UI, and immediately when the password changes. Behind HTTPS, `SECURE_COOKIE=true` is required or the cookie is dropped.
 
