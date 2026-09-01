@@ -12,6 +12,7 @@ First public release. MCP Center is an OAuth 2.1 authorization server and manage
 - Consent screen with remembered decisions per client and server; trusted (manually registered) clients skip it.
 - Personal access tokens minted from the console.
 - Introspection is scoped: public clients may only introspect their own tokens; confidential clients (resource servers) may introspect any token.
+- Classic-client compatibility for manually registered confidential clients: PKCE may be waived and a default resource assumed, so platforms with a plain client_id / client_secret OAuth module can sign in (migration `4b2c9d7e1f03`).
 
 ### Console
 - Email/password sign-in with a first-run setup wizard; pluggable GitHub and Google sign-in (experimental).

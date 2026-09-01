@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next'
 import {
   Bot, Plus, RefreshCw, Check, Ban, Trash2, KeyRound, Lock, Unlock, Pencil,
 } from 'lucide-react'
-import { oauthApi } from '../services/api'
+import { oauthApi, servicesApi } from '../services/api'
 import { useConfirm } from '../contexts/ConfirmContext'
 import { useToast } from '../contexts/ToastContext'
 import CodeBlock from '../components/CodeBlock'
@@ -14,7 +14,7 @@ import { describeScope } from '../utils/scopes'
 import {
   PageHeader, Button, IconButton, Badge, StatusPill, Card, CardHeader, EmptyState, Alert, LoadingBlock, Tabs,
   Table, THead, TBody, TR, TH, TD, RowActions,
-  Dialog, DialogBody, DialogFooter, Field, Input, Select, Textarea, Checkbox,
+  Dialog, DialogBody, DialogFooter, Field, Input, Select, Textarea, Checkbox, CheckRow,
 } from '../components/ui'
 
 const TABS = ['approved', 'pending', 'revoked']
@@ -32,10 +32,19 @@ function RegisterClientModal({ onClose, onCreated }) {
   const { t } = useTranslation()
   const [form, setForm] = useState({
     clientName: '', clientUri: '', redirectUris: '', grantTypes: new Set(['authorization_code', 'refresh_token']),
-    authMethod: 'none',
+    authMethod: 'none', classic: false, defaultResource: '',
   })
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState('')
+  const [services, setServices] = useState([])
+  const confidential = form.authMethod !== 'none'
+
+  // Registered servers, offered as the default resource for classic clients
+  useEffect(() => {
+    let cancelled = false
+    servicesApi.getAll().then((res) => { if (!cancelled) setServices(res.services || []) }).catch(() => {})
+    return () => { cancelled = true }
+  }, [])
 
   const toggleGrant = (g) => {
     const next = new Set(form.grantTypes)
@@ -55,6 +64,8 @@ function RegisterClientModal({ onClose, onCreated }) {
         redirectUris: form.redirectUris.split('\n').map((x) => x.trim()).filter(Boolean),
         grantTypes: [...form.grantTypes],
         tokenEndpointAuthMethod: form.authMethod,
+        requirePkce: !(confidential && form.classic),
+        defaultResource: confidential && form.classic ? form.defaultResource || null : null,
       })
       onCreated(res)
     } catch (err) {
@@ -112,6 +123,26 @@ function RegisterClientModal({ onClose, onCreated }) {
               {AUTH_METHODS.map((m) => <option key={m} value={m}>{t(`clients.authMethod.${m}`)}</option>)}
             </Select>
           </Field>
+          {confidential && (
+            <div className="space-y-3 rounded-md border border-border bg-muted/40 p-4">
+              <CheckRow
+                checked={form.classic}
+                onChange={(e) => setForm({ ...form, classic: e.target.checked })}
+                label={t('clients.form.classicLabel')}
+                description={t('clients.form.classicHint')}
+              />
+              {form.classic && (
+                <Field label={t('clients.form.defaultResource')} help={t('clients.form.defaultResourceHint')}>
+                  <Select value={form.defaultResource} onChange={(e) => setForm({ ...form, defaultResource: e.target.value })}>
+                    <option value="">{t('clients.form.defaultResourceNone')}</option>
+                    {services.map((s) => (
+                      <option key={s.id} value={s.effective_audience}>{s.name} — {s.effective_audience}</option>
+                    ))}
+                  </Select>
+                </Field>
+              )}
+            </div>
+          )}
         </DialogBody>
         <DialogFooter>
           <Button type="button" variant="secondary" onClick={onClose}>{t('clients.form.cancel')}</Button>

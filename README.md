@@ -180,6 +180,7 @@ To change when the consent screen appears, edit [`src/oauth/consent_policy.py`](
 | Term | Meaning |
 |---|---|
 | Issuer | MCP Center's public URL (`OAUTH_ISSUER`). Written into every token as `iss`; clients and servers use it for discovery. |
+| Classic client | A manually registered confidential client allowed to skip PKCE and use a default resource, for platforms whose OAuth module only knows client_id / client_secret. |
 | Audience | The MCP URL a token is valid for (the `aud` claim). Set per server in the console; the server's `JWTVerifier(audience=…)` must match. |
 | Resource server | Your MCP server. It verifies tokens and never issues them. The console calls these *services*. |
 | Scope | What a token may do on a server, for example `mcp:tools:invoke`. The console's scope registry defines the set. |

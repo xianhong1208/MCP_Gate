@@ -239,6 +239,10 @@ class OAuthClient(Base):
     response_types = Column(Text, nullable=False, default='["code"]')
     scope = Column(String(512), nullable=True)
     token_endpoint_auth_method = Column(String(32), default="none", nullable=False)
+    # Classic-client compatibility (manually registered confidential clients only): PKCE may be skipped and
+    # a default resource is assumed when the client sends none. MCP clients never need either.
+    require_pkce = Column(Boolean, default=True, nullable=False)
+    default_resource = Column(String(512), nullable=True)
     created_via = Column(String(16), default="manual", nullable=False)
     is_approved = Column(Boolean, default=True, nullable=False, index=True)
     is_active = Column(Boolean, default=True, nullable=False, index=True)
@@ -266,6 +270,8 @@ class OAuthClient(Base):
             "scope": self.scope,
             "token_endpoint_auth_method": self.token_endpoint_auth_method,
             "is_confidential": self.client_secret_hash is not None,
+            "require_pkce": self.require_pkce,
+            "default_resource": self.default_resource,
             "created_via": self.created_via,
             "is_approved": self.is_approved,
             "is_active": self.is_active,
@@ -290,8 +296,8 @@ class OAuthAuthorizationRequest(Base):
     scope = Column(String(512), nullable=True)
     resource = Column(String(256), nullable=True)
     state = Column(String(512), nullable=True)
-    code_challenge = Column(String(128), nullable=False)
-    code_challenge_method = Column(String(16), default="S256", nullable=False)
+    code_challenge = Column(String(128), nullable=True)  # None only for clients with require_pkce=False
+    code_challenge_method = Column(String(16), default="S256", nullable=True)
     created_at = Column(DateTime, default=local_now, nullable=False)
     expires_at = Column(DateTime, nullable=False)
     decided_at = Column(DateTime, nullable=True)
@@ -309,8 +315,8 @@ class OAuthAuthorizationCode(Base):
     redirect_uri = Column(String(512), nullable=False)
     scope = Column(String(512), nullable=True)
     resource = Column(String(256), nullable=True)
-    code_challenge = Column(String(128), nullable=False)
-    code_challenge_method = Column(String(16), default="S256", nullable=False)
+    code_challenge = Column(String(128), nullable=True)  # None only for clients with require_pkce=False
+    code_challenge_method = Column(String(16), default="S256", nullable=True)
     expires_at = Column(DateTime, nullable=False)
     used_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=local_now, nullable=False)

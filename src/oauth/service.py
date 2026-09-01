@@ -132,6 +132,16 @@ def register_client(
     if is_approved is None:
         is_approved = True if created_via != "dcr" else Config.get_oauth_config().dcr_auto_approve
 
+    # Classic-client compatibility: only for confidential clients registered in the console. Public clients
+    # have nothing but PKCE to prove they are the party that started the flow.
+    require_pkce = metadata.get("require_pkce", True) is not False
+    default_resource = (metadata.get("default_resource") or "").strip() or None
+    if not require_pkce and (auth_method == "none" or created_via == "dcr"):
+        raise OAuthError("invalid_client_metadata",
+                         "require_pkce=false is only allowed for confidential clients registered in the console")
+    if default_resource:
+        default_resource, _ = resolve_resource(db, default_resource)  # must be a registered server
+
     plaintext_secret = None
     secret_hash = None
     if auth_method != "none":
@@ -151,6 +161,8 @@ def register_client(
         response_types=json.dumps(metadata.get("response_types") or ["code"]),
         scope=(scope or None),
         token_endpoint_auth_method=auth_method,
+        require_pkce=require_pkce,
+        default_resource=default_resource,
         created_via=created_via,
         is_approved=is_approved,
         owner_id=owner_id,
@@ -298,10 +310,15 @@ def begin_authorization(
         raise OAuthError("unsupported_response_type", "only response_type=code is supported", redirectable=True)
     if "authorization_code" not in client.grant_type_list():
         raise OAuthError("unauthorized_client", "client may not use authorization_code", redirectable=True)
-    if code_challenge_method != "S256" or not code_challenge:
+    if code_challenge:
+        if code_challenge_method != "S256":
+            raise OAuthError("invalid_request", "only code_challenge_method=S256 is supported", redirectable=True)
+    elif client.require_pkce or not client.client_secret_hash:
         raise OAuthError("invalid_request", "PKCE code_challenge (S256) is required", redirectable=True)
+    else:
+        code_challenge_method = None  # classic confidential client: the secret proves identity at /token
 
-    audience, service = resolve_resource(db, resource)
+    audience, service = resolve_resource(db, resource or client.default_resource)
     granted_scope = resolve_scope(db, scope, client, service)
 
     return OAuthAuthRequestAdapter.create(
@@ -518,7 +535,11 @@ def authorization_code_grant(
         raise OAuthError("invalid_grant", "authorization code was issued to another client")
     if rec.redirect_uri != redirect_uri:
         raise OAuthError("invalid_grant", "redirect_uri mismatch")
-    if not verify_pkce(code_verifier, rec.code_challenge, rec.code_challenge_method):
+    if rec.code_challenge:
+        if not verify_pkce(code_verifier, rec.code_challenge, rec.code_challenge_method):
+            raise OAuthError("invalid_grant", "PKCE verification failed")
+    elif client.require_pkce or not client.client_secret_hash:
+        # A code issued without PKCE can only be redeemed by an authenticated classic client
         raise OAuthError("invalid_grant", "PKCE verification failed")
     if resource and normalize_audience(resource) != (rec.resource or None):
         raise OAuthError("invalid_target", "resource does not match the authorization request")

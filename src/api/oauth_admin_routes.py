@@ -54,6 +54,9 @@ class ClientCreateRequest(BaseModel):
     token_endpoint_auth_method: str = "none"
     scope: Optional[str] = None
     client_uri: Optional[str] = None
+    # Classic-client compatibility (confidential clients only): skip PKCE / assume a resource when absent
+    require_pkce: bool = True
+    default_resource: Optional[str] = None
 
 
 @router.get("/clients")

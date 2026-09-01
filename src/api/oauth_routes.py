@@ -178,10 +178,11 @@ async def token(request: Request, db: Session = Depends(get_db)):
 
         if grant_type == "authorization_code":
             code, redirect_uri, verifier = form.get("code"), form.get("redirect_uri"), form.get("code_verifier")
-            if not code or not redirect_uri or not verifier:
-                raise OAuthError("invalid_request", "missing code / redirect_uri / code_verifier")
+            if not code or not redirect_uri:
+                raise OAuthError("invalid_request", "missing code / redirect_uri")
+            # code_verifier is validated by the grant: mandatory unless the code was issued to a classic client
             body = oauth.authorization_code_grant(
-                db, client=client, code=code, redirect_uri=redirect_uri, code_verifier=verifier,
+                db, client=client, code=code, redirect_uri=redirect_uri, code_verifier=verifier or "",
                 resource=form.get("resource"), ip=ip,
             )
         elif grant_type == "refresh_token":

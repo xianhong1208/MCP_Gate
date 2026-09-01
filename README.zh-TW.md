@@ -180,6 +180,7 @@ Access token 的 claim:`iss`、`sub`、`aud`、`scope`、`client_id`、`jti`、`
 | 名詞 | 意思 |
 |---|---|
 | Issuer | MCP Center 的公開網址(`OAUTH_ISSUER`)。寫進每個 token 的 `iss`;client 與 server 用它做 discovery。 |
+| Classic client | 在管理台手動登記、允許不用 PKCE 並套用預設 resource 的機密 client;給 OAuth 模組只認 client_id / client_secret 的平台用。 |
 | Audience | token 對哪個 MCP URL 有效(`aud` claim)。在管理台逐台設定;server 的 `JWTVerifier(audience=…)` 必須一致。 |
 | Resource server | 你的 MCP server。只驗 token、從不簽發。管理台稱之為 *service*。 |
 | Scope | token 在 server 上可以做什麼,例如 `mcp:tools:invoke`。管理台的 scope 註冊表定義整個集合。 |

@@ -656,7 +656,12 @@
       "cancel": "Cancel",
       "submit": "Register",
       "submitting": "Registering...",
-      "createFailed": "Failed to register client"
+      "createFailed": "Failed to register client",
+      "classicLabel": "Classic OAuth client (no PKCE)",
+      "classicHint": "For platforms whose OAuth module only supports client_id + client_secret. The secret proves the client identity instead of PKCE. MCP-native clients (Claude Code, Cursor, FastMCP) do not need this.",
+      "defaultResource": "Default server (resource)",
+      "defaultResourceHint": "Used when the client sends no `resource` parameter; tokens are then issued for this server.",
+      "defaultResourceNone": "None — the client must send resource"
     },
     "secret": {
       "title": "Client registered",

@@ -42,6 +42,9 @@ The console bundle is missing. Run `cd frontend && npm install && npm run build`
 **Scan does not find a server that is clearly running**
 The scanner sends a JSON-RPC `initialize` to `/mcp`. A server that answers `401` with `WWW-Authenticate: Bearer …` (any FastMCP server with `RemoteAuthProvider`) is recognised as MCP behind OAuth; if it trusts this MCP Center, the scanner mints a short-lived token for `http://<host>:<port>/mcp` and reads the real name and tools. That token only matches when the host you scan is exactly the one the server uses as its audience (`127.0.0.1` vs `localhost` matters). Servers protected by a different authorization server, or by a static bearer token, show up as *requires authentication* — register them and add the token on the service page. A `401` without a Bearer challenge or JSON-RPC body is not treated as MCP.
 
+**A platform's OAuth module demands a client secret, or fails with `PKCE code_challenge (S256) is required` / `invalid_target`**
+The platform runs a classic OAuth 2.0 flow (client_id + client_secret, no PKCE, no `resource`). Register it in **OAuth Clients → Register trusted client** with a client-secret auth method and tick **Classic OAuth client**; pick the server it should get tokens for as the **default resource**. Fill its `client_id` / `client_secret` into the platform, with `<issuer>/oauth/authorize`, `<issuer>/oauth/token` and the scopes you want. Everything else (Claude Code, Cursor, FastMCP) should keep using PKCE and dynamic registration.
+
 **The scanned server logs `Invalid HTTP request received`**
 That was the scanner's HTTPS probe hitting a plain-HTTP port; since 1.0.0 it is skipped whenever the HTTP probe got any answer. Update MCP Center if you still see it.
 

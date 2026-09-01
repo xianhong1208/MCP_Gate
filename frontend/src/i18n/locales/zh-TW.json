@@ -656,7 +656,12 @@
       "cancel": "取消",
       "submit": "登記",
       "submitting": "登記中...",
-      "createFailed": "登記 client 失敗"
+      "createFailed": "登記 client 失敗",
+      "classicLabel": "傳統 OAuth client(不用 PKCE)",
+      "classicHint": "給只支援 client_id + client_secret 的平台 OAuth 模組使用;以 secret 取代 PKCE 證明身分。MCP 原生 client(Claude Code、Cursor、FastMCP)不需要。",
+      "defaultResource": "預設服務(resource)",
+      "defaultResourceHint": "client 沒帶 `resource` 參數時使用;token 會簽給這個服務。",
+      "defaultResourceNone": "無 — client 必須自己帶 resource"
     },
     "secret": {
       "title": "Client 已登記",

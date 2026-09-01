@@ -305,7 +305,7 @@ export const oauthApi = {
       return request(`/api/oauth/clients${qs({ status })}`)
     },
     /** Manually register a trusted client from the admin console (approved directly); secret is returned once */
-    async create({ clientName, redirectUris, grantTypes, tokenEndpointAuthMethod, scope, clientUri }) {
+    async create({ clientName, redirectUris, grantTypes, tokenEndpointAuthMethod, scope, clientUri, requirePkce, defaultResource }) {
       return request('/api/oauth/clients', {
         method: 'POST',
         body: JSON.stringify({
@@ -315,6 +315,8 @@ export const oauthApi = {
           token_endpoint_auth_method: tokenEndpointAuthMethod || 'none',
           scope: scope || null,
           client_uri: clientUri || null,
+          require_pkce: requirePkce !== false,
+          default_resource: defaultResource || null,
         }),
       })
     },
