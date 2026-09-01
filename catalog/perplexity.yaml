@@ -1,0 +1,32 @@
+# Perplexity Ask MCP service template
+#
+# Local image: perplexity-mcp-server (HTTP mode, port 8080)
+# Official API docs: https://docs.perplexity.ai/
+
+id: perplexity-ask
+name: Perplexity Ask
+description: AI-powered search and Q&A via Perplexity's API. Great for real-time web research.
+category: search
+icon: perplexity.svg
+
+# Image tar for offline install (located in catalog/images/; docker load supports gzip natively).
+# Instead of the default <id>.tar convention, the actual file name is specified explicitly.
+image_tar: perplexity.tar.gz
+
+docker:
+  image: perplexity-mcp-server
+  tag: latest
+  args: ["--rm"]
+  transport: http
+  container_port: 8080
+
+env_vars:
+  - name: PERPLEXITY_API_KEY
+    label: Perplexity API Key
+    help: "Get an API key: https://www.perplexity.ai/settings/api"
+    required: true
+    secret: true
+    pattern: "^pplx-"
+    error_message: "API key should start with 'pplx-'"
+
+docs_url: https://docs.perplexity.ai/

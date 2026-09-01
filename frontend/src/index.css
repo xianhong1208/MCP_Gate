@@ -1,0 +1,219 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================================================
+   Design tokens -- "Navy Trust" (Minimalism & Swiss Style, dark-first)
+   ----------------------------------------------------------------------------
+   Values are three "R G B" integers (Tailwind wraps them in rgb() and injects alpha);
+   the two border tokens are full color strings (dark uses 8% / 16% white so they work on any background).
+   Dark is the default and design baseline; light is the same design desaturated (navy text, slate neutrals),
+   not inverted.
+
+   - background / foreground           page background, primary text
+   - card / popover / muted            cards, overlays, sidebar and table header backgrounds
+   - muted-foreground / subtle-foreground   two levels of secondary text (both >= 4.5:1)
+   - border / border-strong            dividers, control borders
+   - primary                           navy #1E3A5F: selected state, sidebar active, secondary solid
+   - accent                            green CTA #22C55E (dark text #0F172A)
+   - link                              text links: green in dark, navy in light
+   - destructive                       solid delete #DC2626 + white text
+   - success / warning / danger / info semantic colors: text, dots, tinted backgrounds (bg-x/10 ring-x/20)
+   ========================================================================== */
+:root,
+html.dark {
+  --color-background: 15 23 42;          /* #0F172A */
+  --color-foreground: 255 255 255;       /* #FFFFFF */
+  --color-card: 25 33 52;                /* #192134 */
+  --color-card-foreground: 255 255 255;
+  --color-popover: 30 41 64;             /* #1E2940 */
+  --color-muted: 16 25 46;               /* #10192E */
+  --color-muted-foreground: 148 163 184; /* #94A3B8 */
+  --color-subtle-foreground: 124 139 163;/* #7C8BA3 */
+  --color-border: rgba(255, 255, 255, 0.08);
+  --color-border-strong: rgba(255, 255, 255, 0.16);
+  --color-primary: 30 58 95;             /* #1E3A5F */
+  --color-primary-hover: 38 73 122;      /* #26497A */
+  --color-primary-foreground: 255 255 255;
+  --color-primary-soft: 28 46 74;        /* #1C2E4A */
+  --color-primary-soft-foreground: 191 211 238; /* #BFD3EE */
+  --color-accent: 34 197 94;             /* #22C55E */
+  --color-accent-hover: 74 222 128;      /* #4ADE80 */
+  --color-accent-foreground: 15 23 42;   /* #0F172A */
+  --color-link: 34 197 94;
+  --color-link-hover: 74 222 128;
+  --color-destructive: 220 38 38;        /* #DC2626 */
+  --color-destructive-hover: 185 28 28;  /* #B91C1C */
+  --color-destructive-foreground: 255 255 255;
+  --color-ring: 255 255 255;
+  --color-success: 34 197 94;            /* #22C55E */
+  --color-warning: 245 158 11;           /* #F59E0B */
+  --color-danger: 248 113 113;           /* #F87171 */
+  --color-info: 56 189 248;              /* #38BDF8 */
+
+  color-scheme: dark;
+}
+
+html.light {
+  --color-background: 248 250 252;       /* #F8FAFC */
+  --color-foreground: 15 23 42;          /* #0F172A */
+  --color-card: 255 255 255;
+  --color-card-foreground: 15 23 42;
+  --color-popover: 255 255 255;
+  --color-muted: 241 245 249;            /* #F1F5F9 */
+  --color-muted-foreground: 71 85 105;   /* #475569 */
+  --color-subtle-foreground: 100 116 139;/* #64748B */
+  --color-border: #E2E8F0;
+  --color-border-strong: #CBD5E1;
+  --color-primary: 30 58 95;             /* #1E3A5F */
+  --color-primary-hover: 23 48 79;       /* #17304F */
+  --color-primary-foreground: 255 255 255;
+  --color-primary-soft: 232 238 246;     /* #E8EEF6 */
+  --color-primary-soft-foreground: 30 58 95;
+  --color-accent: 22 163 74;             /* #16A34A */
+  --color-accent-hover: 21 128 61;       /* #15803D */
+  --color-accent-foreground: 15 23 42;
+  --color-link: 30 58 95;
+  --color-link-hover: 47 90 140;         /* #2F5A8C */
+  --color-destructive: 220 38 38;
+  --color-destructive-hover: 185 28 28;
+  --color-destructive-foreground: 255 255 255;
+  --color-ring: 30 58 95;
+  --color-success: 21 128 61;            /* #15803D */
+  --color-warning: 180 83 9;             /* #B45309 */
+  --color-danger: 185 28 28;             /* #B91C1C */
+  --color-info: 3 105 161;               /* #0369A1 */
+
+  color-scheme: light;
+}
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    @apply min-h-screen bg-background text-foreground font-sans text-sm;
+  }
+
+  ::selection {
+    background: rgb(var(--color-accent) / 0.3);
+  }
+
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-border-strong);
+    border-radius: 999px;
+    border: 3px solid transparent;
+    background-clip: padding-box;
+  }
+  ::-webkit-scrollbar-thumb:hover { background-color: rgb(var(--color-subtle-foreground)); background-clip: padding-box; }
+
+  /* Native controls follow the theme */
+  input[type='checkbox'],
+  input[type='radio'] {
+    accent-color: rgb(var(--color-accent));
+  }
+  select option {
+    background-color: rgb(var(--color-card));
+    color: rgb(var(--color-foreground));
+  }
+
+  /* Keyboard focus: always the ring token (white in dark, navy in light) */
+  :focus-visible {
+    outline: 2px solid rgb(var(--color-ring));
+    outline-offset: 2px;
+  }
+  .ui-input:focus-visible,
+  .ui-input:focus {
+    outline: none;
+  }
+
+  /* Tabular numerals by default */
+  table, .tabular { font-variant-numeric: tabular-nums; }
+
+  /* User prefers reduced motion: disable all animations and transitions */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@layer components {
+  /* The only class-based primitive allowed: form controls (shared by input / select / textarea) */
+  .ui-input {
+    @apply block w-full h-9 rounded-md border border-border-strong bg-background px-3 text-sm text-foreground;
+    @apply placeholder:text-subtle-foreground;
+    @apply transition-colors duration-200;
+    @apply focus:border-accent focus:ring-2 focus:ring-accent/40;
+    @apply disabled:cursor-not-allowed disabled:opacity-50 disabled:bg-muted;
+  }
+  textarea.ui-input {
+    @apply h-auto py-2 leading-relaxed;
+  }
+  select.ui-input {
+    @apply pr-8 appearance-none bg-no-repeat;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m6 9 6 6 6-6'/></svg>");
+    background-position: right 0.5rem center;
+    background-size: 16px 16px;
+  }
+  html.light select.ui-input {
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23475569' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m6 9 6 6 6-6'/></svg>");
+  }
+  .ui-input-sm {
+    @apply h-8 text-sm;
+  }
+  .ui-input-error {
+    @apply border-danger focus:border-danger focus:ring-danger/30;
+  }
+
+  /* Custom checkbox: unchecked = background + border; checked = green bg + dark check (no browser color-scheme gray) */
+  .ui-checkbox {
+    @apply h-4 w-4 shrink-0 cursor-pointer appearance-none rounded border border-border-strong bg-background bg-center bg-no-repeat;
+    @apply transition-colors duration-200;
+    @apply checked:border-accent checked:bg-accent indeterminate:border-accent indeterminate:bg-accent;
+    @apply focus:ring-2 focus:ring-accent/40 focus:ring-offset-0;
+    @apply disabled:cursor-not-allowed disabled:opacity-50;
+    background-size: 12px 12px;
+  }
+  .ui-checkbox:checked {
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230F172A' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'><path d='M5 12.5l4.5 4.5L19 7'/></svg>");
+  }
+  .ui-checkbox:indeterminate {
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230F172A' stroke-width='3.5' stroke-linecap='round'><path d='M6 12h12'/></svg>");
+  }
+  .ui-radio {
+    @apply h-4 w-4 shrink-0 border border-border-strong bg-background text-accent;
+    @apply focus:ring-2 focus:ring-accent/40 focus:ring-offset-0;
+  }
+
+  /* Skeleton: flat color, no shimmer */
+  .skeleton {
+    @apply rounded bg-muted animate-pulse;
+  }
+}
+
+/* recharts: grid / text / line colors follow the theme (stroke attrs cannot read CSS vars, so override via class) */
+.recharts-cartesian-grid line {
+  stroke: var(--color-border) !important;
+}
+.recharts-text {
+  fill: rgb(var(--color-muted-foreground)) !important;
+}
+.recharts-tooltip-cursor {
+  stroke: var(--color-border-strong) !important;
+  fill: rgb(var(--color-muted)) !important;
+}
+.chart-line-success .recharts-curve { stroke: rgb(var(--color-success)); }
+.chart-line-failed .recharts-curve { stroke: rgb(var(--color-danger)); }
+.chart-line-success .recharts-area-area { fill: rgb(var(--color-success)); }
+.chart-line-failed .recharts-area-area { fill: rgb(var(--color-danger)); }
