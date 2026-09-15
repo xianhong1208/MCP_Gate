@@ -496,24 +496,33 @@ export default function ServiceDetailPage() {
             ) : (
               <div className="divide-y divide-border">
                 {tokens.slice(0, 10).map((tk) => (
-                  <div key={tk.jti} className="group flex items-center justify-between gap-2 py-2.5">
-                    <Link to={`/tokens/${encodeURIComponent(tk.jti)}`} className="flex min-w-0 flex-1 items-center gap-2">
-                      <KindBadge kind={tk.kind} />
-                      <span className="min-w-0">
-                        <span className="block truncate text-sm font-medium text-foreground transition-colors duration-200 group-hover:text-link">{tk.label || tk.client_name || tk.jti}</span>
-                        <span className="block truncate text-xs text-muted-foreground">{tk.client_name || tk.client_id}{tk.expires_at ? ` · ${t('services.detail.tokenExpires')} ${formatDateTime(tk.expires_at)}` : ''}</span>
-                      </span>
-                    </Link>
-                    <div className="hidden 2xl:block"><ScopeChips scopes={tk.scopes} max={2} /></div>
-                    <StatusBadge status={tk.status} />
-                    <IconButton
-                      variant="destructive"
-                      icon={revokingJti === tk.jti ? RefreshCw : Trash2}
-                      onClick={() => handleRevokeToken(tk)}
-                      disabled={revokingJti === tk.jti}
-                      title={t('tokens.list.revokeTitle')}
-                      className={clsx(revokingJti === tk.jti && 'animate-spin')}
-                    />
+                  <div key={tk.jti} className="group py-2.5">
+                    <div className="flex items-center gap-3">
+                      <Link to={`/tokens/${encodeURIComponent(tk.jti)}`} className="flex min-w-0 flex-1 items-center gap-2">
+                        <KindBadge kind={tk.kind} />
+                        <span className="min-w-0">
+                          <span className="block truncate text-sm font-medium text-foreground transition-colors duration-200 group-hover:text-link">{tk.label || tk.client_name || tk.jti}</span>
+                          <span className="block truncate text-xs text-muted-foreground">{tk.client_name || tk.client_id}{tk.expires_at ? ` · ${t('services.detail.tokenExpires')} ${formatDateTime(tk.expires_at)}` : ''}</span>
+                        </span>
+                      </Link>
+                      <StatusBadge status={tk.status} />
+                      <IconButton
+                        variant="destructive"
+                        icon={revokingJti === tk.jti ? RefreshCw : Trash2}
+                        onClick={() => handleRevokeToken(tk)}
+                        disabled={revokingJti === tk.jti}
+                        title={t('tokens.list.revokeTitle')}
+                        className={clsx(revokingJti === tk.jti && 'animate-spin')}
+                      />
+                    </div>
+                    {/* Scopes on their own line so the long mono chips never fight the
+                        row (this card lives in the narrow 1/3 sidebar column, where two
+                        chips + status + action cannot share one line). */}
+                    {tk.scopes?.length > 0 && (
+                      <div className="mt-1.5 pl-[2.75rem]">
+                        <ScopeChips scopes={tk.scopes} max={3} />
+                      </div>
+                    )}
                   </div>
                 ))}
                 {tokens.length > 10 && <p className="pt-2 text-center text-xs text-muted-foreground tabular-nums">+{tokens.length - 10}</p>}
