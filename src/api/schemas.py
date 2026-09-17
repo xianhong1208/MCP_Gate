@@ -202,9 +202,8 @@ class BulkHealthCheckResponse(BaseModel):
 class RefreshToolsRequest(BaseModel):
     """Who the tools/list request should look like to the server. Servers that show different tools per
     caller (by subject or scope) need a real identity rather than the anonymous scanner token."""
-    identity: Literal["scanner", "token", "bearer"] = "scanner"
-    jti: Optional[str] = None               # token: an issued PAT / OAuth access token of this server to impersonate
-    bearer: Optional[str] = None            # bearer: a token pasted by the operator, used once and not stored
+    identity: Literal["scanner", "token"] = "scanner"
+    jti: Optional[str] = None               # token: an issued PAT / OAuth access token of this server to present as
 
 
 class RefreshToolsResponse(BaseModel):

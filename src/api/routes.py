@@ -178,8 +178,7 @@ async def refresh_service_tools(service_id: str, http_request: Request, body: Op
 
     By default services protected by MCP Center OAuth are inspected with the anonymous scanner token. A server
     that shows different tools per caller can be inspected as one of its issued tokens (`identity=token` +
-    `jti`: a short-lived copy of that token's claims is signed) or with a token pasted by the operator
-    (`identity=bearer`), which is used once and not stored.
+    `jti`): a short-lived copy of that token's claims is signed and presented.
     """
     from src.discovery.health_monitor import resolve_service_auth_token
     from src.discovery.scanner import get_scanner
@@ -194,12 +193,7 @@ async def refresh_service_tools(service_id: str, http_request: Request, body: Op
     if not service.host or not service.port:
         raise HTTPException(status_code=400, detail={"error": "service.no_host_port",
                                                      "fallback": "Service has no host or port configured"})
-    if body.identity == "bearer":
-        if not (body.bearer or "").strip():
-            raise HTTPException(status_code=400, detail={"error": "service.refresh_bearer_missing",
-                                                         "fallback": "Paste the token to inspect with"})
-        auth_token = body.bearer.strip()
-    elif body.identity == "token":
+    if body.identity == "token":
         record = OAuthTokenAdapter.get(db, body.jti or "")
         if record is None:
             raise HTTPException(status_code=404, detail={"error": "oauth.token_not_found", "fallback": "Token not found"})

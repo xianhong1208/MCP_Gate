@@ -1,5 +1,5 @@
 """Refreshing a server's tool list as a chosen identity: anonymous scanner token, one of the server's issued
-tokens (PAT or OAuth access token), or a pasted bearer -- for servers that show different tools per caller."""
+tokens (PAT or OAuth access token) -- for servers that show different tools per caller."""
 
 from unittest.mock import AsyncMock
 
@@ -90,12 +90,7 @@ def test_token_identity_refuses_revoked_foreign_and_unknown(owner_client, servic
     captured.assert_not_awaited()
 
 
-def test_bearer_identity_passes_the_pasted_token_through(owner_client, service, captured):
-    r = owner_client.post(f"/api/services/{service['id']}/refresh-tools",
-                          json={"identity": "bearer", "bearer": "  external-token-123 "})
-    assert r.status_code == 200, r.text
-    assert _token_arg(captured) == "external-token-123"
+def test_unknown_identity_is_rejected(owner_client, service, captured):
     r = owner_client.post(f"/api/services/{service['id']}/refresh-tools", json={"identity": "bearer"})
-    assert r.status_code == 400 and r.json()["detail"]["error"] == "service.refresh_bearer_missing"
-    r = owner_client.post(f"/api/services/{service['id']}/refresh-tools", json={"identity": "root"})
     assert r.status_code == 422
+    captured.assert_not_awaited()

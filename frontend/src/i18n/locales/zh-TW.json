@@ -549,14 +549,10 @@
       "refreshAsScanner": "Scanner token(匿名)",
       "refreshAsTokenGroup": "此伺服器已簽發的 token",
       "refreshAsTokenOption": "{{kind}} · {{name}}",
-      "refreshAsBearer": "貼上的 token",
       "refreshAsHint": {
         "scanner": "不帶使用者身分的短效 token。對所有人列出相同 tools 的 server 用這個就夠。",
-        "token": "以該 token 的 claims(相同的 subject、client、scope 與 jti)簽一份短效副本,server 看到的與那張 token 完全相同;原 token 本身不會被讀出。server 依 token 顯示不同 tools 時用這個。",
-        "bearer": "只在這次重新整理時放進 Authorization header,不會儲存。給自帶認證機制的 server 用。"
+        "token": "以該 token 的 claims(相同的 subject、client、scope 與 jti)簽一份短效副本,server 看到的與那張 token 完全相同;原 token 本身不會被讀出。server 依 token 顯示不同 tools 時用這個。"
       },
-      "refreshBearerPlaceholder": "貼上 bearer token",
-      "refreshBearerMissing": "請先貼上要用來檢視的 token",
       "refreshTokenGone": "該 token 已失效,改用 scanner token。",
       "noToolsFound": "找不到 tools",
       "usageHistoryTitle": "使用量歷史(最近 30 天)",
@@ -1028,8 +1024,7 @@
       "duplicate": "已存在同名稱與 host:port 的服務。",
       "no_host_port": "服務未設定 host 或 port",
       "remote_permission_denied": "遠端 MCP server 拒絕授權。",
-      "remote_unreachable": "無法連線到 MCP server。",
-      "refresh_bearer_missing": "請先貼上要用來檢視的 token"
+      "remote_unreachable": "無法連線到 MCP server。"
     },
     "discovery": {
       "scan_failed": "掃描失敗",

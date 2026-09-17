@@ -20,7 +20,7 @@ import { KindBadge, StatusBadge, ScopeChips } from './TokensPage'
 import clsx from 'clsx'
 import {
   PageHeader, Button, IconButton, Badge, StatusDot, Card, CardHeader, SectionLabel, DescriptionList,
-  EmptyState, Alert, LoadingBlock, Tabs, SegmentedControl, Select, Input,
+  EmptyState, Alert, LoadingBlock, Tabs, SegmentedControl, Select,
 } from '../components/ui'
 
 // recharts stroke attrs cannot read CSS vars: give fallback colors; the real line color
@@ -111,11 +111,10 @@ export default function ServiceDetailPage() {
   const [service, setService] = useState(null)
   const [scopes, setScopes] = useState([])
   const [ownScopes, setOwnScopes] = useState([])
-  // Who the tools/list request looks like to the server: 'scanner' | 'token:<jti>' | 'bearer' (remembered per service)
+  // Who the tools/list request looks like to the server: 'scanner' | 'token:<jti>' (remembered per service)
   const [refreshIdentity, setRefreshIdentity] = useState(() => {
     try { return localStorage.getItem(`refreshIdentity:${decodedServiceId}`) || 'scanner' } catch { return 'scanner' }
   })
-  const [refreshBearer, setRefreshBearer] = useState('')
   const [isLoadingOwnScopes, setIsLoadingOwnScopes] = useState(true)
   const [snippets, setSnippets] = useState(null)
   const [snippetFamily, setSnippetFamily] = useState('claude_code')
@@ -235,13 +234,9 @@ export default function ServiceDetailPage() {
   const selectedInspectToken = refreshIdentity.startsWith('token:')
     ? inspectableTokens.find((tk) => tk.jti === refreshIdentity.slice(6)) || null
     : null
-  const refreshMode = refreshIdentity === 'bearer' ? 'bearer' : refreshIdentity.startsWith('token:') ? 'token' : 'scanner'
+  const refreshMode = refreshIdentity.startsWith('token:') ? 'token' : 'scanner'
 
   const handleRefreshTools = async () => {
-    if (refreshMode === 'bearer' && !refreshBearer.trim()) {
-      toast.error(t('services.detail.refreshBearerMissing'))
-      return
-    }
     if (refreshMode === 'token' && !selectedInspectToken) {
       toast.error(t('services.detail.refreshTokenGone'))
       chooseRefreshIdentity('scanner')
@@ -252,7 +247,6 @@ export default function ServiceDetailPage() {
       const result = await servicesApi.refreshTools(decodedServiceId, {
         identity: refreshMode,
         jti: refreshMode === 'token' ? selectedInspectToken.jti : null,
-        bearer: refreshMode === 'bearer' ? refreshBearer.trim() : null,
       })
       toast.success(t('services.detail.refreshToolsSuccess', { n: result.tools_count }))
       await reload()
@@ -565,7 +559,6 @@ export default function ServiceDetailPage() {
                         ))}
                       </optgroup>
                     )}
-                    <option value="bearer">{t('services.detail.refreshAsBearer')}</option>
                   </Select>
                 </div>
                 <p className="text-xs text-muted-foreground">{t(`services.detail.refreshAsHint.${refreshMode}`)}</p>
@@ -575,16 +568,6 @@ export default function ServiceDetailPage() {
                     <span>·</span>
                     <ScopeChips scopes={selectedInspectToken.scopes} max={6} />
                   </div>
-                )}
-                {refreshMode === 'bearer' && (
-                  <Input
-                    size="sm"
-                    type="password"
-                    value={refreshBearer}
-                    onChange={(e) => setRefreshBearer(e.target.value)}
-                    placeholder={t('services.detail.refreshBearerPlaceholder')}
-                    mono
-                  />
                 )}
               </div>
             )}

@@ -549,14 +549,10 @@
       "refreshAsScanner": "Scanner token (anonymous)",
       "refreshAsTokenGroup": "Issued tokens for this server",
       "refreshAsTokenOption": "{{kind}} · {{name}}",
-      "refreshAsBearer": "A token I paste",
       "refreshAsHint": {
         "scanner": "A short-lived token with no user identity. Servers that list the same tools for everyone need nothing more.",
-        "token": "Signs a short-lived copy of that token's claims (same subject, client, scopes and jti), so the server sees exactly what the token presents. The stored token itself is never read back. Use this when the server shows different tools per token.",
-        "bearer": "Sent as the Authorization header for this refresh only and never stored. For servers with their own authentication."
+        "token": "Signs a short-lived copy of that token's claims (same subject, client, scopes and jti), so the server sees exactly what the token presents. The stored token itself is never read back. Use this when the server shows different tools per token."
       },
-      "refreshBearerPlaceholder": "Paste a bearer token",
-      "refreshBearerMissing": "Paste the token to inspect with",
       "refreshTokenGone": "That token is no longer active; falling back to the scanner token.",
       "noToolsFound": "No tools found",
       "usageHistoryTitle": "Usage History (Last 30 Days)",
@@ -1028,8 +1024,7 @@
       "duplicate": "A service with the same name and host:port already exists.",
       "no_host_port": "Service has no host or port configured",
       "remote_permission_denied": "Permission denied by the remote MCP server.",
-      "remote_unreachable": "Could not reach the MCP server.",
-      "refresh_bearer_missing": "Paste the token to inspect with"
+      "remote_unreachable": "Could not reach the MCP server."
     },
     "discovery": {
       "scan_failed": "Scan failed",
