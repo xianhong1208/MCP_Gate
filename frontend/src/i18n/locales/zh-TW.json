@@ -206,6 +206,12 @@
       "hint": "動態註冊的 client 在核准前無法取得 token。",
       "review": "前往審核"
     },
+    "issuerMismatch": {
+      "title": "{{n}} 個 host 在存取 OAuth 端點時與 OAUTH_ISSUER({{issuer}})不一致",
+      "hint": "Token 的 iss 與 discovery 公告的網址都是上面的 issuer,透過以下位址存取的 client 會驗證失敗或連到錯的端點:",
+      "seen": "{{n}} 次請求",
+      "fix": "請把 OAUTH_ISSUER 改成 client 實際使用的位址,或改由 issuer 的 host 存取,並把反向代理加入 security.trusted_proxies。詳見 docs/troubleshooting.md。"
+    },
     "chart": {
       "title": "Token 活動(最近 7 天)",
       "subtitle": "每日各服務的 token 事件數",
