@@ -18,7 +18,7 @@ import { useToast } from '../contexts/ToastContext'
 import { KindBadge, StatusBadge, ScopeChips } from './TokensPage'
 import clsx from 'clsx'
 import {
-  PageHeader, Button, IconButton, Badge, StatusPill, StatusDot, Card, CardHeader, SectionLabel, DescriptionList,
+  PageHeader, Button, IconButton, Badge, StatusDot, Card, CardHeader, SectionLabel, DescriptionList,
   EmptyState, Alert, LoadingBlock, Tabs, SegmentedControl,
 } from '../components/ui'
 
