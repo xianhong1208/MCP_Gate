@@ -17,7 +17,7 @@ import { useToast } from '../contexts/ToastContext'
 import HealthIndicator from '../components/HealthIndicator'
 import clsx from 'clsx'
 import {
-  PageHeader, Button, IconButton, Badge, StatusPill, Card, EmptyState, Alert, LoadingBlock,
+  PageHeader, Button, IconButton, Badge, Card, EmptyState, Alert, LoadingBlock,
   Table, THead, TBody, TR, TH, TD, RowActions, Checkbox,
   Dialog, DialogBody, DialogFooter, Field, Input, Radio as RadioInput, CheckRow,
 } from '../components/ui'

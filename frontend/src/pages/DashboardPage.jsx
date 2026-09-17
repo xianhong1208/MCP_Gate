@@ -11,7 +11,7 @@ import useServiceWebSocket from '../hooks/useServiceWebSocket'
 import LastChecked from '../components/LastChecked'
 import {
   PageHeader, Button, Card, CardHeader, StatTile, StatusPill, StatusDot, Alert, EmptyState, LoadingBlock, Select,
-  Table, THead, TBody, TR, TH, TD, SectionLabel, dotTones,
+  Table, TBody, TR, TD, SectionLabel, dotTones,
 } from '../components/ui'
 
 // recharts stroke attrs cannot read CSS vars: give fallback colors; the real line color

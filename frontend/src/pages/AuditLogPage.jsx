@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { formatDateTime } from '../utils/format'
 import { useTranslation } from 'react-i18next'
 import {
@@ -125,7 +125,7 @@ export default function AuditLogPage() {
 
   // `requestId` guards against out-of-order responses when filters change quickly
   const requestId = useRef(0)
-  const loadLogs = async () => {
+  const loadLogs = useCallback(async () => {
     const id = ++requestId.current
     setIsLoading(true)
     setError(null)
@@ -148,11 +148,11 @@ export default function AuditLogPage() {
     } finally {
       if (id === requestId.current) setIsLoading(false)
     }
-  }
+  }, [filters, page, pageSize, t])
 
   useEffect(() => {
     loadLogs()
-  }, [page, filters])
+  }, [loadLogs])
 
   const totalPages = Math.ceil(totalCount / pageSize)
 
