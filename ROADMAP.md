@@ -13,4 +13,3 @@
 - **`private_key_jwt` client authentication (RFC 7523)** for machine-to-machine clients.
 - **Per-server scopes.** The scope registry is global today; servers should be able to declare their own.
 - **Orchestrator:** multiple hosts and non-Docker runtimes.
-- **Console:** manage remembered consents from the UI (the API exists).

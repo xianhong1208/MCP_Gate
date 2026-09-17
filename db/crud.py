@@ -788,13 +788,21 @@ class OAuthConsentCRUD:
                 .order_by(OAuthConsent.granted_at.desc()).all())
 
     @staticmethod
-    def delete(db: Session, consent_id: str) -> bool:
-        consent = db.query(OAuthConsent).filter(OAuthConsent.id == _uuid(consent_id)).first()
+    def delete(db: Session, consent_id: str, user_id) -> Optional[dict]:
+        """Forget one remembered consent. Scoped to its owner: another user's consent id reads as absent.
+
+        Returns a snapshot (``to_dict``) taken before the row is deleted, so callers can audit what was forgotten.
+        """
+        consent = db.query(OAuthConsent).filter(
+            OAuthConsent.id == _uuid(consent_id),
+            OAuthConsent.user_id == _uuid(user_id),
+        ).first()
         if not consent:
-            return False
+            return None
+        snapshot = consent.to_dict()
         db.delete(consent)
         db.commit()
-        return True
+        return snapshot
 
 
 # ==================== Managed / BYO MCP ====================

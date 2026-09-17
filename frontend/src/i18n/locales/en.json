@@ -5,6 +5,7 @@
     "tokens": "Tokens",
     "issueToken": "Issue Token",
     "clients": "OAuth Clients",
+    "consents": "Consents",
     "marketplace": "Marketplace",
     "audit": "Audit Logs"
   },
@@ -132,6 +133,29 @@
     "noRedirect": "The server did not return a redirect URL.",
     "errorTitle": "Authorization request unavailable",
     "backToDashboard": "Back to dashboard"
+  },
+  "consents": {
+    "list": {
+      "title": "Remembered Consents",
+      "subtitle": "Decisions you chose to remember on the consent screen. A remembered consent lets that client skip the screen for the same server as long as its scopes are covered.",
+      "refresh": "Refresh",
+      "searchPlaceholder": "Search client, server, scope...",
+      "colClient": "Client",
+      "colAudience": "Server / Audience",
+      "colScopes": "Remembered scopes",
+      "colGranted": "Last granted",
+      "colActions": "Actions",
+      "noAudience": "Any server",
+      "empty": "No remembered consents",
+      "emptyHint": "Tick \"Remember this decision\" on the consent screen and it will show up here.",
+      "adjustFilters": "Try adjusting your search",
+      "forgetTitle": "Forget this consent",
+      "forgetTarget": "the remembered consent for {{name}}",
+      "forgetSuccess": "Consent forgotten. The client will ask again next time.",
+      "forgetFail": "Failed to forget consent: {{message}}",
+      "loadFail": "Failed to load consents",
+      "count": "{{count}} remembered"
+    }
   },
   "dashboard": {
     "title": "Dashboard",
@@ -871,7 +895,8 @@
       "service": "Service",
       "admin": "Admin",
       "system": "System",
-      "oauth_client": "OAuth Client"
+      "oauth_client": "OAuth Client",
+      "oauth_consent": "Consent"
     },
     "status": {
       "success": "Success",
@@ -885,6 +910,7 @@
       "oauth_client_approve": "Client Approved",
       "oauth_client_revoke": "Client Revoked",
       "oauth_client_delete": "Client Deleted",
+      "oauth_consent_delete": "Consent Forgotten",
       "oauth_key_rotate": "Signing Key Rotated",
       "refresh_tools": "Tools Refreshed",
       "scan_services": "Network Scan",

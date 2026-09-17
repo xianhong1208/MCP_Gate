@@ -13,6 +13,7 @@ import CreateTokenPage from './pages/CreateTokenPage'
 import ServicesPage from './pages/ServicesPage'
 import ServiceDetailPage from './pages/ServiceDetailPage'
 import OAuthClientsPage from './pages/OAuthClientsPage'
+import ConsentsPage from './pages/ConsentsPage'
 import MarketplacePage from './pages/MarketplacePage'
 import AuditLogPage from './pages/AuditLogPage'
 
@@ -72,6 +73,7 @@ export default function App() {
         <Route path="tokens/create" element={<CreateTokenPage />} />
         <Route path="tokens/:jti" element={<TokenDetailPage />} />
         <Route path="clients" element={<OAuthClientsPage />} />
+        <Route path="consents" element={<ConsentsPage />} />
         <Route path="marketplace" element={<MarketplacePage />} />
         <Route path="audit" element={<AuditLogPage />} />
       </Route>
