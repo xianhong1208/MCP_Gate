@@ -836,19 +836,28 @@ def mint_personal_token(db: Session, *, user: AdminUser, service: Service, scope
     return token, rec
 
 
-def mint_owner_probe_token(db: Session, *, user: AdminUser, service: Service,
-                           scopes: Optional[Iterable[str]] = None) -> str:
-    """Short-lived token carrying the signed-in owner's identity (sub, email, name) for inspecting a server that
-    shows different tools per caller; same claims a personal access token would have, but not recorded."""
+def mint_probe_token_like(db: Session, *, record: OAuthToken, service: Service) -> str:
+    """A short-lived copy of an issued token's claims (sub, client_id, scope, aud, email/name and the same jti),
+    signed now, for inspecting a server that shows different tools per caller. The stored token itself cannot
+    be read back (only its record exists), so this is how "refresh as that token" works; the server verifies
+    the copy against the JWKS like the original and sees exactly what that token presents."""
+    if record.kind not in ("access", "pat"):
+        raise OAuthError("invalid_request", "only access tokens and personal access tokens can be used")
+    if record.is_revoked or record.is_expired:
+        raise OAuthError("invalid_request", "that token is no longer active")
     audience = normalize_audience(service.effective_audience)
-    if not audience:
-        raise OAuthError("invalid_target", "service has no host/port or audience configured")
-    scope = resolve_scope(db, " ".join(scopes) if scopes else None, None, service)
-    token, _, _ = issue_access_token(
-        db, sub=str(user.id), client_id=CONSOLE_CLIENT_ID, scope=scope, audience=audience, service=service,
-        user=user, ttl_seconds=SCANNER_TOKEN_TTL_SECONDS, record=False,
-    )
-    return token
+    if not audience or normalize_audience(record.audience or "") != audience:
+        raise OAuthError("invalid_request", "that token was not issued for this server")
+    now = _now_ts()
+    payload = {
+        "iss": issuer(), "sub": record.sub, "client_id": record.client_id, "scope": record.scope or "",
+        "iat": now, "exp": now + SCANNER_TOKEN_TTL_SECONDS, "jti": record.jti, "token_use": "access",
+        "aud": audience,
+    }
+    if record.user:
+        payload["email"] = record.user.email
+        payload["name"] = record.user.username
+    return _sign(db, payload, typ="at+jwt")
 
 
 def mint_scanner_token(db: Session, service: Service) -> Optional[str]:

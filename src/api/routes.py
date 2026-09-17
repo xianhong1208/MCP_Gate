@@ -177,8 +177,9 @@ async def refresh_service_tools(service_id: str, http_request: Request, body: Op
     """Connect to the service, fetch its tools list and sync it.
 
     By default services protected by MCP Center OAuth are inspected with the anonymous scanner token. A server
-    that shows different tools per caller can be inspected as the signed-in owner (`identity=owner`, optional
-    `scopes`) or with a token pasted by the operator (`identity=bearer`), which is used once and not stored.
+    that shows different tools per caller can be inspected as one of its issued tokens (`identity=token` +
+    `jti`: a short-lived copy of that token's claims is signed) or with a token pasted by the operator
+    (`identity=bearer`), which is used once and not stored.
     """
     from src.discovery.health_monitor import resolve_service_auth_token
     from src.discovery.scanner import get_scanner
@@ -198,9 +199,12 @@ async def refresh_service_tools(service_id: str, http_request: Request, body: Op
             raise HTTPException(status_code=400, detail={"error": "service.refresh_bearer_missing",
                                                          "fallback": "Paste the token to inspect with"})
         auth_token = body.bearer.strip()
-    elif body.identity == "owner":
+    elif body.identity == "token":
+        record = OAuthTokenAdapter.get(db, body.jti or "")
+        if record is None:
+            raise HTTPException(status_code=404, detail={"error": "oauth.token_not_found", "fallback": "Token not found"})
         try:
-            auth_token = oauth_service.mint_owner_probe_token(db, user=user, service=service, scopes=body.scopes)
+            auth_token = oauth_service.mint_probe_token_like(db, record=record, service=service)
         except OAuthError as e:
             raise HTTPException(status_code=400, detail={"error": f"oauth.{e.error}", "fallback": e.description})
     else:
@@ -223,7 +227,7 @@ async def refresh_service_tools(service_id: str, http_request: Request, body: Op
     infos = [_tool_info(t) for t in MCPToolAdapter.get_by_service(db, service_id)]
     _audit(db, http_request, user, "refresh_tools", ResourceType.SERVICE, service_id,
            {"service_name": service.name, "tools_count": len(infos), "identity": body.identity,
-            **({"scopes": body.scopes} if body.identity == "owner" and body.scopes else {})})
+            **({"jti": body.jti} if body.identity == "token" else {})})
     return RefreshToolsResponse(success=True, message=f"Refreshed {len(infos)} tools", tools_count=len(infos),
                                 tools=infos)
 

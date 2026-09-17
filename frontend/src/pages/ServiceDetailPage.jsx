@@ -16,7 +16,6 @@ import ScopeEditor from '../components/ScopeEditor'
 import { copyToClipboard } from '../utils/clipboard'
 import { useConfirm } from '../contexts/ConfirmContext'
 import { useToast } from '../contexts/ToastContext'
-import { useAuth } from '../contexts/AuthContext'
 import { KindBadge, StatusBadge, ScopeChips } from './TokensPage'
 import clsx from 'clsx'
 import {
@@ -106,19 +105,16 @@ export default function ServiceDetailPage() {
   const { serviceId } = useParams()
   const navigate = useNavigate()
   const { confirmDelete, confirmRevoke } = useConfirm()
-  const { user } = useAuth()
   const toast = useToast()
   const decodedServiceId = decodeURIComponent(serviceId)
 
   const [service, setService] = useState(null)
   const [scopes, setScopes] = useState([])
   const [ownScopes, setOwnScopes] = useState([])
-  const [effectiveScopes, setEffectiveScopes] = useState([])
-  // Who the tools/list request looks like to the server: scanner | owner | bearer (remembered per service)
+  // Who the tools/list request looks like to the server: 'scanner' | 'token:<jti>' | 'bearer' (remembered per service)
   const [refreshIdentity, setRefreshIdentity] = useState(() => {
     try { return localStorage.getItem(`refreshIdentity:${decodedServiceId}`) || 'scanner' } catch { return 'scanner' }
   })
-  const [refreshScopes, setRefreshScopes] = useState(new Set())
   const [refreshBearer, setRefreshBearer] = useState('')
   const [isLoadingOwnScopes, setIsLoadingOwnScopes] = useState(true)
   const [snippets, setSnippets] = useState(null)
@@ -187,8 +183,6 @@ export default function ServiceDetailPage() {
       setSnippets(sn)
       setTokens(tk.tokens || [])
       setOwnScopes(own.own || [])
-      setEffectiveScopes(own.effective || [])
-      setRefreshScopes(new Set((own.effective || []).filter((x) => x.is_default).map((x) => x.name)))
       setIsLoadingOwnScopes(false)
     }).catch((err) => {
       if (!cancelled) setError(err.message || t('services.detail.loadFailed'))
@@ -236,26 +230,29 @@ export default function ServiceDetailPage() {
     try { localStorage.setItem(`refreshIdentity:${decodedServiceId}`, value) } catch { /* per-viewer convenience only */ }
   }
 
-  const toggleRefreshScope = (name) => {
-    setRefreshScopes((prev) => {
-      const next = new Set(prev)
-      if (next.has(name)) next.delete(name)
-      else next.add(name)
-      return next
-    })
-  }
+  // Active PATs / OAuth access tokens of this server that the tools list can be fetched as
+  const inspectableTokens = tokens.filter((tk) => tk.status === 'active' && (tk.kind === 'pat' || tk.kind === 'access'))
+  const selectedInspectToken = refreshIdentity.startsWith('token:')
+    ? inspectableTokens.find((tk) => tk.jti === refreshIdentity.slice(6)) || null
+    : null
+  const refreshMode = refreshIdentity === 'bearer' ? 'bearer' : refreshIdentity.startsWith('token:') ? 'token' : 'scanner'
 
   const handleRefreshTools = async () => {
-    if (refreshIdentity === 'bearer' && !refreshBearer.trim()) {
+    if (refreshMode === 'bearer' && !refreshBearer.trim()) {
       toast.error(t('services.detail.refreshBearerMissing'))
+      return
+    }
+    if (refreshMode === 'token' && !selectedInspectToken) {
+      toast.error(t('services.detail.refreshTokenGone'))
+      chooseRefreshIdentity('scanner')
       return
     }
     setIsRefreshingTools(true)
     try {
       const result = await servicesApi.refreshTools(decodedServiceId, {
-        identity: refreshIdentity,
-        scopes: refreshIdentity === 'owner' ? [...refreshScopes] : null,
-        bearer: refreshIdentity === 'bearer' ? refreshBearer.trim() : null,
+        identity: refreshMode,
+        jti: refreshMode === 'token' ? selectedInspectToken.jti : null,
+        bearer: refreshMode === 'bearer' ? refreshBearer.trim() : null,
       })
       toast.success(t('services.detail.refreshToolsSuccess', { n: result.tools_count }))
       await reload()
@@ -554,35 +551,32 @@ export default function ServiceDetailPage() {
               <div className="mb-3 space-y-2 rounded-md border border-border bg-muted/40 p-3">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-xs text-muted-foreground">{t('services.detail.refreshAs')}</span>
-                  <Select size="sm" value={refreshIdentity} onChange={(e) => chooseRefreshIdentity(e.target.value)} className="w-auto">
+                  <Select size="sm" value={refreshIdentity} onChange={(e) => chooseRefreshIdentity(e.target.value)} className="min-w-0 max-w-full">
                     <option value="scanner">{t('services.detail.refreshAsScanner')}</option>
-                    <option value="owner">{t('services.detail.refreshAsOwner', { name: user?.email || user?.username || '' })}</option>
+                    {inspectableTokens.length > 0 && (
+                      <optgroup label={t('services.detail.refreshAsTokenGroup')}>
+                        {inspectableTokens.map((tk) => (
+                          <option key={tk.jti} value={`token:${tk.jti}`}>
+                            {t('services.detail.refreshAsTokenOption', {
+                              kind: t(`tokens.kind.${tk.kind}`, tk.kind),
+                              name: tk.label || tk.client_name || tk.user_email || tk.jti.slice(0, 8),
+                            })}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
                     <option value="bearer">{t('services.detail.refreshAsBearer')}</option>
                   </Select>
                 </div>
-                <p className="text-xs text-muted-foreground">{t(`services.detail.refreshAsHint.${refreshIdentity}`)}</p>
-                {refreshIdentity === 'owner' && effectiveScopes.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5">
-                    {effectiveScopes.map((sc) => {
-                      const on = refreshScopes.has(sc.name)
-                      return (
-                        <button
-                          key={sc.name}
-                          type="button"
-                          onClick={() => toggleRefreshScope(sc.name)}
-                          title={sc.description || ''}
-                          className={clsx(
-                            'rounded-md border px-2 py-0.5 font-mono text-xs transition-colors duration-200',
-                            on ? 'border-primary/40 bg-primary-soft/60 text-foreground' : 'border-border text-muted-foreground hover:text-foreground',
-                          )}
-                        >
-                          {sc.name}
-                        </button>
-                      )
-                    })}
+                <p className="text-xs text-muted-foreground">{t(`services.detail.refreshAsHint.${refreshMode}`)}</p>
+                {refreshMode === 'token' && selectedInspectToken && (
+                  <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+                    <span className="font-mono">{selectedInspectToken.sub}</span>
+                    <span>·</span>
+                    <ScopeChips scopes={selectedInspectToken.scopes} max={6} />
                   </div>
                 )}
-                {refreshIdentity === 'bearer' && (
+                {refreshMode === 'bearer' && (
                   <Input
                     size="sm"
                     type="password"

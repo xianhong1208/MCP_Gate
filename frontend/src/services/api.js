@@ -194,12 +194,12 @@ export const servicesApi = {
   },
 
   /** Connect to the service and fetch tools; for MCP Center protected services the backend self-signs a token */
-  /** identity: 'scanner' (anonymous scanner token, default) | 'owner' (signed-in user's identity, optional scopes)
+  /** identity: 'scanner' (anonymous scanner token, default) | 'token' (one of this server's issued tokens, by jti)
    *  | 'bearer' (a pasted token, used once) -- for servers that show different tools per caller */
-  async refreshTools(id, { identity = 'scanner', scopes = null, bearer = null } = {}) {
+  async refreshTools(id, { identity = 'scanner', jti = null, bearer = null } = {}) {
     return request(`/api/services/${encodeURIComponent(id)}/refresh-tools`, {
       method: 'POST',
-      body: JSON.stringify({ identity, scopes, bearer }),
+      body: JSON.stringify({ identity, jti, bearer }),
     })
   },
 

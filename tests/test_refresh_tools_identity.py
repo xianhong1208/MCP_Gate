@@ -1,5 +1,5 @@
-"""Refreshing a server's tool list as a chosen identity: anonymous scanner token, the signed-in owner, or a
-pasted bearer -- for servers that show different tools per caller."""
+"""Refreshing a server's tool list as a chosen identity: anonymous scanner token, one of the server's issued
+tokens (PAT or OAuth access token), or a pasted bearer -- for servers that show different tools per caller."""
 
 from unittest.mock import AsyncMock
 
@@ -30,33 +30,64 @@ def test_default_is_the_anonymous_scanner_token(owner_client, service, captured)
     assert claims["aud"] == service["effective_audience"]
 
 
-def test_owner_identity_carries_user_and_scopes(owner_client, service, captured):
+def _issue_pat(owner_client, service, scopes=None):
+    body = {"service_id": service["id"], "expires_days": 1, "label": "agent"}
+    if scopes:
+        body["scopes"] = scopes
+    r = owner_client.post("/api/oauth/tokens/personal", json=body)
+    assert r.status_code == 201, r.text
+    return r.json()
+
+
+def _claims(token):
+    return jwt.decode(token, options={"verify_signature": False})
+
+
+def test_token_identity_presents_the_chosen_pat(owner_client, service, captured):
+    pat = _issue_pat(owner_client, service, scopes=["mcp:tools:read"])
+    original = _claims(pat["access_token"])
     r = owner_client.post(f"/api/services/{service['id']}/refresh-tools",
-                          json={"identity": "owner", "scopes": ["mcp:tools:read"]})
+                          json={"identity": "token", "jti": pat["jti"]})
     assert r.status_code == 200, r.text
-    claims = jwt.decode(_token_arg(captured), options={"verify_signature": False})
-    me = owner_client.get("/api/session/me").json()
-    me = me.get("user", me)
-    assert claims["sub"] == me["id"]
-    assert claims["email"] == me["email"] and claims["name"] == me["username"]
-    assert claims["scope"] == "mcp:tools:read"
-    assert claims["exp"] - claims["iat"] <= 120
-    # not recorded as a token
-    assert all(t["sub"] != claims["sub"] or t["kind"] != "access"
-               for t in owner_client.get("/api/oauth/tokens", params={"include_inactive": True}).json()["tokens"])
-    # audited with the identity
+    probe = _claims(_token_arg(captured))
+    # same identity, same jti; only freshly signed and short-lived
+    for claim in ("iss", "sub", "client_id", "scope", "aud", "jti", "email", "name", "token_use"):
+        assert probe[claim] == original[claim], claim
+    assert probe["exp"] - probe["iat"] <= 120 and probe["exp"] < original["exp"]
+    assert _token_arg(captured) != pat["access_token"]
+    # the probe is not a new token record
+    assert owner_client.get("/api/oauth/tokens", params={"include_inactive": True}).json()["total"] == 1
     entries = [e for e in owner_client.get("/api/audit/logs").json()["logs"] if e["action"] == "refresh_tools"]
-    assert entries[0]["details"]["identity"] == "owner" and entries[0]["details"]["scopes"] == ["mcp:tools:read"]
+    assert entries[0]["details"]["identity"] == "token" and entries[0]["details"]["jti"] == pat["jti"]
 
 
-def test_owner_identity_defaults_to_server_defaults_and_rejects_unknown_scope(owner_client, service, captured):
-    r = owner_client.post(f"/api/services/{service['id']}/refresh-tools", json={"identity": "owner"})
-    assert r.status_code == 200, r.text
-    claims = jwt.decode(_token_arg(captured), options={"verify_signature": False})
-    assert "mcp:tools:read" in claims["scope"].split()
+def test_token_identity_works_for_oauth_access_tokens(owner_client, service, captured):
+    from tests.test_oauth_flow import _authorize_and_consent, _exchange, _register
+    reg = _register(owner_client, client_name="Agent client")
+    code, verifier = _authorize_and_consent(owner_client, reg["client_id"], scope="mcp:tools:read mcp:tools:invoke")
+    tokens = _exchange(owner_client, reg["client_id"], code, verifier).json()
+    original = _claims(tokens["access_token"])
     r = owner_client.post(f"/api/services/{service['id']}/refresh-tools",
-                          json={"identity": "owner", "scopes": ["nope:x"]})
-    assert r.status_code == 400 and r.json()["detail"]["error"] == "oauth.invalid_scope"
+                          json={"identity": "token", "jti": original["jti"]})
+    assert r.status_code == 200, r.text
+    probe = _claims(_token_arg(captured))
+    assert probe["client_id"] == reg["client_id"] and probe["sub"] == original["sub"]
+    assert probe["scope"] == original["scope"] and probe["jti"] == original["jti"]
+
+
+def test_token_identity_refuses_revoked_foreign_and_unknown(owner_client, service, captured):
+    pat = _issue_pat(owner_client, service)
+    r = owner_client.post("/api/services", json={"name": "other", "host": "127.0.0.1", "port": 8124,
+                                                 "protocol": "http", "mcp_path": "/mcp"})
+    other = r.json()
+    r = owner_client.post(f"/api/services/{other['id']}/refresh-tools", json={"identity": "token", "jti": pat["jti"]})
+    assert r.status_code == 400 and "not issued for this server" in r.json()["detail"]["fallback"]
+    assert owner_client.post(f"/api/oauth/tokens/{pat['jti']}/revoke").status_code == 200
+    r = owner_client.post(f"/api/services/{service['id']}/refresh-tools", json={"identity": "token", "jti": pat["jti"]})
+    assert r.status_code == 400 and "no longer active" in r.json()["detail"]["fallback"]
+    r = owner_client.post(f"/api/services/{service['id']}/refresh-tools", json={"identity": "token", "jti": "nope"})
+    assert r.status_code == 404
+    captured.assert_not_awaited()
 
 
 def test_bearer_identity_passes_the_pasted_token_through(owner_client, service, captured):
