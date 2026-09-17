@@ -196,24 +196,26 @@ export default function TokensPage() {
         </Card>
       ) : (
         <div className="overflow-hidden rounded-lg border border-border bg-card">
-          <Table bordered={false}>
+          {/* Fixed layout: columns share the container width and long values truncate, so the table never
+              needs a horizontal scrollbar even when the 2xl-only columns are shown. */}
+          <Table bordered={false} className="table-fixed">
             <THead>
               <TR hover={false} group={false}>
-                <TH>{t('tokens.list.colToken')}</TH>
-                <TH>{t('tokens.list.colClient')}</TH>
-                <TH>{t('tokens.list.colService')}</TH>
-                <TH className="hidden 2xl:table-cell">{t('tokens.list.colScopes')}</TH>
-                <TH className="hidden 2xl:table-cell">{t('tokens.list.colIssued')}</TH>
-                <TH>{t('tokens.list.colExpires')}</TH>
-                <TH className="hidden 2xl:table-cell">{t('tokens.list.colLastUsed')}</TH>
-                <TH>{t('tokens.list.colStatus')}</TH>
+                <TH className="w-[22%] 2xl:w-[19%]">{t('tokens.list.colToken')}</TH>
+                <TH className="w-[16%] 2xl:w-[12%]">{t('tokens.list.colClient')}</TH>
+                <TH className="w-[24%] 2xl:w-[18%]">{t('tokens.list.colService')}</TH>
+                <TH className="hidden 2xl:table-cell 2xl:w-[14%]">{t('tokens.list.colScopes')}</TH>
+                <TH className="hidden 2xl:table-cell 2xl:w-[9%]">{t('tokens.list.colIssued')}</TH>
+                <TH className="w-[14%] 2xl:w-[9%]">{t('tokens.list.colExpires')}</TH>
+                <TH className="hidden 2xl:table-cell 2xl:w-[8%]">{t('tokens.list.colLastUsed')}</TH>
+                <TH className="w-[12%] 2xl:w-[7%]">{t('tokens.list.colStatus')}</TH>
                 <TH align="right" className="w-20"><span className="sr-only">{t('tokens.list.colActions')}</span></TH>
               </TR>
             </THead>
             <TBody>
               {pageItems.map((tk) => (
                 <TR key={tk.jti}>
-                  <TD className="max-w-[240px]">
+                  <TD>
                     <Link to={`/tokens/${encodeURIComponent(tk.jti)}`} className="block min-w-0">
                       <div className="flex items-center gap-2">
                         <span className="truncate font-medium text-foreground transition-colors duration-200 hover:text-link">
@@ -224,10 +226,10 @@ export default function TokensPage() {
                       <p className="mt-0.5 truncate font-mono text-xs text-muted-foreground" title={tk.jti}>{tk.jti}</p>
                     </Link>
                   </TD>
-                  <TD className="max-w-[180px]">
+                  <TD>
                     <span className="block truncate text-foreground" title={tk.client_id}>{tk.client_name || tk.client_id}</span>
                   </TD>
-                  <TD className="max-w-[220px]">
+                  <TD>
                     {tk.service_id ? (
                       <Link to={`/services/${encodeURIComponent(tk.service_id)}`} className="block truncate text-foreground transition-colors duration-200 hover:text-link">
                         {tk.service_name || tk.service_id}
@@ -240,9 +242,9 @@ export default function TokensPage() {
                     )}
                   </TD>
                   <TD className="hidden 2xl:table-cell"><ScopeChips scopes={tk.scopes} max={2} /></TD>
-                  <TD className="hidden whitespace-nowrap 2xl:table-cell" muted>{tk.issued_at ? formatDateTime(tk.issued_at) : '—'}</TD>
-                  <TD className="whitespace-nowrap" muted>{tk.expires_at ? formatDateTime(tk.expires_at) : t('tokens.common.never')}</TD>
-                  <TD className="hidden whitespace-nowrap 2xl:table-cell" muted>
+                  <TD className="hidden 2xl:table-cell" muted>{tk.issued_at ? formatDateTime(tk.issued_at) : '—'}</TD>
+                  <TD muted>{tk.expires_at ? formatDateTime(tk.expires_at) : t('tokens.common.never')}</TD>
+                  <TD className="hidden 2xl:table-cell" muted>
                     {tk.last_used_at ? <LastChecked value={tk.last_used_at} /> : <span className="text-xs text-subtle-foreground">{t('tokens.common.neverUsed')}</span>}
                   </TD>
                   <TD><StatusBadge status={tk.status} /></TD>
