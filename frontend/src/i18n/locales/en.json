@@ -206,6 +206,12 @@
       "hint": "Dynamically registered clients cannot obtain tokens until approved.",
       "review": "Review"
     },
+    "issuerMismatch": {
+      "title": "{{n}} host(s) reached the OAuth endpoints without matching OAUTH_ISSUER ({{issuer}})",
+      "hint": "Tokens carry the issuer above and discovery advertises its URLs, so clients using these addresses will fail verification or reach the wrong endpoints:",
+      "seen": "{{n}} request(s)",
+      "fix": "Either set OAUTH_ISSUER to the address clients actually use, or reach the server through the issuer host and list your reverse proxy in security.trusted_proxies. See docs/troubleshooting.md."
+    },
     "chart": {
       "title": "Token Activity (Last 7 Days)",
       "subtitle": "Daily token events per service",
