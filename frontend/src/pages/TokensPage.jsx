@@ -1,4 +1,4 @@
-import { formatDateTime } from '../utils/format'
+import { formatDateTime, formatDate } from '../utils/format'
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
@@ -242,8 +242,8 @@ export default function TokensPage() {
                     )}
                   </TD>
                   <TD className="hidden 2xl:table-cell"><ScopeChips scopes={tk.scopes} max={2} /></TD>
-                  <TD className="hidden 2xl:table-cell" muted>{tk.issued_at ? formatDateTime(tk.issued_at) : '—'}</TD>
-                  <TD muted>{tk.expires_at ? formatDateTime(tk.expires_at) : t('tokens.common.never')}</TD>
+                  <TD className="hidden 2xl:table-cell" muted>{tk.issued_at ? formatDate(tk.issued_at) : '—'}</TD>
+                  <TD muted>{tk.expires_at ? formatDate(tk.expires_at) : t('tokens.common.never')}</TD>
                   <TD className="hidden 2xl:table-cell" muted>
                     {tk.last_used_at ? <LastChecked value={tk.last_used_at} /> : <span className="text-xs text-subtle-foreground">{t('tokens.common.neverUsed')}</span>}
                   </TD>
