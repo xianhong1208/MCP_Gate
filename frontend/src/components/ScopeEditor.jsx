@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { Plus, Check, Pencil, Trash2 } from 'lucide-react'
 import { describeScope } from '../utils/scopes'
 import {
-  Button, IconButton, Badge, Card, CardHeader, EmptyState, LoadingBlock, Input, Checkbox, RowActions,
+  Button, IconButton, Badge, Card, CardHeader, LoadingBlock, Input, Checkbox, RowActions,
 } from './ui'
 
 /**
@@ -79,7 +79,7 @@ export default function ScopeEditor({ title, description, scopes, isLoading, onS
       {isLoading ? (
         <LoadingBlock className="py-6" size="sm" />
       ) : scopes.length === 0 ? (
-        <EmptyState compact title={emptyText || t('clients.scopes.empty')} />
+        <p className="rounded-md border border-dashed border-border px-3 py-2.5 text-xs text-muted-foreground">{emptyText || t('clients.scopes.empty')}</p>
       ) : (
         <div className="divide-y divide-border">
           {scopes.map((s) => (

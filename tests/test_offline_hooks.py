@@ -20,7 +20,7 @@ def _resource_server(client, **overrides):
 
 
 def _issue_pat(owner_client, service, days=1):
-    r = owner_client.post("/api/oauth/tokens/personal", json={"service_id": service["id"], "expires_days": days})
+    r = owner_client.post("/api/oauth/tokens/personal", json={"service_id": service["id"], "expires_days": days, "label": "test"})
     assert r.status_code == 201, r.text
     return r.json()
 

@@ -122,12 +122,12 @@ def test_allow_list_restricts_globals_but_not_own_scopes(owner_client, service):
 def test_personal_token_can_carry_service_scope(owner_client, service):
     _declare(owner_client, service["id"], "files:read")
     r = owner_client.post("/api/oauth/tokens/personal", json={"service_id": service["id"], "expires_days": 1,
-                                                               "scopes": ["files:read"]})
+                                                               "scopes": ["files:read"], "label": "test"})
     assert r.status_code == 201, r.text
     assert r.json()["scope"] == "files:read"
     other = _other_service(owner_client, 8125)
     r = owner_client.post("/api/oauth/tokens/personal", json={"service_id": other["id"], "expires_days": 1,
-                                                               "scopes": ["files:read"]})
+                                                               "scopes": ["files:read"], "label": "test"})
     assert r.status_code == 400
 
 

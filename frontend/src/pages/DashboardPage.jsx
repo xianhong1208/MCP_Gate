@@ -435,7 +435,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Health / usage / system */}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+      <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-3">
         <ServiceHealthCard health={overview.service_health} offlineServices={overview.offline_services} isLoading={isLoading} />
         <UsageSummaryCard summary={usageSummary} isLoading={isLoading} />
         <SystemStatusCard scheduler={overview.scheduler} adminCount={overview.admin_count} issuer={oauthOverview?.issuer} kindData={kindData} isLoading={isLoading} />

@@ -364,6 +364,7 @@
       "customDays": "Custom",
       "labelLabel": "Label",
       "labelPlaceholder": "e.g. my-laptop, ci-runner",
+      "labelHint": "Required. Name the client or machine that will use it; this is how the token is identified in lists and when inspecting a server as it.",
       "cancel": "Cancel",
       "submit": "Issue token",
       "submitting": "Issuing...",
@@ -405,6 +406,13 @@
       "toolsCount_one": "{{n}} tool",
       "toolsCount_other": "{{n}} tools",
       "inputSchema": "Input Schema",
+      "paramCount": "{{n}} params",
+      "schemaView": {
+        "table": "Fields"
+      },
+      "noParams": "This tool takes no parameters.",
+      "paramRequired": "required",
+      "paramDefault": "default",
       "copyInputSchema": "Copy input schema",
       "noTools": "No tools found",
       "refreshHint": "Click \"Refresh from MCP Server\" to fetch tools",
@@ -544,18 +552,17 @@
       "tagsTitle": "Tags",
       "noTags": "No tags",
       "mcpToolsTitle": "MCP Tools ({{n}})",
+      "mcpToolsLabel": "MCP Tools",
       "refreshFromServer": "Refresh from Server",
       "refreshAs": "Inspect as",
       "refreshAsScanner": "Scanner token (anonymous)",
-      "refreshAsOwner": "Me ({{name}})",
-      "refreshAsBearer": "A token I paste",
+      "refreshAsTokenGroup": "Issued tokens for this server",
+      "refreshAsTokenOption": "{{kind}} · {{name}}",
       "refreshAsHint": {
-        "scanner": "A short-lived token with no user identity. Servers that list the same tools for everyone need nothing more.",
-        "owner": "A short-lived token carrying your user id, email and the selected scopes, like a personal access token but not stored. Use this when the server shows different tools per caller.",
-        "bearer": "Sent as the Authorization header for this refresh only and never stored. For servers with their own authentication."
+        "scanner": "Anonymous short-lived token; fine for servers that list the same tools for everyone.",
+        "token": "Presents this token's identity (same subject, client, scopes and jti) without reading the stored token."
       },
-      "refreshBearerPlaceholder": "Paste a bearer token",
-      "refreshBearerMissing": "Paste the token to inspect with",
+      "refreshTokenGone": "That token is no longer active; falling back to the scanner token.",
       "noToolsFound": "No tools found",
       "usageHistoryTitle": "Usage History (Last 30 Days)",
       "usageHistorySubtitle": "Token verification requests for this service",
@@ -1026,8 +1033,7 @@
       "duplicate": "A service with the same name and host:port already exists.",
       "no_host_port": "Service has no host or port configured",
       "remote_permission_denied": "Permission denied by the remote MCP server.",
-      "remote_unreachable": "Could not reach the MCP server.",
-      "refresh_bearer_missing": "Paste the token to inspect with"
+      "remote_unreachable": "Could not reach the MCP server."
     },
     "discovery": {
       "scan_failed": "Scan failed",

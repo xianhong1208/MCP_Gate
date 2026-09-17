@@ -364,6 +364,7 @@
       "customDays": "自訂",
       "labelLabel": "標籤",
       "labelPlaceholder": "例如:my-laptop、ci-runner",
+      "labelHint": "必填。寫下要使用它的 client 或機器,列表與「以誰的身分檢視」都靠這個名稱辨認。",
       "cancel": "取消",
       "submit": "簽發 Token",
       "submitting": "簽發中...",
@@ -405,6 +406,13 @@
       "toolsCount_one": "{{n}} 個 tool",
       "toolsCount_other": "{{n}} 個 tools",
       "inputSchema": "Input Schema",
+      "paramCount": "{{n}} 個參數",
+      "schemaView": {
+        "table": "欄位"
+      },
+      "noParams": "此工具不需要參數。",
+      "paramRequired": "必填",
+      "paramDefault": "預設",
       "copyInputSchema": "複製 input schema",
       "noTools": "找不到 tools",
       "refreshHint": "點擊「從 MCP Server 重新整理」以取得 tools",
@@ -544,18 +552,17 @@
       "tagsTitle": "標籤",
       "noTags": "尚無標籤",
       "mcpToolsTitle": "MCP Tools ({{n}})",
+      "mcpToolsLabel": "MCP Tools",
       "refreshFromServer": "從 Server 重新整理",
       "refreshAs": "以誰的身分檢視",
       "refreshAsScanner": "Scanner token(匿名)",
-      "refreshAsOwner": "我({{name}})",
-      "refreshAsBearer": "貼上的 token",
+      "refreshAsTokenGroup": "此伺服器已簽發的 token",
+      "refreshAsTokenOption": "{{kind}} · {{name}}",
       "refreshAsHint": {
-        "scanner": "不帶使用者身分的短效 token。對所有人列出相同 tools 的 server 用這個就夠。",
-        "owner": "帶有你的 user id、email 與所選 scope 的短效 token,等同一張不入庫的 personal access token。server 依呼叫者顯示不同 tools 時用這個。",
-        "bearer": "只在這次重新整理時放進 Authorization header,不會儲存。給自帶認證機制的 server 用。"
+        "scanner": "匿名短效 token;對所有人列出相同 tools 的 server 用這個即可。",
+        "token": "以這張 token 的身分(相同 subject、client、scope、jti)檢視,不會讀出原 token。"
       },
-      "refreshBearerPlaceholder": "貼上 bearer token",
-      "refreshBearerMissing": "請先貼上要用來檢視的 token",
+      "refreshTokenGone": "該 token 已失效,改用 scanner token。",
       "noToolsFound": "找不到 tools",
       "usageHistoryTitle": "使用量歷史(最近 30 天)",
       "usageHistorySubtitle": "此服務的 Token 驗證請求",
@@ -1026,8 +1033,7 @@
       "duplicate": "已存在同名稱與 host:port 的服務。",
       "no_host_port": "服務未設定 host 或 port",
       "remote_permission_denied": "遠端 MCP server 拒絕授權。",
-      "remote_unreachable": "無法連線到 MCP server。",
-      "refresh_bearer_missing": "請先貼上要用來檢視的 token"
+      "remote_unreachable": "無法連線到 MCP server。"
     },
     "discovery": {
       "scan_failed": "掃描失敗",

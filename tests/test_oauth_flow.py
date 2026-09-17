@@ -301,7 +301,7 @@ def test_admin_client_management(owner_client):
 
 
 def test_key_rotation_keeps_old_tokens_verifiable(owner_client, service):
-    pat = owner_client.post("/api/oauth/tokens/personal", json={"service_id": service["id"], "expires_days": 1}).json()
+    pat = owner_client.post("/api/oauth/tokens/personal", json={"service_id": service["id"], "expires_days": 1, "label": "test"}).json()
     r = owner_client.post("/api/oauth/keys/rotate")
     assert r.status_code == 200
     keys = owner_client.get("/api/oauth/keys").json()["keys"]
@@ -312,7 +312,7 @@ def test_key_rotation_keeps_old_tokens_verifiable(owner_client, service):
     jwt.decode(pat["access_token"], _jwks_key(owner_client, pat["access_token"]), algorithms=["RS256"],
                audience=RESOURCE)
     # New tokens use the new kid
-    pat2 = owner_client.post("/api/oauth/tokens/personal", json={"service_id": service["id"], "expires_days": 1}).json()
+    pat2 = owner_client.post("/api/oauth/tokens/personal", json={"service_id": service["id"], "expires_days": 1, "label": "test"}).json()
     assert jwt.get_unverified_header(pat2["access_token"])["kid"] != jwt.get_unverified_header(pat["access_token"])["kid"]
 
 
