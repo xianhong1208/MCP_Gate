@@ -2,6 +2,11 @@
 
 All notable changes to MCP Center are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.0.1] — 2026-09-15
+
+### Fixed
+- Service detail page: token scopes now render on their own line under each token in the sidebar card and are visible at every breakpoint; previously they were hidden below the 2xl breakpoint. (#1, #2)
+
 ## [1.0.0] — 2026-09-01
 
 First public release. MCP Center is an OAuth 2.1 authorization server and management console for Model Context Protocol servers.
