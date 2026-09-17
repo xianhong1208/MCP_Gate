@@ -53,6 +53,17 @@ Sessions expire after 12 hours, after 30 minutes idle in the UI, and immediately
 
 ## Server
 
+### "OAuth request to … arrived via X but OAUTH_ISSUER is Y"
+
+MCP Center writes `OAUTH_ISSUER` into every token's `iss` claim and into the discovery document, so clients and MCP servers treat it as this server's identity. The warning means a request to `/.well-known/*` or `/oauth/*` came in through a different scheme, host or port than the issuer says. It is logged once per distinct host, and the console's `GET /api/oauth/overview` lists them under `issuer_mismatches`.
+
+Typical causes and fixes:
+
+- **Reached by IP or another hostname** (`http://192.168.1.20:4568` while the issuer is `http://localhost:4568`): pick the address clients will actually use and set `OAUTH_ISSUER` to it. Tokens issued under the old issuer stop verifying, so do this before clients are configured.
+- **Behind a reverse proxy** (`http://127.0.0.1:4568` while the issuer is `https://auth.example.com`): the proxy must send `X-Forwarded-Proto` and `X-Forwarded-Host`, and its IP must be listed in `security.trusted_proxies` in `config/config.yaml`; forwarded headers from any other peer are ignored on purpose. See [deploy.md](deploy.md).
+- **`localhost` versus `127.0.0.1`**: browsers and MCP clients treat them as different origins. Use one consistently in the issuer, the client configuration and the service audiences.
+
+
 **`Address already in use`**
 Another process is listening on the port derived from `OAUTH_ISSUER`. Stop it or set `SERVER_PORT`.
 

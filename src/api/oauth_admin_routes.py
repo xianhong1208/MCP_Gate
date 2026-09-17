@@ -21,6 +21,7 @@ from src.adapters.exceptions import AdapterError
 from src.audit import ActorType, AuditAction, AuditService, AuditStatus, ResourceType
 from src.config import Config
 from src.identity import get_current_user
+from src.middleware.issuer_check import observed_mismatches
 from src.oauth import service as oauth
 from src.oauth import signing_keys
 from src.oauth.errors import OAuthError
@@ -305,6 +306,8 @@ async def overview(db: Session = Depends(get_db), _: AdminUser = Depends(get_cur
         "issued_24h": TokenUsageAdapter.get_total_count(db, days=1, event="issued"),
         "issued_7d": TokenUsageAdapter.get_total_count(db, days=7, event="issued"),
         "dcr_auto_approve": Config.get_oauth_config().dcr_auto_approve,
+        # Hosts that reached the OAuth endpoints while differing from the issuer (see IssuerMismatchMiddleware)
+        "issuer_mismatches": observed_mismatches(),
     }
 
 
