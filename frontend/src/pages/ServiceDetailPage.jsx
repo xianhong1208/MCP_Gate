@@ -3,7 +3,7 @@ import { formatDateTime, formatDate } from '../utils/format'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import {
-  Copy, Check, Trash2, Clock, RefreshCw, ChevronDown, ChevronUp,
+  Copy, Check, Trash2, Clock, RefreshCw, ChevronDown,
   Activity, Key, Edit3, Wrench, Terminal, FileJson, Code2,
 } from 'lucide-react'
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
@@ -53,6 +53,7 @@ function ToolItem({ tool }) {
   const [isExpanded, setIsExpanded] = useState(false)
   const toast = useToast()
   const summary = toolSummary(tool.description)
+  const paramCount = Object.keys(tool.input_schema?.properties || {}).length
   const handleCopySchema = async () => {
     try {
       await copyToClipboard(JSON.stringify(tool.input_schema, null, 2))
@@ -62,36 +63,43 @@ function ToolItem({ tool }) {
     }
   }
   return (
-    <div className="py-3">
-      <div className="flex items-start justify-between gap-2">
+    <div className={clsx('group -mx-2 rounded-lg transition-colors duration-150', isExpanded ? 'bg-muted/40' : 'hover:bg-muted/40')}>
+      <div className="flex items-center gap-3 px-2 py-2">
         <button
           type="button"
           onClick={() => setIsExpanded(!isExpanded)}
-          className="flex min-w-0 flex-1 items-start gap-2 text-left"
+          className="flex min-w-0 flex-1 items-center gap-3 text-left"
           aria-expanded={isExpanded}
         >
-          {isExpanded
-            ? <ChevronUp className="mt-0.5 h-4 w-4 shrink-0 text-subtle-foreground" aria-hidden="true" />
-            : <ChevronDown className="mt-0.5 h-4 w-4 shrink-0 text-subtle-foreground" aria-hidden="true" />}
-          <span className="min-w-0">
+          <span className={clsx(
+            'flex h-7 w-7 shrink-0 items-center justify-center rounded-md border transition-colors duration-150',
+            isExpanded ? 'border-primary/40 bg-primary-soft/60 text-primary-soft-foreground' : 'border-border bg-muted text-subtle-foreground',
+          )}>
+            <Wrench className="h-3.5 w-3.5" aria-hidden="true" />
+          </span>
+          <span className="min-w-0 flex-1">
             <span className="block truncate font-mono text-xs font-medium text-foreground">{tool.name}</span>
             {/* Collapsed: one line only. Long agent-facing descriptions (headings, mode tables, rules) open on click. */}
-            {summary && !isExpanded && <span className="mt-0.5 block truncate text-xs text-muted-foreground" title={summary}>{summary}</span>}
+            {summary && <span className="mt-0.5 block truncate text-xs text-muted-foreground" title={summary}>{summary}</span>}
           </span>
+          {paramCount > 0 && (
+            <span className="hidden shrink-0 text-[11px] tabular-nums text-subtle-foreground sm:inline">{t('services.common.paramCount', { n: paramCount })}</span>
+          )}
+          <ChevronDown className={clsx('h-4 w-4 shrink-0 text-subtle-foreground transition-transform duration-200', isExpanded && 'rotate-180')} aria-hidden="true" />
         </button>
-        {tool.input_schema && (
-          <IconButton size="sm" icon={Copy} onClick={handleCopySchema} title={t('services.common.copyInputSchema')} />
-        )}
       </div>
       {isExpanded && (
-        <div className="ml-6 mt-2 space-y-3">
+        <div className="space-y-3 px-2 pb-3 pl-12">
           {tool.description && (
-            <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded-md border border-border bg-muted/30 p-3 font-sans text-xs leading-relaxed text-muted-foreground">{tool.description}</pre>
+            <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-lg border border-border border-l-2 border-l-primary/60 bg-background/60 px-3 py-2.5 font-sans text-xs leading-relaxed text-muted-foreground">{tool.description}</pre>
           )}
           {tool.input_schema && (
-            <div>
-              <p className="mb-1.5 text-xs text-muted-foreground">{t('services.common.inputSchema')}</p>
-              <pre className="max-h-72 overflow-auto rounded-md border border-border bg-muted/50 p-3 font-mono text-xs text-foreground">{JSON.stringify(tool.input_schema, null, 2)}</pre>
+            <div className="overflow-hidden rounded-lg border border-border bg-background/60">
+              <div className="flex items-center justify-between border-b border-border px-3 py-1.5">
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-subtle-foreground">{t('services.common.inputSchema')}</span>
+                <IconButton size="sm" icon={Copy} onClick={handleCopySchema} title={t('services.common.copyInputSchema')} />
+              </div>
+              <pre className="max-h-64 overflow-auto p-3 font-mono text-[11px] leading-relaxed text-foreground">{JSON.stringify(tool.input_schema, null, 2)}</pre>
             </div>
           )}
         </div>
@@ -549,7 +557,7 @@ export default function ServiceDetailPage() {
           {/* Tools */}
           <Card>
             <CardHeader
-              title={t('services.detail.mcpToolsTitle', { n: service.tools?.length || 0 })}
+              title={<span className="flex items-center gap-2">{t('services.detail.mcpToolsLabel')}<Badge tone="neutral">{service.tools?.length || 0}</Badge></span>}
               action={hasMcpConnection && (
                 <Button variant="ghost" size="xs" icon={RefreshCw} onClick={handleRefreshTools} loading={isRefreshingTools}>
                   {t('services.detail.refreshFromServer')}
@@ -557,8 +565,9 @@ export default function ServiceDetailPage() {
               )}
             />
             {hasMcpConnection && (
-              <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1.5">
-                <span className="shrink-0 text-xs text-muted-foreground">{t('services.detail.refreshAs')}</span>
+              <div className="mb-3 flex flex-wrap items-center gap-x-2 gap-y-1.5 rounded-lg border border-border bg-muted/40 px-2.5 py-1.5">
+                <Key className="h-3.5 w-3.5 shrink-0 text-subtle-foreground" aria-hidden="true" />
+                <span className="shrink-0 text-[11px] font-semibold uppercase tracking-wide text-subtle-foreground">{t('services.detail.refreshAs')}</span>
                 <Select
                   size="sm"
                   value={refreshIdentity}
@@ -581,7 +590,7 @@ export default function ServiceDetailPage() {
                   )}
                 </Select>
                 {refreshMode === 'token' && selectedInspectToken && (
-                  <div className="flex w-full items-center gap-1.5 overflow-hidden">
+                  <div className="flex w-full items-center gap-1.5 overflow-hidden pl-6">
                     <ScopeChips scopes={selectedInspectToken.scopes} max={3} />
                   </div>
                 )}
@@ -595,7 +604,7 @@ export default function ServiceDetailPage() {
                 description={hasMcpConnection ? t('services.common.refreshServerHint') : undefined}
               />
             ) : (
-              <div className="divide-y divide-border">
+              <div className="space-y-0.5">
                 {service.tools.map((tool) => <ToolItem key={tool.id || tool.name} tool={tool} />)}
               </div>
             )}
