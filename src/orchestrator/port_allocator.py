@@ -17,6 +17,7 @@ Design considerations:
 from __future__ import annotations
 
 import socket
+import uuid
 from typing import Iterable, Optional
 
 from sqlalchemy.orm import Session
@@ -75,9 +76,13 @@ class PortAllocator:
         """
         used = self._db_used_ports(db)
         if exclude_process_id:
+            try:  # the id column is a native UUID; a string would make the driver choke on .hex
+                own_id = uuid.UUID(str(exclude_process_id))
+            except ValueError:
+                own_id = None
             own = db.query(ManagedMcpProcess.port).filter(
-                ManagedMcpProcess.id == exclude_process_id
-            ).first()
+                ManagedMcpProcess.id == own_id
+            ).first() if own_id else None
             if own and own[0] is not None:
                 used.discard(own[0])
 

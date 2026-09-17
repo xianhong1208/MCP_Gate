@@ -131,6 +131,10 @@ These features run MCP servers in Docker on the same host and need:
 
 Managed servers bind to `127.0.0.1:<port>` on the host, so register them with host `127.0.0.1` and they stay reachable only from MCP Center's machine.
 
+### Without Docker
+
+Set `MCP_RUNTIME=process` to run bring-your-own servers as local subprocesses instead of containers. MCP Center then needs only `supergateway` on its `PATH` (`npm install -g supergateway`, or point `MCP_SUPERGATEWAY_BIN` at it) plus whatever the servers themselves need (`npx`, `uvx`, …). Each server gets a pid file and a log file under `MCP_PROCESS_LOG_DIR` (default `data/managed`), so a restarted MCP Center finds, reads and stops servers it did not start itself. Catalog entries are Docker images and stay unavailable in this mode. `MCP_RUNTIME=auto` picks Docker when the daemon answers and falls back to the process runtime otherwise; `GET /api/managed/runtime` shows which one is active and whether it can start anything.
+
 ## 7. Check the deployment
 
 ```bash

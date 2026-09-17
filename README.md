@@ -36,7 +36,7 @@ MCP Center puts standards-based authentication in front of every MCP server you 
 - **Consent screen.** Dynamically registered clients ask the owner for permission on first connect; decisions can be remembered per client and server. Clients you register yourself skip the prompt.
 - **Personal access tokens (PATs).** Mint long-lived bearer tokens from the console for scripts, CI and clients that cannot run an OAuth flow, with ready-to-paste `claude mcp add` and `mcpServers` snippets.
 - **Server registry and health.** Register or auto-discover MCP servers, sync their tool lists, monitor health every 30 seconds and stream status changes over WebSocket.
-- **Marketplace and orchestrator.** Deploy MCP servers from a catalog with one click, or paste a standard `{command, args, env}` block and let MCP Center containerize it behind an HTTP bridge (requires Docker).
+- **Marketplace and orchestrator.** Deploy MCP servers from a catalog with one click, or paste a standard `{command, args, env}` block and let MCP Center run it behind an HTTP bridge, as a Docker container or as a local process (`MCP_RUNTIME=process`).
 - **Zero-config start.** SQLite by default, secrets generated on first run, an in-browser setup wizard for the owner account. PostgreSQL and GitHub / Google sign-in are a few environment variables away.
 
 ## Install MCP Center
@@ -44,7 +44,7 @@ MCP Center puts standards-based authentication in front of every MCP server you 
 Prerequisites:
 
 - Python 3.11 or later and [uv](https://docs.astral.sh/uv/).
-- Docker — only if you use the Marketplace or bring-your-own servers.
+- Docker — only for the Marketplace; bring-your-own servers can also run without it (`MCP_RUNTIME=process` needs `supergateway` on the PATH).
 - Node.js 18 or later — only if you work on the console UI.
 
 ```bash

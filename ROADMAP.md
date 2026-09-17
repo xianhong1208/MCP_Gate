@@ -9,4 +9,4 @@
 ## Planned
 - **Verify GitHub / Google sign-in against live accounts.** The providers are implemented and unit-tested but have not been exercised with real OAuth apps.
 - **`private_key_jwt` client authentication (RFC 7523)** for machine-to-machine clients.
-- **Orchestrator:** multiple hosts and non-Docker runtimes.
+- **Orchestrator:** multiple hosts (a host registry and a remote agent speaking the `Runtime` interface).

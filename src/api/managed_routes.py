@@ -205,6 +205,13 @@ def _validate_env_vars(catalog: CatalogEntry, env_vars: dict) -> None:
 
 # ---------- Marketplace endpoints ----------
 
+@router.get("/api/managed/runtime", tags=["Managed MCP"])
+async def managed_runtime(_: AdminUser = Depends(get_current_user)):
+    """Which runtime managed servers use (docker / process) and whether it can start anything right now.
+    Note: must be declared before /api/managed/{process_id}, otherwise "runtime" is treated as an id."""
+    return await asyncio.to_thread(get_orchestrator().runtime_info)
+
+
 @router.get(
     "/api/managed/progress",
     response_model=ManagedProgressResponse,
