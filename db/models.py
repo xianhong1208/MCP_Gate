@@ -239,6 +239,10 @@ class OAuthClient(Base):
     response_types = Column(Text, nullable=False, default='["code"]')
     scope = Column(String(512), nullable=True)
     token_endpoint_auth_method = Column(String(32), default="none", nullable=False)
+    # private_key_jwt (RFC 7523): the client's public keys, either inline (a JWKS document as JSON text) or by
+    # reference (fetched and cached). Exactly one is set for such clients; both are null for every other method.
+    jwks = Column(Text, nullable=True)
+    jwks_uri = Column(String(512), nullable=True)
     # Classic-client compatibility (manually registered confidential clients only): PKCE may be skipped and
     # a default resource is assumed when the client sends none. MCP clients never need either.
     require_pkce = Column(Boolean, default=True, nullable=False)
@@ -269,7 +273,9 @@ class OAuthClient(Base):
             "response_types": _json_list(self.response_types) or ["code"],
             "scope": self.scope,
             "token_endpoint_auth_method": self.token_endpoint_auth_method,
-            "is_confidential": self.client_secret_hash is not None,
+            "is_confidential": self.token_endpoint_auth_method != "none",
+            "jwks_uri": self.jwks_uri,
+            "jwks": json.loads(self.jwks) if self.jwks else None,
             "require_pkce": self.require_pkce,
             "default_resource": self.default_resource,
             "created_via": self.created_via,

@@ -30,14 +30,15 @@ from src.adapters import (
     OAuthTokenAdapter, ServiceAdapter, TokenUsageAdapter, normalize_audience,
 )
 from src.config import Config
-from src.oauth import signing_keys
+from src.oauth import client_assertion, signing_keys
 from src.oauth.consent_policy import should_skip_consent
 from src.oauth.errors import OAuthError
 from src.oauth.jwt_utils import JWTVerifyError, decode_rs256, sign_rs256, unverified_header
 from src.utils.crypto import hash_token
 
 SERVER_GRANT_TYPES = ["authorization_code", "refresh_token", "client_credentials"]
-SERVER_AUTH_METHODS = ["client_secret_basic", "client_secret_post", "none"]
+SERVER_AUTH_METHODS = ["client_secret_basic", "client_secret_post", "private_key_jwt", "none"]
+ASSERTION_SIGNING_ALGS = ["RS256", "ES256"]
 CODE_CHALLENGE_METHOD = "S256"
 AUTH_REQUEST_TTL = timedelta(minutes=10)
 SCANNER_TOKEN_TTL_SECONDS = 120
@@ -112,6 +113,25 @@ def register_client(
     if "client_credentials" in grant_types and auth_method == "none":
         raise OAuthError("invalid_client_metadata", "client_credentials requires a confidential client")
 
+    # private_key_jwt: the client registers its public keys, inline or by reference (RFC 7591 jwks / jwks_uri)
+    jwks_doc = metadata.get("jwks")
+    jwks_uri = (metadata.get("jwks_uri") or "").strip() or None
+    if auth_method == "private_key_jwt":
+        if bool(jwks_doc) == bool(jwks_uri):
+            raise OAuthError("invalid_client_metadata", "private_key_jwt requires exactly one of jwks or jwks_uri")
+        if jwks_doc:
+            if isinstance(jwks_doc, str):
+                try:
+                    jwks_doc = json.loads(jwks_doc)
+                except ValueError:
+                    raise OAuthError("invalid_client_metadata", "jwks must be a JSON object")
+            client_assertion.validate_jwks_document(jwks_doc)
+        elif not jwks_uri.startswith("https://") and not jwks_uri.startswith("http://localhost") \
+                and not jwks_uri.startswith("http://127.0.0.1"):
+            raise OAuthError("invalid_client_metadata", "jwks_uri must be https (or loopback)")
+    else:
+        jwks_doc, jwks_uri = None, None
+
     redirect_uris = metadata.get("redirect_uris") or []
     if not isinstance(redirect_uris, list):
         raise OAuthError("invalid_redirect_uri", "redirect_uris must be an array")
@@ -144,7 +164,7 @@ def register_client(
 
     plaintext_secret = None
     secret_hash = None
-    if auth_method != "none":
+    if auth_method in ("client_secret_basic", "client_secret_post"):
         plaintext_secret = secrets.token_urlsafe(32)
         secret_hash = hash_token(plaintext_secret)
 
@@ -161,6 +181,8 @@ def register_client(
         response_types=json.dumps(metadata.get("response_types") or ["code"]),
         scope=(scope or None),
         token_endpoint_auth_method=auth_method,
+        jwks=json.dumps(jwks_doc) if jwks_doc else None,
+        jwks_uri=jwks_uri,
         require_pkce=require_pkce,
         default_resource=default_resource,
         created_via=created_via,
@@ -182,6 +204,10 @@ def registration_response(client: OAuthClient, secret: Optional[str]) -> dict:
     }
     if client.scope:
         body["scope"] = client.scope
+    if client.jwks_uri:
+        body["jwks_uri"] = client.jwks_uri
+    if client.jwks:
+        body["jwks"] = json.loads(client.jwks)
     if secret:
         body["client_secret"] = secret
         body["client_secret_expires_at"] = 0
@@ -195,9 +221,21 @@ def verify_client_secret(client: OAuthClient, secret: Optional[str]) -> bool:
 
 
 def authenticate_client(db: Session, *, authorization_header: str, form: dict) -> OAuthClient:
-    """Client authentication for the token / revoke / introspect endpoints (Basic, form body, or public client)."""
+    """Client authentication for the token / revoke / introspect endpoints: Basic, form body, a private_key_jwt
+    assertion (RFC 7523), or a public client."""
     client_id = form.get("client_id")
     client_secret = form.get("client_secret")
+    assertion = form.get("client_assertion")
+    assertion_type = form.get("client_assertion_type")
+    if assertion or assertion_type:
+        if assertion_type != client_assertion.CLIENT_ASSERTION_TYPE or not assertion:
+            raise OAuthError("invalid_client", "unsupported client_assertion_type", 401)
+        if client_secret or authorization_header.startswith("Basic "):
+            raise OAuthError("invalid_client", "use one client authentication method only", 401)
+        asserted = client_assertion.unverified_issuer(assertion)
+        if client_id and asserted and client_id != asserted:
+            raise OAuthError("invalid_client", "client_id does not match client_assertion", 401)
+        client_id = client_id or asserted
     if authorization_header.startswith("Basic "):
         try:
             decoded = base64.b64decode(authorization_header[6:]).decode()
@@ -211,7 +249,14 @@ def authenticate_client(db: Session, *, authorization_header: str, form: dict) -
         raise OAuthError("invalid_client", "unknown or revoked client", 401)
     if not client.is_approved:
         raise OAuthError("unauthorized_client", "client is pending approval", 403)
-    if client.token_endpoint_auth_method != "none" and not verify_client_secret(client, client_secret):
+    if client.token_endpoint_auth_method == "private_key_jwt":
+        if not assertion:
+            raise OAuthError("invalid_client", "client_assertion required", 401)
+        client_assertion.verify_client_assertion(client, assertion, token_endpoint=f"{issuer()}/oauth/token",
+                                                 issuer=issuer())
+    elif assertion:
+        raise OAuthError("invalid_client", "client is not registered for private_key_jwt", 401)
+    elif client.token_endpoint_auth_method != "none" and not verify_client_secret(client, client_secret):
         raise OAuthError("invalid_client", "client authentication failed", 401)
     return client
 
@@ -750,8 +795,11 @@ def build_metadata(db: Session) -> dict:
         "grant_types_supported": SERVER_GRANT_TYPES,
         "code_challenge_methods_supported": ["S256"],
         "token_endpoint_auth_methods_supported": SERVER_AUTH_METHODS,
+        "token_endpoint_auth_signing_alg_values_supported": ASSERTION_SIGNING_ALGS,
         "revocation_endpoint_auth_methods_supported": SERVER_AUTH_METHODS,
+        "revocation_endpoint_auth_signing_alg_values_supported": ASSERTION_SIGNING_ALGS,
         "introspection_endpoint_auth_methods_supported": SERVER_AUTH_METHODS,
+        "introspection_endpoint_auth_signing_alg_values_supported": ASSERTION_SIGNING_ALGS,
         "resource_parameter_supported": True,
         "authorization_response_iss_parameter_supported": True,
         "service_documentation": f"{base}/docs",

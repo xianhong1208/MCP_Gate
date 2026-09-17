@@ -165,7 +165,7 @@ MCP Center plays the **authorization server** role from the MCP specification. Y
 | Step | Who | What happens |
 |---|---|---|
 | Discovery | client → server → MCP Center | The server answers `401` with a `WWW-Authenticate` header pointing at its protected-resource metadata, which names MCP Center as the authorization server. The client fetches `/.well-known/oauth-authorization-server`. |
-| Registration | client → MCP Center | The client registers dynamically (`POST /oauth/register`) and gets a `client_id`. Public clients use PKCE; confidential clients get a secret. |
+| Registration | client → MCP Center | The client registers dynamically (`POST /oauth/register`) and gets a `client_id`. Public clients use PKCE; confidential clients get a secret, or register a public key and authenticate with a signed JWT (`private_key_jwt`, RFC 7523). |
 | Authorization | browser → MCP Center | `/oauth/authorize` validates the request, binds it to the target server through the `resource` parameter, and shows the consent screen (or skips it for remembered or trusted clients). |
 | Token | client → MCP Center | `/oauth/token` exchanges the code — checking PKCE, redirect URI and resource — for an RS256 access token plus a refresh token. |
 | Verification | server | The server fetches JWKS once, then verifies signature, issuer, audience, expiry and scopes locally. |
@@ -181,6 +181,7 @@ To change when the consent screen appears, edit [`src/oauth/consent_policy.py`](
 |---|---|
 | Issuer | MCP Center's public URL (`OAUTH_ISSUER`). Written into every token as `iss`; clients and servers use it for discovery. |
 | Classic client | A manually registered confidential client allowed to skip PKCE and use a default resource, for platforms whose OAuth module only knows client_id / client_secret. |
+| private_key_jwt | Client authentication without a shared secret: the client registers a JWKS (inline or by `jwks_uri`) and signs a short-lived JWT per token request. Meant for machine-to-machine clients such as CI jobs and backend services. |
 | Audience | The MCP URL a token is valid for (the `aud` claim). Set per server in the console; the server's `JWTVerifier(audience=…)` must match. |
 | Resource server | Your MCP server. It verifies tokens and never issues them. The console calls these *services*. |
 | Scope | What a token may do on a server, for example `mcp:tools:invoke`. The console's scope registry defines the set. |

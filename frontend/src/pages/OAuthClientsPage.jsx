@@ -19,7 +19,7 @@ import {
 
 const TABS = ['approved', 'pending', 'revoked']
 const GRANT_TYPES = ['authorization_code', 'refresh_token', 'client_credentials']
-const AUTH_METHODS = ['none', 'client_secret_basic', 'client_secret_post']
+const AUTH_METHODS = ['none', 'client_secret_basic', 'client_secret_post', 'private_key_jwt']
 const STATUS_TONE = { approved: 'success', pending: 'warning', revoked: 'neutral' }
 
 function clientStatus(c) {
@@ -32,12 +32,13 @@ function RegisterClientModal({ onClose, onCreated }) {
   const { t } = useTranslation()
   const [form, setForm] = useState({
     clientName: '', clientUri: '', redirectUris: '', grantTypes: new Set(['authorization_code', 'refresh_token']),
-    authMethod: 'none', classic: false, defaultResource: '',
+    authMethod: 'none', classic: false, defaultResource: '', jwksUri: '', jwks: '',
   })
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState('')
   const [services, setServices] = useState([])
   const confidential = form.authMethod !== 'none'
+  const privateKeyJwt = form.authMethod === 'private_key_jwt'
 
   // Registered servers, offered as the default resource for classic clients
   useEffect(() => {
@@ -56,6 +57,23 @@ function RegisterClientModal({ onClose, onCreated }) {
   const handleSubmit = async (e) => {
     e.preventDefault()
     setError('')
+    // private_key_jwt: exactly one of a JWKS URI or an inline JWKS document, and the document must parse
+    let jwks = null
+    const jwksUri = privateKeyJwt ? form.jwksUri.trim() : ''
+    if (privateKeyJwt) {
+      if (!!jwksUri === !!form.jwks.trim()) {
+        setError(t('clients.form.jwksRequired'))
+        return
+      }
+      if (form.jwks.trim()) {
+        try {
+          jwks = JSON.parse(form.jwks)
+        } catch {
+          setError(t('clients.form.jwksInvalid'))
+          return
+        }
+      }
+    }
     setIsLoading(true)
     try {
       const res = await oauthApi.clients.create({
@@ -66,6 +84,8 @@ function RegisterClientModal({ onClose, onCreated }) {
         tokenEndpointAuthMethod: form.authMethod,
         requirePkce: !(confidential && form.classic),
         defaultResource: confidential && form.classic ? form.defaultResource || null : null,
+        jwksUri: jwksUri || null,
+        jwks,
       })
       onCreated(res)
     } catch (err) {
@@ -123,6 +143,17 @@ function RegisterClientModal({ onClose, onCreated }) {
               {AUTH_METHODS.map((m) => <option key={m} value={m}>{t(`clients.authMethod.${m}`)}</option>)}
             </Select>
           </Field>
+          {privateKeyJwt && (
+            <div className="space-y-3 rounded-md border border-border bg-muted/40 p-4">
+              <p className="text-xs text-muted-foreground">{t('clients.form.jwksIntro')}</p>
+              <Field label={t('clients.form.jwksUri')} help={t('clients.form.jwksUriHint')}>
+                <Input value={form.jwksUri} onChange={(e) => setForm({ ...form, jwksUri: e.target.value })} placeholder="https://client.example.com/.well-known/jwks.json" />
+              </Field>
+              <Field label={t('clients.form.jwks')} help={t('clients.form.jwksHint')}>
+                <Textarea rows={5} value={form.jwks} onChange={(e) => setForm({ ...form, jwks: e.target.value })} placeholder='{"keys": [{"kty": "RSA", "kid": "…", "n": "…", "e": "AQAB"}]}' className="font-mono text-xs" />
+              </Field>
+            </div>
+          )}
           {confidential && (
             <div className="space-y-3 rounded-md border border-border bg-muted/40 p-4">
               <CheckRow
@@ -168,6 +199,8 @@ function SecretModal({ client, onClose }) {
             <CodeBlock title={t('clients.secret.clientSecret')} value={client.client_secret} sensitive />
             <Alert tone="warning">{t('clients.secret.oneTime')}</Alert>
           </>
+        ) : client.token_endpoint_auth_method === 'private_key_jwt' ? (
+          <p className="text-xs text-muted-foreground">{t('clients.secret.privateKeyJwt')}</p>
         ) : (
           <p className="text-xs text-muted-foreground">{t('clients.secret.publicClient')}</p>
         )}

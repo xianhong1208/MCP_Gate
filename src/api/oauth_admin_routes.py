@@ -58,6 +58,9 @@ class ClientCreateRequest(BaseModel):
     # Classic-client compatibility (confidential clients only): skip PKCE / assume a resource when absent
     require_pkce: bool = True
     default_resource: Optional[str] = None
+    # private_key_jwt: exactly one of these
+    jwks_uri: Optional[str] = None
+    jwks: Optional[dict] = None
 
 
 @router.get("/clients")
