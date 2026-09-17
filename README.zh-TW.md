@@ -36,7 +36,7 @@ MCP Center 把標準化的身分驗證放在你每一台 MCP server 前面。[Fa
 - **同意頁。** 動態註冊的 client 第一次連線要請擁有者按「允許」;可依 client + server 記住。你自己登記的 client 免同意。
 - **Personal access token(PAT)。** 從管理台簽長效 bearer token 給腳本、CI 與不會走 OAuth 的 client,附上可直接貼的 `claude mcp add` 與 `mcpServers` 片段。
 - **服務登錄與健康監控。** 手動登記或自動掃描 MCP server、同步 tools 列表、每 30 秒健康檢查、狀態變更經 WebSocket 即時推播。
-- **Marketplace 與 orchestrator。** 從 catalog 一鍵部署 MCP server;或貼一段標準的 `{command, args, env}`,由 MCP Center 容器化並掛上 HTTP bridge(需要 Docker)。
+- **Marketplace 與 orchestrator。** 從 catalog 一鍵部署 MCP server;或貼一段標準的 `{command, args, env}`,由 MCP Center 掛上 HTTP bridge 執行,可以跑在 Docker 容器裡,也可以直接跑成本機行程(`MCP_RUNTIME=process`)。
 - **零設定啟動。** 預設 SQLite、首次啟動自動產生密鑰、瀏覽器內的擁有者帳號設定精靈。PostgreSQL 與 GitHub / Google 登入只差幾個環境變數。
 
 ## 安裝 MCP Center
@@ -44,7 +44,7 @@ MCP Center 把標準化的身分驗證放在你每一台 MCP server 前面。[Fa
 前置需求:
 
 - Python 3.11 以上與 [uv](https://docs.astral.sh/uv/)。
-- Docker——只有使用 Marketplace 或自帶 MCP server 時才需要。
+- Docker——只有 Marketplace 需要;自帶 MCP server 也可以不用 Docker(`MCP_RUNTIME=process`,需要 PATH 上有 `supergateway`)。
 - Node.js 18 以上——只有要改管理台前端時才需要。
 
 ```bash
