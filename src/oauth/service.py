@@ -836,6 +836,21 @@ def mint_personal_token(db: Session, *, user: AdminUser, service: Service, scope
     return token, rec
 
 
+def mint_owner_probe_token(db: Session, *, user: AdminUser, service: Service,
+                           scopes: Optional[Iterable[str]] = None) -> str:
+    """Short-lived token carrying the signed-in owner's identity (sub, email, name) for inspecting a server that
+    shows different tools per caller; same claims a personal access token would have, but not recorded."""
+    audience = normalize_audience(service.effective_audience)
+    if not audience:
+        raise OAuthError("invalid_target", "service has no host/port or audience configured")
+    scope = resolve_scope(db, " ".join(scopes) if scopes else None, None, service)
+    token, _, _ = issue_access_token(
+        db, sub=str(user.id), client_id=CONSOLE_CLIENT_ID, scope=scope, audience=audience, service=service,
+        user=user, ttl_seconds=SCANNER_TOKEN_TTL_SECONDS, record=False,
+    )
+    return token
+
+
 def mint_scanner_token(db: Session, service: Service) -> Optional[str]:
     """Short-lived token self-signed on the spot for scanning / health-checking OAuth-protected services (not
     recorded)."""

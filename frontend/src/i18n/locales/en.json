@@ -545,6 +545,17 @@
       "noTags": "No tags",
       "mcpToolsTitle": "MCP Tools ({{n}})",
       "refreshFromServer": "Refresh from Server",
+      "refreshAs": "Inspect as",
+      "refreshAsScanner": "Scanner token (anonymous)",
+      "refreshAsOwner": "Me ({{name}})",
+      "refreshAsBearer": "A token I paste",
+      "refreshAsHint": {
+        "scanner": "A short-lived token with no user identity. Servers that list the same tools for everyone need nothing more.",
+        "owner": "A short-lived token carrying your user id, email and the selected scopes, like a personal access token but not stored. Use this when the server shows different tools per caller.",
+        "bearer": "Sent as the Authorization header for this refresh only and never stored. For servers with their own authentication."
+      },
+      "refreshBearerPlaceholder": "Paste a bearer token",
+      "refreshBearerMissing": "Paste the token to inspect with",
       "noToolsFound": "No tools found",
       "usageHistoryTitle": "Usage History (Last 30 Days)",
       "usageHistorySubtitle": "Token verification requests for this service",
@@ -1015,7 +1026,8 @@
       "duplicate": "A service with the same name and host:port already exists.",
       "no_host_port": "Service has no host or port configured",
       "remote_permission_denied": "Permission denied by the remote MCP server.",
-      "remote_unreachable": "Could not reach the MCP server."
+      "remote_unreachable": "Could not reach the MCP server.",
+      "refresh_bearer_missing": "Paste the token to inspect with"
     },
     "discovery": {
       "scan_failed": "Scan failed",

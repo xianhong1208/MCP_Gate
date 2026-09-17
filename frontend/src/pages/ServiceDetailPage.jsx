@@ -16,11 +16,12 @@ import ScopeEditor from '../components/ScopeEditor'
 import { copyToClipboard } from '../utils/clipboard'
 import { useConfirm } from '../contexts/ConfirmContext'
 import { useToast } from '../contexts/ToastContext'
+import { useAuth } from '../contexts/AuthContext'
 import { KindBadge, StatusBadge, ScopeChips } from './TokensPage'
 import clsx from 'clsx'
 import {
   PageHeader, Button, IconButton, Badge, StatusDot, Card, CardHeader, SectionLabel, DescriptionList,
-  EmptyState, Alert, LoadingBlock, Tabs, SegmentedControl,
+  EmptyState, Alert, LoadingBlock, Tabs, SegmentedControl, Select, Input,
 } from '../components/ui'
 
 // recharts stroke attrs cannot read CSS vars: give fallback colors; the real line color
@@ -105,12 +106,20 @@ export default function ServiceDetailPage() {
   const { serviceId } = useParams()
   const navigate = useNavigate()
   const { confirmDelete, confirmRevoke } = useConfirm()
+  const { user } = useAuth()
   const toast = useToast()
   const decodedServiceId = decodeURIComponent(serviceId)
 
   const [service, setService] = useState(null)
   const [scopes, setScopes] = useState([])
   const [ownScopes, setOwnScopes] = useState([])
+  const [effectiveScopes, setEffectiveScopes] = useState([])
+  // Who the tools/list request looks like to the server: scanner | owner | bearer (remembered per service)
+  const [refreshIdentity, setRefreshIdentity] = useState(() => {
+    try { return localStorage.getItem(`refreshIdentity:${decodedServiceId}`) || 'scanner' } catch { return 'scanner' }
+  })
+  const [refreshScopes, setRefreshScopes] = useState(new Set())
+  const [refreshBearer, setRefreshBearer] = useState('')
   const [isLoadingOwnScopes, setIsLoadingOwnScopes] = useState(true)
   const [snippets, setSnippets] = useState(null)
   const [snippetFamily, setSnippetFamily] = useState('claude_code')
@@ -178,6 +187,8 @@ export default function ServiceDetailPage() {
       setSnippets(sn)
       setTokens(tk.tokens || [])
       setOwnScopes(own.own || [])
+      setEffectiveScopes(own.effective || [])
+      setRefreshScopes(new Set((own.effective || []).filter((x) => x.is_default).map((x) => x.name)))
       setIsLoadingOwnScopes(false)
     }).catch((err) => {
       if (!cancelled) setError(err.message || t('services.detail.loadFailed'))
@@ -220,10 +231,32 @@ export default function ServiceDetailPage() {
     }
   }
 
+  const chooseRefreshIdentity = (value) => {
+    setRefreshIdentity(value)
+    try { localStorage.setItem(`refreshIdentity:${decodedServiceId}`, value) } catch { /* per-viewer convenience only */ }
+  }
+
+  const toggleRefreshScope = (name) => {
+    setRefreshScopes((prev) => {
+      const next = new Set(prev)
+      if (next.has(name)) next.delete(name)
+      else next.add(name)
+      return next
+    })
+  }
+
   const handleRefreshTools = async () => {
+    if (refreshIdentity === 'bearer' && !refreshBearer.trim()) {
+      toast.error(t('services.detail.refreshBearerMissing'))
+      return
+    }
     setIsRefreshingTools(true)
     try {
-      const result = await servicesApi.refreshTools(decodedServiceId)
+      const result = await servicesApi.refreshTools(decodedServiceId, {
+        identity: refreshIdentity,
+        scopes: refreshIdentity === 'owner' ? [...refreshScopes] : null,
+        bearer: refreshIdentity === 'bearer' ? refreshBearer.trim() : null,
+      })
       toast.success(t('services.detail.refreshToolsSuccess', { n: result.tools_count }))
       await reload()
     } catch (err) {
@@ -517,6 +550,50 @@ export default function ServiceDetailPage() {
                 </Button>
               )}
             />
+            {hasMcpConnection && (
+              <div className="mb-3 space-y-2 rounded-md border border-border bg-muted/40 p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs text-muted-foreground">{t('services.detail.refreshAs')}</span>
+                  <Select size="sm" value={refreshIdentity} onChange={(e) => chooseRefreshIdentity(e.target.value)} className="w-auto">
+                    <option value="scanner">{t('services.detail.refreshAsScanner')}</option>
+                    <option value="owner">{t('services.detail.refreshAsOwner', { name: user?.email || user?.username || '' })}</option>
+                    <option value="bearer">{t('services.detail.refreshAsBearer')}</option>
+                  </Select>
+                </div>
+                <p className="text-xs text-muted-foreground">{t(`services.detail.refreshAsHint.${refreshIdentity}`)}</p>
+                {refreshIdentity === 'owner' && effectiveScopes.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {effectiveScopes.map((sc) => {
+                      const on = refreshScopes.has(sc.name)
+                      return (
+                        <button
+                          key={sc.name}
+                          type="button"
+                          onClick={() => toggleRefreshScope(sc.name)}
+                          title={sc.description || ''}
+                          className={clsx(
+                            'rounded-md border px-2 py-0.5 font-mono text-xs transition-colors duration-200',
+                            on ? 'border-primary/40 bg-primary-soft/60 text-foreground' : 'border-border text-muted-foreground hover:text-foreground',
+                          )}
+                        >
+                          {sc.name}
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
+                {refreshIdentity === 'bearer' && (
+                  <Input
+                    size="sm"
+                    type="password"
+                    value={refreshBearer}
+                    onChange={(e) => setRefreshBearer(e.target.value)}
+                    placeholder={t('services.detail.refreshBearerPlaceholder')}
+                    mono
+                  />
+                )}
+              </div>
+            )}
             {(service.tools || []).length === 0 ? (
               <EmptyState
                 compact
