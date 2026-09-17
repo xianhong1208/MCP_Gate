@@ -456,6 +456,9 @@ class TokenUsage(Base):
     success = Column(Boolean, default=True, nullable=False)
     ip_address = Column(String(45), nullable=True)
     used_at = Column(DateTime, default=local_now, nullable=False, index=True)
+    # How many requests this row stands for: 1 for events recorded here, N for a batch an MCP server reported
+    # through /oauth/usage (event = verified)
+    count = Column(Integer, default=1, nullable=False, server_default="1")
 
     service = relationship("Service")
 

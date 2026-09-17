@@ -354,6 +354,31 @@ def hello(name: str) -> str:
 if __name__ == "__main__":
     mcp.run(transport="http", host="{service.host or '127.0.0.1'}", port={service.port or 8000})
 '''
+    fastmcp_hooks = f'''# Same server, but revocations take effect within seconds and usage shows up in the console.
+# Copy examples/mcp_center_hooks.py from the MCP Center repository next to this file, and register a
+# confidential client in the console (OAuth Clients -> Register trusted client, client secret or
+# private_key_jwt) whose credentials this server uses to talk back to MCP Center.
+from fastmcp import FastMCP
+from fastmcp.server.auth import RemoteAuthProvider
+from mcp_center_hooks import MCPCenterVerifier
+from pydantic import AnyHttpUrl
+
+auth = RemoteAuthProvider(
+    token_verifier=MCPCenterVerifier(
+        jwks_uri="{base}/.well-known/jwks.json",
+        issuer="{base}",
+        audience="{audience}",
+        client_id="<CONFIDENTIAL_CLIENT_ID>",
+        client_secret="<CLIENT_SECRET>",          # or private_key_pem=open("client.pem").read(), kid="..."
+        poll_interval=15,                         # seconds between revocation-feed polls
+        flush_interval=30,                        # seconds between usage reports
+    ),
+    authorization_servers=[AnyHttpUrl("{base}")],
+    base_url="{audience}",
+)
+
+mcp = FastMCP(name="{service.name}", auth=auth)
+'''
     claude_code = f'claude mcp add --transport http {service.name} {mcp_url}'
     claude_code_pat = (f'claude mcp add --transport http {service.name} {mcp_url} '
                        f'--header "Authorization: Bearer <PERSONAL_ACCESS_TOKEN>"')
@@ -370,6 +395,7 @@ async with Client("{mcp_url}", auth="oauth") as client:
         "audience": audience,
         "mcp_url": mcp_url,
         "fastmcp_server": fastmcp_server,
+        "fastmcp_hooks": fastmcp_hooks,
         "fastmcp_client": fastmcp_client,
         "claude_code_oauth": claude_code,
         "claude_code_pat": claude_code_pat,

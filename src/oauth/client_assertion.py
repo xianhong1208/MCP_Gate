@@ -10,10 +10,13 @@ been seen before.
 
 from __future__ import annotations
 
+import ipaddress
 import json
+import socket
 import threading
 import time
 from typing import Optional
+from urllib.parse import urlsplit
 
 import httpx
 import jwt
@@ -50,13 +53,57 @@ def validate_jwks_document(doc) -> dict:
     return doc
 
 
-def fetch_jwks(jwks_uri: str, *, force: bool = False) -> dict:
+LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
+
+
+def _resolve_host(host: str) -> list[str]:
+    """Every address ``host`` resolves to (a literal IP resolves to itself). Separate so tests can stub it."""
+    try:
+        return sorted({info[4][0] for info in socket.getaddrinfo(host, None)})
+    except socket.gaierror:
+        return []
+
+
+def validate_jwks_uri(jwks_uri: str, *, allow_loopback: bool) -> str:
+    """A ``jwks_uri`` MCP Center will fetch server-side. https to a public address only; plain http is accepted
+    solely for loopback hosts and only when the deployment itself runs over http (development). The host is
+    resolved here and again right before each fetch so a DNS record cannot be pointed at an internal address
+    later (SSRF via rebinding)."""
+    parts = urlsplit(jwks_uri)
+    host = (parts.hostname or "").rstrip(".").lower()
+    if parts.username or parts.password or not host:
+        raise OAuthError("invalid_client_metadata", "jwks_uri must be an absolute URL without credentials")
+    if host in LOOPBACK_HOSTS or host.endswith(".localhost"):
+        if not allow_loopback:
+            raise OAuthError("invalid_client_metadata", "jwks_uri may not point at this machine")
+        if parts.scheme not in ("http", "https"):
+            raise OAuthError("invalid_client_metadata", "jwks_uri must be http(s)")
+        return jwks_uri
+    if parts.scheme != "https":
+        raise OAuthError("invalid_client_metadata", "jwks_uri must be https")
+    addresses = _resolve_host(host)
+    if not addresses:
+        raise OAuthError("invalid_client_metadata", f"jwks_uri host {host} does not resolve")
+    for addr in addresses:
+        ip = ipaddress.ip_address(addr.split("%")[0])
+        if (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast
+                or ip.is_unspecified):
+            raise OAuthError("invalid_client_metadata", f"jwks_uri host {host} resolves to a non-public address")
+    return jwks_uri
+
+
+def fetch_jwks(jwks_uri: str, *, force: bool = False, allow_loopback: bool = False) -> dict:
     """The JWKS at ``jwks_uri``, cached for JWKS_CACHE_TTL; ``force`` bypasses the cache (unknown kid)."""
     now = time.monotonic()
     with _lock:
         hit = _jwks_cache.get(jwks_uri)
     if hit and not force and now - hit[0] < JWKS_CACHE_TTL:
         return hit[1]
+    try:  # re-check: the DNS answer may have changed since registration
+        validate_jwks_uri(jwks_uri, allow_loopback=allow_loopback)
+    except OAuthError as e:
+        logger.warning("jwks_uri {uri} refused at fetch time: {err}", uri=jwks_uri, err=e.description)
+        raise OAuthError("invalid_client", "client keys could not be fetched", 401)
     try:
         r = httpx.get(jwks_uri, timeout=JWKS_FETCH_TIMEOUT, follow_redirects=False)
         r.raise_for_status()
@@ -100,13 +147,13 @@ def _pick_key(keys: list[dict], kid: Optional[str], alg: str) -> Optional[dict]:
     return candidates[0] if candidates else None
 
 
-def _client_keys(client, kid: Optional[str], alg: str) -> dict:
+def _client_keys(client, kid: Optional[str], alg: str, *, allow_loopback: bool) -> dict:
     if client.jwks:
         key = _pick_key(json.loads(client.jwks)["keys"], kid, alg)
     elif client.jwks_uri:
-        key = _pick_key(fetch_jwks(client.jwks_uri)["keys"], kid, alg)
+        key = _pick_key(fetch_jwks(client.jwks_uri, allow_loopback=allow_loopback)["keys"], kid, alg)
         if key is None and kid is not None:  # rotation: refetch once for an unknown kid
-            key = _pick_key(fetch_jwks(client.jwks_uri, force=True)["keys"], kid, alg)
+            key = _pick_key(fetch_jwks(client.jwks_uri, force=True, allow_loopback=allow_loopback)["keys"], kid, alg)
     else:
         raise OAuthError("invalid_client", "client has no registered keys", 401)
     if key is None:
@@ -125,6 +172,7 @@ def unverified_issuer(assertion: str) -> Optional[str]:
 
 
 def verify_client_assertion(client, assertion: str, *, token_endpoint: str, issuer: str) -> dict:
+    allow_loopback = issuer.startswith("http://")  # a plain-http issuer means a development deployment
     """Verify a private_key_jwt assertion for ``client``; return its claims or raise invalid_client."""
     try:
         header = jwt.get_unverified_header(assertion)
@@ -133,7 +181,7 @@ def verify_client_assertion(client, assertion: str, *, token_endpoint: str, issu
     alg = header.get("alg")
     if alg not in ASSERTION_ALGS:
         raise OAuthError("invalid_client", f"unsupported client_assertion alg: {alg}", 401)
-    jwk = _client_keys(client, header.get("kid"), alg)
+    jwk = _client_keys(client, header.get("kid"), alg, allow_loopback=allow_loopback)
     try:
         public_key = jwt.PyJWK(jwk, algorithm=alg).key
         claims = jwt.decode(

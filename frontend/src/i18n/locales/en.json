@@ -589,6 +589,7 @@
         "oauth": "OAuth",
         "pat": "Personal token",
         "server": "Server",
+        "hooks": "Server + revocation feed",
         "client": "Client"
       }
     },

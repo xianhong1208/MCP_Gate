@@ -589,6 +589,7 @@
         "oauth": "OAuth",
         "pat": "個人 token",
         "server": "伺服器端",
+        "hooks": "伺服器端 + 撤銷清單",
         "client": "用戶端"
       }
     },

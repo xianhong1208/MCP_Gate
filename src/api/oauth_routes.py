@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import List, Optional
 from urllib.parse import parse_qs, urlencode
 
@@ -212,6 +213,37 @@ async def revoke(request: Request, db: Session = Depends(get_db)):
         if form.get("token"):
             oauth.revoke_token(db, client=client, token=form["token"], ip=_client_ip(request))
         return JSONResponse(content={}, status_code=200, headers=NO_STORE)
+    except OAuthError as e:
+        db.rollback()
+        return _error_json(e)
+
+
+@router.post("/oauth/revoked")
+async def revoked_tokens(request: Request, db: Session = Depends(get_db)):
+    """Revocation feed for MCP servers that verify JWTs offline: tokens revoked but not yet expired, optionally
+    only those revoked since a unix timestamp (`since`). Requires confidential-client authentication."""
+    try:
+        form = await _form(request)
+        caller = oauth.authenticate_client(db, authorization_header=request.headers.get("Authorization", ""), form=form)
+        return JSONResponse(content=oauth.revoked_feed(db, caller=caller, since=form.get("since")), headers=NO_STORE)
+    except OAuthError as e:
+        return _error_json(e)
+
+
+@router.post("/oauth/usage")
+async def usage_report(request: Request, db: Session = Depends(get_db)):
+    """Usage report from an MCP server that verifies JWTs offline: `events` is a JSON array of
+    {jti, count, last_seen}. Feeds the token counters and the dashboard. Requires confidential-client
+    authentication."""
+    try:
+        form = await _form(request)
+        caller = oauth.authenticate_client(db, authorization_header=request.headers.get("Authorization", ""), form=form)
+        try:
+            events = json.loads(form.get("events") or "[]")
+        except ValueError:
+            raise OAuthError("invalid_request", "events must be JSON")
+        return JSONResponse(content=oauth.report_usage(db, caller=caller, events=events, ip=_client_ip(request)),
+                            headers=NO_STORE)
     except OAuthError as e:
         db.rollback()
         return _error_json(e)

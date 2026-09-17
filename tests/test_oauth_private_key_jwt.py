@@ -150,6 +150,7 @@ def test_assertion_via_jwks_uri_with_cache_and_rotation(owner_client, service, m
         return FakeResponse(served["doc"])
 
     monkeypatch.setattr(client_assertion.httpx, "get", fake_get)
+    monkeypatch.setattr(client_assertion, "_resolve_host", lambda host: ["93.184.216.34"])
     reg = _register_pkjwt(owner_client, jwks_uri="https://client.example/jwks.json")
 
     code, verifier = _authorize_and_consent(owner_client, reg["client_id"])
@@ -237,3 +238,36 @@ def test_console_can_register_private_key_jwt_client(owner_client):
     listed = owner_client.get("/api/oauth/clients").json()["clients"]
     me = next(c for c in listed if c["client_id"] == r.json()["client_id"])
     assert me["is_confidential"] is True and me["jwks"]["keys"][0]["kid"] == "rsa-1" and me["jwks_uri"] is None
+
+
+@pytest.mark.parametrize("uri, resolved, message", [
+    ("https://localhost.evil.example/jwks", ["93.184.216.34"], "does not resolve"),   # prefix trick, unresolvable here
+    ("https://internal.example/jwks", ["10.0.0.5"], "non-public"),
+    ("https://meta.example/jwks", ["169.254.169.254"], "non-public"),
+    ("https://user:pw@keys.example/jwks", ["93.184.216.34"], "credentials"),
+    ("https://localhost/jwks", ["127.0.0.1"], "this machine"),
+])
+def test_jwks_uri_cannot_point_inside(client, monkeypatch, uri, resolved, message):
+    """MCP Center fetches jwks_uri itself, so it must never be steered at internal addresses (SSRF)."""
+    from src.config import Config
+    monkeypatch.setattr(Config.get_oauth_config(), "issuer", "https://auth.example")  # production: no loopback
+    monkeypatch.setattr(client_assertion, "_resolve_host",
+                        lambda host: [] if host == "localhost.evil.example" else resolved)
+    r = client.post("/oauth/register", json={"client_name": "x", "redirect_uris": [REDIRECT_URI],
+                                             "token_endpoint_auth_method": "private_key_jwt", "jwks_uri": uri})
+    assert r.status_code == 400, r.text
+    assert message in r.json()["error_description"]
+
+
+def test_jwks_uri_rechecked_before_each_fetch(owner_client, service, monkeypatch):
+    """A host that resolved publicly at registration but to a private address at fetch time is refused."""
+    pem, jwk, alg = rsa_keypair("k1")
+    monkeypatch.setattr(client_assertion, "_resolve_host", lambda host: ["93.184.216.34"])
+    reg = _register_pkjwt(owner_client, jwks_uri="https://client.example/jwks.json")
+    monkeypatch.setattr(client_assertion, "_resolve_host", lambda host: ["10.0.0.5"])  # DNS rebinding
+    called = {"n": 0}
+    monkeypatch.setattr(client_assertion.httpx, "get", lambda *a, **k: called.__setitem__("n", called["n"] + 1))
+    code, verifier = _authorize_and_consent(owner_client, reg["client_id"])
+    r = _exchange_with_assertion(owner_client, reg["client_id"], code, verifier,
+                                 make_assertion(reg["client_id"], pem, alg, "k1"))
+    assert r.status_code == 401 and called["n"] == 0
