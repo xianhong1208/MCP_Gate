@@ -108,7 +108,7 @@ def mcp_server(center):
 
 def _mint_pat(center, service_id: str, days: int = 1) -> str:
     with httpx.Client(base_url=center["url"], cookies={"mcp_session": center["cookie"]}) as c:
-        r = c.post("/api/oauth/tokens/personal", json={"service_id": service_id, "expires_days": days})
+        r = c.post("/api/oauth/tokens/personal", json={"service_id": service_id, "expires_days": days, "label": "test"})
         assert r.status_code == 201, r.text
         return r.json()["access_token"]
 
@@ -148,7 +148,7 @@ async def test_revoked_pat_still_valid_offline_but_inactive_on_introspect(center
     from fastmcp.client.auth import BearerAuth
 
     with httpx.Client(base_url=center["url"], cookies={"mcp_session": center["cookie"]}) as c:
-        r = c.post("/api/oauth/tokens/personal", json={"service_id": mcp_server["service"]["id"], "expires_days": 1})
+        r = c.post("/api/oauth/tokens/personal", json={"service_id": mcp_server["service"]["id"], "expires_days": 1, "label": "test"})
         pat, jti = r.json()["access_token"], r.json()["jti"]
         assert c.post(f"/api/oauth/tokens/{jti}/revoke").status_code == 200
         intro = c.post("/oauth/introspect", data={"token": pat, "client_id": "mcp-center-console"}).json()

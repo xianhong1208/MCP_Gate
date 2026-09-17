@@ -94,3 +94,12 @@ def test_unknown_identity_is_rejected(owner_client, service, captured):
     r = owner_client.post(f"/api/services/{service['id']}/refresh-tools", json={"identity": "bearer"})
     assert r.status_code == 422
     captured.assert_not_awaited()
+
+
+def test_personal_token_label_is_required(owner_client, service):
+    for body in ({"service_id": service["id"], "expires_days": 1},
+                 {"service_id": service["id"], "expires_days": 1, "label": "   "}):
+        r = owner_client.post("/api/oauth/tokens/personal", json=body)
+        assert r.status_code == 422, r.text
+    r = owner_client.post("/api/oauth/tokens/personal", json={"service_id": service["id"], "expires_days": 1, "label": " ci "})
+    assert r.status_code == 201 and r.json()["label"] == "ci"

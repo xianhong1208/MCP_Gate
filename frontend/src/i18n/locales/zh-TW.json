@@ -364,6 +364,7 @@
       "customDays": "自訂",
       "labelLabel": "標籤",
       "labelPlaceholder": "例如:my-laptop、ci-runner",
+      "labelHint": "必填。寫下要使用它的 client 或機器,列表與「以誰的身分檢視」都靠這個名稱辨認。",
       "cancel": "取消",
       "submit": "簽發 Token",
       "submitting": "簽發中...",

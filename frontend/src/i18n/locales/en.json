@@ -364,6 +364,7 @@
       "customDays": "Custom",
       "labelLabel": "Label",
       "labelPlaceholder": "e.g. my-laptop, ci-runner",
+      "labelHint": "Required. Name the client or machine that will use it; this is how the token is identified in lists and when inspecting a server as it.",
       "cancel": "Cancel",
       "submit": "Issue token",
       "submitting": "Issuing...",

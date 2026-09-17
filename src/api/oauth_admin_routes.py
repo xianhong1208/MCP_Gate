@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from db import get_db
@@ -246,7 +246,16 @@ class PersonalTokenRequest(BaseModel):
     service_id: str
     scopes: Optional[List[str]] = None
     expires_days: int = Field(30, ge=1)
-    label: Optional[str] = None
+    # Required: the label is how a token is told apart everywhere (token list, "Inspect as" picker, audit)
+    label: str = Field(..., min_length=1, max_length=128)
+
+    @field_validator("label")
+    @classmethod
+    def _label_not_blank(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("label must not be blank")
+        return v
 
 
 @router.get("/tokens")

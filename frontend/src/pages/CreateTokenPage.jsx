@@ -97,7 +97,7 @@ export default function CreateTokenPage() {
         serviceId,
         scopes: [...selectedScopes],
         expiresDays: Math.max(1, parseInt(expiresDays, 10) || 30),
-        label: label.trim() || null,
+        label: label.trim(),
       })
       setResult(res)
       toast.success(t('tokens.create.generateSuccess'))
@@ -296,7 +296,7 @@ export default function CreateTokenPage() {
               </div>
             </Field>
 
-            <Field label={t('tokens.create.labelLabel')}>
+            <Field label={t('tokens.create.labelLabel')} required help={t('tokens.create.labelHint')}>
               <Input
                 type="text"
                 value={label}
@@ -311,7 +311,7 @@ export default function CreateTokenPage() {
             <p className="text-xs text-subtle-foreground">{t('tokens.create.footerHint')}</p>
             <div className="flex shrink-0 items-center gap-2">
               <Button variant="secondary" to="/tokens">{t('tokens.create.cancel')}</Button>
-              <Button type="submit" variant="primary" icon={Sparkles} loading={isLoading} disabled={!serviceId}>
+              <Button type="submit" variant="primary" icon={Sparkles} loading={isLoading} disabled={!serviceId || !label.trim()}>
                 {isLoading ? t('tokens.create.submitting') : t('tokens.create.submit')}
               </Button>
             </div>
