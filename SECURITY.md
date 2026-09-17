@@ -24,7 +24,7 @@ Only the latest release on the `main` branch receives fixes.
 
 ## Known limitations
 
-- **Access tokens verified offline cannot be revoked instantly.** A server that uses `JWTVerifier` keeps accepting a revoked access token until it expires (60 minutes by default). Use shorter lifetimes or FastMCP's `IntrospectionTokenVerifier` where instant revocation matters.
+- **Access tokens verified offline are revoked with a delay.** A server that uses a plain `JWTVerifier` keeps accepting a revoked access token until it expires (60 minutes by default). Use `MCPCenterVerifier` from `examples/mcp_center_hooks.py`, which polls `POST /oauth/revoked` (default every 15 s) and also reports usage, so the window shrinks to the poll interval; use FastMCP's `IntrospectionTokenVerifier` where it must be instant.
 - **Single tenant.** Anyone who can sign in to the console is an administrator. Protect the console URL accordingly.
 - **Dynamic client registration is open by default** (`OAUTH_DCR_AUTO_APPROVE=true`). Registering a client grants nothing by itself — the owner must approve every authorization on the consent screen — but set it to `false` if you want to review clients before they can even ask.
 - **Plain HTTP is for local use only.** Deploy behind HTTPS (see [docs/deploy.md](docs/deploy.md)); the OAuth 2.1 specification requires it.

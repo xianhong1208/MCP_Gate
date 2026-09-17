@@ -96,7 +96,7 @@ function describeHealthError(t, raw) {
 const SNIPPET_FAMILIES = [
   { key: 'claude_code', labelKey: 'services.detail.snippetFamily.claudeCode', icon: Terminal, lang: 'bash', variants: ['oauth', 'pat'] },
   { key: 'mcp_json', labelKey: 'services.detail.snippetFamily.mcpJson', icon: FileJson, lang: 'json', variants: ['oauth', 'pat'] },
-  { key: 'fastmcp', labelKey: 'services.detail.snippetFamily.fastmcp', icon: Code2, lang: 'python', variants: ['server', 'client'] },
+  { key: 'fastmcp', labelKey: 'services.detail.snippetFamily.fastmcp', icon: Code2, lang: 'python', variants: ['server', 'hooks', 'client'] },
 ]
 
 export default function ServiceDetailPage() {

@@ -15,7 +15,7 @@ import hashlib
 import json
 import secrets
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Iterable, Optional
 from urllib.parse import urlencode, urlparse
 
@@ -126,9 +126,9 @@ def register_client(
                 except ValueError:
                     raise OAuthError("invalid_client_metadata", "jwks must be a JSON object")
             client_assertion.validate_jwks_document(jwks_doc)
-        elif not jwks_uri.startswith("https://") and not jwks_uri.startswith("http://localhost") \
-                and not jwks_uri.startswith("http://127.0.0.1"):
-            raise OAuthError("invalid_client_metadata", "jwks_uri must be https (or loopback)")
+        else:
+            # MCP Center fetches this URL itself: public https only (loopback allowed on http-issuer dev setups)
+            client_assertion.validate_jwks_uri(jwks_uri, allow_loopback=issuer().startswith("http://"))
     else:
         jwks_doc, jwks_uri = None, None
 
@@ -212,6 +212,12 @@ def registration_response(client: OAuthClient, secret: Optional[str]) -> dict:
         body["client_secret"] = secret
         body["client_secret_expires_at"] = 0
     return body
+
+
+def is_resource_server(client: OAuthClient) -> bool:
+    """A confidential client (secret or private key) is trusted as a resource server: it may introspect any
+    token, read the revocation feed and report usage. Public clients may only act on their own tokens."""
+    return client.token_endpoint_auth_method != "none"
 
 
 def verify_client_secret(client: OAuthClient, secret: Optional[str]) -> bool:
@@ -689,8 +695,8 @@ def revoke_token(db: Session, *, client: OAuthClient, token: str, ip: Optional[s
 def introspect_token(db: Session, token: str, *, caller: OAuthClient, ip: Optional[str] = None) -> dict:
     """RFC 7662. Revoked / expired / signature failure all yield active=false.
 
-    Who may look: the client that owns the token, or a confidential client (has a secret, treated as a resource
-    server -- FastMCP's IntrospectionTokenVerifier is exactly this). A public client can only introspect its own
+    Who may look: the client that owns the token, or a confidential client (secret or private key; treated as a
+    resource server -- FastMCP's IntrospectionTokenVerifier is exactly this). A public client can only introspect its own
     tokens, so nobody can register a throwaway client via DCR and read another token's sub / email / scope.
     """
     inactive = {"active": False}
@@ -699,7 +705,7 @@ def introspect_token(db: Session, token: str, *, caller: OAuthClient, ip: Option
     except OAuthError:
         return inactive
     is_owner = claims.get("client_id") == caller.client_id
-    if not is_owner and not caller.client_secret_hash:
+    if not is_owner and not is_resource_server(caller):
         return inactive
     rec = OAuthTokenAdapter.get(db, claims.get("jti", ""))
     if rec is not None:
@@ -723,6 +729,70 @@ def introspect_token(db: Session, token: str, *, caller: OAuthClient, ip: Option
         if claims.get(extra):
             result[extra] = claims[extra]
     return result
+
+
+# ---------------------------------------------------------------------------
+# offline verifiers: revocation feed + usage reports
+# ---------------------------------------------------------------------------
+def revoked_feed(db: Session, *, caller: OAuthClient, since: Optional[float] = None) -> dict:
+    """Tokens revoked but not yet expired, for MCP servers that verify JWTs offline and want revocation to take
+    effect before expiry. Bounded by the access-token lifetime. Resource servers only."""
+    if not is_resource_server(caller):
+        raise OAuthError("unauthorized_client", "only confidential clients may read the revocation feed", 403)
+    since_dt = None
+    if since is not None:
+        try:
+            since_dt = datetime.fromtimestamp(float(since), tz=timezone.utc).replace(tzinfo=None)
+        except (TypeError, ValueError, OverflowError):
+            raise OAuthError("invalid_request", "since must be a unix timestamp")
+    now = local_now()
+    rows = OAuthTokenAdapter.list_revoked_unexpired(db, since=since_dt)
+    return {
+        "revoked": [{"jti": t.jti, "revoked_at": int(t.revoked_at.replace(tzinfo=timezone.utc).timestamp()),
+                     "exp": int(t.expires_at.replace(tzinfo=timezone.utc).timestamp())} for t in rows],
+        "now": int(now.replace(tzinfo=timezone.utc).timestamp()),
+    }
+
+
+MAX_USAGE_EVENTS = 1000
+
+
+def report_usage(db: Session, *, caller: OAuthClient, events, ip: Optional[str] = None) -> dict:
+    """Fold verifications an offline MCP server batched up into the token counters and the usage statistics.
+    ``events`` is a list of {jti, count, last_seen (unix)}. Unknown jtis are returned, not stored. Resource
+    servers only."""
+    if not is_resource_server(caller):
+        raise OAuthError("unauthorized_client", "only confidential clients may report usage", 403)
+    if not isinstance(events, list):
+        raise OAuthError("invalid_request", "events must be an array")
+    if len(events) > MAX_USAGE_EVENTS:
+        raise OAuthError("invalid_request", f"at most {MAX_USAGE_EVENTS} events per report")
+    accepted, unknown = 0, []
+    for ev in events:
+        if not isinstance(ev, dict) or not isinstance(ev.get("jti"), str):
+            raise OAuthError("invalid_request", "each event needs a jti")
+        try:
+            count = max(1, int(ev.get("count", 1)))
+        except (TypeError, ValueError):
+            raise OAuthError("invalid_request", "count must be an integer")
+        last_seen = None
+        if ev.get("last_seen") is not None:
+            try:
+                last_seen = datetime.fromtimestamp(float(ev["last_seen"]), tz=timezone.utc).replace(tzinfo=None)
+            except (TypeError, ValueError, OverflowError):
+                raise OAuthError("invalid_request", "last_seen must be a unix timestamp")
+        rec = OAuthTokenAdapter.get(db, ev["jti"])
+        if rec is None:
+            unknown.append(ev["jti"])
+            continue
+        OAuthTokenAdapter.apply_usage(db, rec, count=count, last_seen=last_seen)
+        TokenUsageAdapter.record(
+            db, event="verified", jti=rec.jti, client_id=rec.client_id, sub=rec.sub, audience=rec.audience,
+            service_id=str(rec.service_id) if rec.service_id else None, success=True, ip_address=ip,
+            count=count, used_at=last_seen,
+        )
+        accepted += 1
+    return {"accepted": accepted, "unknown": unknown}
 
 
 # ---------------------------------------------------------------------------
@@ -802,5 +872,8 @@ def build_metadata(db: Session) -> dict:
         "introspection_endpoint_auth_signing_alg_values_supported": ASSERTION_SIGNING_ALGS,
         "resource_parameter_supported": True,
         "authorization_response_iss_parameter_supported": True,
+        # MCP Center extensions for servers that verify tokens offline (see examples/mcp_center_hooks.py)
+        "revoked_tokens_endpoint": f"{base}/oauth/revoked",
+        "usage_report_endpoint": f"{base}/oauth/usage",
         "service_documentation": f"{base}/docs",
     }
