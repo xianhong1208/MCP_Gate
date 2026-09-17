@@ -641,7 +641,8 @@
     "authMethod": {
       "none": "None (public client, PKCE)",
       "client_secret_basic": "Client secret (HTTP Basic)",
-      "client_secret_post": "Client secret (POST body)"
+      "client_secret_post": "Client secret (POST body)",
+      "private_key_jwt": "Private key JWT (RFC 7523)"
     },
     "col": {
       "name": "Client",
@@ -658,7 +659,7 @@
       "revoked": "No revoked clients"
     },
     "emptyHint": "Clients appear here when they register dynamically, or register one manually.",
-    "confidential": "Confidential client (has a secret)",
+    "confidential": "Confidential client (authenticates to the token endpoint)",
     "public": "Public client (PKCE)",
     "neverUsed": "Never",
     "noRedirect": "none",
@@ -683,6 +684,13 @@
       "grantTypes": "Grant types",
       "authMethod": "Token endpoint authentication",
       "authMethodHint": "Choose a client-secret method for server-side apps; the secret is shown once after registration.",
+      "jwksIntro": "The client signs a short-lived JWT with its private key on every token request; MCP Center verifies it against the public keys below. No secret is issued.",
+      "jwksUri": "JWKS URI",
+      "jwksUriHint": "HTTPS URL of the client's JSON Web Key Set. Fetched on first use and cached; an unknown kid triggers a refetch, so keys can be rotated.",
+      "jwks": "JWKS document",
+      "jwksHint": "Alternatively paste the JWKS JSON (public keys only, RSA or EC P-256). Fill in one of the two.",
+      "jwksRequired": "Provide either a JWKS URI or a JWKS document, not both.",
+      "jwksInvalid": "The JWKS document is not valid JSON.",
       "cancel": "Cancel",
       "submit": "Register",
       "submitting": "Registering...",
@@ -700,6 +708,7 @@
       "clientSecret": "client_secret",
       "oneTime": "The secret is shown only once. Store it now.",
       "publicClient": "This is a public client — it authenticates with PKCE and has no secret.",
+      "privateKeyJwt": "This client authenticates with a signed JWT (private_key_jwt); there is no secret. Send client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer and a client_assertion signed with the registered key.",
       "done": "Done"
     },
     "scopes": {

@@ -641,7 +641,8 @@
     "authMethod": {
       "none": "無(公開 client,PKCE)",
       "client_secret_basic": "Client secret(HTTP Basic)",
-      "client_secret_post": "Client secret(POST body)"
+      "client_secret_post": "Client secret(POST body)",
+      "private_key_jwt": "私鑰簽章 JWT(RFC 7523)"
     },
     "col": {
       "name": "Client",
@@ -658,7 +659,7 @@
       "revoked": "沒有已撤銷的 client"
     },
     "emptyHint": "Client 動態註冊後會出現在這裡,也可以手動登記。",
-    "confidential": "機密 client(有 secret)",
+    "confidential": "機密 client(需向 token 端點認證)",
     "public": "公開 client(PKCE)",
     "neverUsed": "從未",
     "noRedirect": "無",
@@ -683,6 +684,13 @@
       "grantTypes": "Grant type",
       "authMethod": "Token endpoint 認證方式",
       "authMethodHint": "伺服器端應用請選 client secret 方式;secret 只會在登記完成後顯示一次。",
+      "jwksIntro": "Client 每次向 token 端點請求時,用自己的私鑰簽一個短效 JWT;MCP Center 以下方的公鑰驗證。不會核發 secret。",
+      "jwksUri": "JWKS URI",
+      "jwksUriHint": "Client 的 JSON Web Key Set 網址(HTTPS)。第一次使用時抓取並快取;遇到未知的 kid 會重新抓取,因此可以輪替金鑰。",
+      "jwks": "JWKS 文件",
+      "jwksHint": "或直接貼上 JWKS JSON(只放公鑰,RSA 或 EC P-256)。兩者擇一填寫。",
+      "jwksRequired": "請提供 JWKS URI 或 JWKS 文件其中一項,不可同時填寫。",
+      "jwksInvalid": "JWKS 文件不是合法的 JSON。",
       "cancel": "取消",
       "submit": "登記",
       "submitting": "登記中...",
@@ -700,6 +708,7 @@
       "clientSecret": "client_secret",
       "oneTime": "Secret 只顯示這一次,請立即保存。",
       "publicClient": "這是公開 client,以 PKCE 認證,沒有 secret。",
+      "privateKeyJwt": "此 client 以簽章 JWT(private_key_jwt)認證,沒有 secret。請送出 client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer 與用已登記金鑰簽章的 client_assertion。",
       "done": "完成"
     },
     "scopes": {
