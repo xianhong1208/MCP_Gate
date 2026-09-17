@@ -42,10 +42,17 @@ function CustomTooltip({ active, payload, label }) {
   )
 }
 
+/** First meaningful line of a tool description, with markdown emphasis / headings stripped, for the collapsed row. */
+function toolSummary(description) {
+  const line = (description || '').split(/\r?\n/).map((l) => l.trim()).find((l) => l.length > 0) || ''
+  return line.replace(/^#+\s*/, '').replace(/\*\*(.*?)\*\*/g, '$1').replace(/`/g, '')
+}
+
 function ToolItem({ tool }) {
   const { t } = useTranslation()
   const [isExpanded, setIsExpanded] = useState(false)
   const toast = useToast()
+  const summary = toolSummary(tool.description)
   const handleCopySchema = async () => {
     try {
       await copyToClipboard(JSON.stringify(tool.input_schema, null, 2))
@@ -68,17 +75,25 @@ function ToolItem({ tool }) {
             : <ChevronDown className="mt-0.5 h-4 w-4 shrink-0 text-subtle-foreground" aria-hidden="true" />}
           <span className="min-w-0">
             <span className="block truncate font-mono text-xs font-medium text-foreground">{tool.name}</span>
-            {tool.description && <span className="mt-0.5 block text-xs text-muted-foreground">{tool.description}</span>}
+            {/* Collapsed: one line only. Long agent-facing descriptions (headings, mode tables, rules) open on click. */}
+            {summary && !isExpanded && <span className="mt-0.5 block truncate text-xs text-muted-foreground" title={summary}>{summary}</span>}
           </span>
         </button>
         {tool.input_schema && (
           <IconButton size="sm" icon={Copy} onClick={handleCopySchema} title={t('services.common.copyInputSchema')} />
         )}
       </div>
-      {isExpanded && tool.input_schema && (
-        <div className="ml-6 mt-2">
-          <p className="mb-1.5 text-xs text-muted-foreground">{t('services.common.inputSchema')}</p>
-          <pre className="overflow-x-auto rounded-md border border-border bg-muted/50 p-3 font-mono text-xs text-foreground">{JSON.stringify(tool.input_schema, null, 2)}</pre>
+      {isExpanded && (
+        <div className="ml-6 mt-2 space-y-3">
+          {tool.description && (
+            <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded-md border border-border bg-muted/30 p-3 font-sans text-xs leading-relaxed text-muted-foreground">{tool.description}</pre>
+          )}
+          {tool.input_schema && (
+            <div>
+              <p className="mb-1.5 text-xs text-muted-foreground">{t('services.common.inputSchema')}</p>
+              <pre className="max-h-72 overflow-auto rounded-md border border-border bg-muted/50 p-3 font-mono text-xs text-foreground">{JSON.stringify(tool.input_schema, null, 2)}</pre>
+            </div>
+          )}
         </div>
       )}
     </div>
