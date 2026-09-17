@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 from db.models import (
     AdminUser, AuditLog, ManagedMcpProcess, MCPTool, OAuthAuthorizationCode,
     OAuthAuthorizationRequest, OAuthClient, OAuthConsent, OAuthScope, OAuthSigningKey,
-    OAuthToken, Service, TokenUsage, UserMcpDefinition, local_now,
+    OAuthToken, Service, ServiceScope, TokenUsage, UserMcpDefinition, local_now,
 )
 
 # Loopback aliases -> always stored / looked up as 127.0.0.1
@@ -655,6 +655,51 @@ class OAuthScopeCRUD:
     def delete(db: Session, name: str) -> bool:
         scope = OAuthScopeCRUD.get(db, name)
         if not scope:
+            return False
+        db.delete(scope)
+        db.commit()
+        return True
+
+
+class ServiceScopeCRUD:
+    """Scopes declared by a single MCP server (see ServiceScope)."""
+
+    @staticmethod
+    def list_for_service(db: Session, service_id) -> List[ServiceScope]:
+        return (db.query(ServiceScope).filter(ServiceScope.service_id == _uuid(service_id))
+                .order_by(ServiceScope.name).all())
+
+    @staticmethod
+    def list_all(db: Session) -> List[ServiceScope]:
+        return db.query(ServiceScope).order_by(ServiceScope.name).all()
+
+    @staticmethod
+    def get(db: Session, service_id, name: str) -> Optional[ServiceScope]:
+        return db.query(ServiceScope).filter(
+            ServiceScope.service_id == _uuid(service_id), ServiceScope.name == name,
+        ).first()
+
+    @staticmethod
+    def names_in_use(db: Session, name: str) -> int:
+        """How many services declare ``name`` (used to keep global and service names disjoint)."""
+        return db.query(ServiceScope).filter(ServiceScope.name == name).count()
+
+    @staticmethod
+    def upsert(db: Session, service_id, *, name: str, description: Optional[str], is_default: bool) -> ServiceScope:
+        scope = ServiceScopeCRUD.get(db, service_id, name)
+        if scope is None:
+            scope = ServiceScope(service_id=_uuid(service_id), name=name)
+            db.add(scope)
+        scope.description = description
+        scope.is_default = bool(is_default)
+        db.commit()
+        db.refresh(scope)
+        return scope
+
+    @staticmethod
+    def delete(db: Session, service_id, name: str) -> bool:
+        scope = ServiceScopeCRUD.get(db, service_id, name)
+        if scope is None:
             return False
         db.delete(scope)
         db.commit()

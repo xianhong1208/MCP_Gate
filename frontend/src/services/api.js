@@ -350,6 +350,21 @@ export const oauthApi = {
       return request(`/api/oauth/scopes/${encodeURIComponent(name)}`, { method: 'DELETE' })
     },
   },
+  /** Scopes one server declares for itself; `effective` is everything a token for that server may carry */
+  serviceScopes: {
+    async list(serviceId) {
+      return request(`/api/oauth/services/${encodeURIComponent(serviceId)}/scopes`)
+    },
+    async upsert(serviceId, name, { description, isDefault }) {
+      return request(`/api/oauth/services/${encodeURIComponent(serviceId)}/scopes/${encodeURIComponent(name)}`, {
+        method: 'PUT',
+        body: JSON.stringify({ description: description || null, is_default: !!isDefault }),
+      })
+    },
+    async delete(serviceId, name) {
+      return request(`/api/oauth/services/${encodeURIComponent(serviceId)}/scopes/${encodeURIComponent(name)}`, { method: 'DELETE' })
+    },
+  },
 
   tokens: {
     /** kind: pat | access | refresh; lists only active ones by default */

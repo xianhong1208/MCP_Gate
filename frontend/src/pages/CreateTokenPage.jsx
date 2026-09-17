@@ -22,6 +22,7 @@ export default function CreateTokenPage() {
 
   const [services, setServices] = useState([])
   const [scopes, setScopes] = useState([])
+  const [effective, setEffective] = useState(null)   // per-server list from the API; null until loaded
   const [isLoadingMeta, setIsLoadingMeta] = useState(true)
   const [serviceId, setServiceId] = useState(searchParams.get('service_id') || '')
   const [selectedScopes, setSelectedScopes] = useState(new Set())
@@ -50,15 +51,27 @@ export default function CreateTokenPage() {
 
   const service = useMemo(() => services.find((s) => s.id === serviceId) || null, [services, serviceId])
 
-  // Selectable scopes = registry scopes intersected with the service's allowed scopes (unrestricted -> all)
+  // The server's effective scopes (global ones it allows + the ones it declares itself)
+  useEffect(() => {
+    let cancelled = false
+    setEffective(null)
+    if (!serviceId) return undefined
+    oauthApi.serviceScopes.list(serviceId)
+      .then((res) => { if (!cancelled) setEffective(res.effective || []) })
+      .catch(() => { if (!cancelled) setEffective(null) })
+    return () => { cancelled = true }
+  }, [serviceId])
+
+  // Selectable scopes: the API's effective list when available, else registry ∩ the service's allow-list
   const availableScopes = useMemo(() => {
+    if (effective) return effective
     if (!service || !service.oauth_scopes || service.oauth_scopes.length === 0) return scopes
     const allowed = new Set(service.oauth_scopes)
     const known = scopes.filter((s) => allowed.has(s.name))
     // Also list scopes the service allows but the registry lacks, so the user can still see them
     const extra = service.oauth_scopes.filter((n) => !scopes.some((s) => s.name === n)).map((name) => ({ name, description: null, is_default: false }))
     return [...known, ...extra]
-  }, [service, scopes])
+  }, [effective, service, scopes])
 
   // Reset to the default scopes when the service changes
   useEffect(() => {
@@ -229,6 +242,7 @@ export default function CreateTokenPage() {
                         <span className="flex items-center gap-2 font-mono text-sm font-medium text-foreground">
                           {s.name}
                           {s.is_default && <Badge tone="success">{t('tokens.create.defaultTag')}</Badge>}
+                          {s.source === 'service' && <Badge tone="accent">{t('tokens.create.serverScopeTag')}</Badge>}
                         </span>
                         {describeScope(t, s.name, s.description) && <span className="mt-0.5 block text-xs text-muted-foreground">{describeScope(t, s.name, s.description)}</span>}
                       </span>
