@@ -407,6 +407,12 @@
       "toolsCount_other": "{{n}} tools",
       "inputSchema": "Input Schema",
       "paramCount": "{{n}} params",
+      "schemaView": {
+        "table": "Fields"
+      },
+      "noParams": "This tool takes no parameters.",
+      "paramRequired": "required",
+      "paramDefault": "default",
       "copyInputSchema": "Copy input schema",
       "noTools": "No tools found",
       "refreshHint": "Click \"Refresh from MCP Server\" to fetch tools",

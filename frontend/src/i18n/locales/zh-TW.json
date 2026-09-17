@@ -407,6 +407,12 @@
       "toolsCount_other": "{{n}} 個 tools",
       "inputSchema": "Input Schema",
       "paramCount": "{{n}} 個參數",
+      "schemaView": {
+        "table": "欄位"
+      },
+      "noParams": "此工具不需要參數。",
+      "paramRequired": "必填",
+      "paramDefault": "預設",
       "copyInputSchema": "複製 input schema",
       "noTools": "找不到 tools",
       "refreshHint": "點擊「從 MCP Server 重新整理」以取得 tools",

@@ -13,6 +13,7 @@ import CodeBlock from '../components/CodeBlock'
 import ServiceFormModal from '../components/ServiceFormModal'
 import HealthIndicator from '../components/HealthIndicator'
 import ScopeEditor from '../components/ScopeEditor'
+import MarkdownLite from '../components/MarkdownLite'
 import { copyToClipboard } from '../utils/clipboard'
 import { useConfirm } from '../contexts/ConfirmContext'
 import { useToast } from '../contexts/ToastContext'
@@ -46,6 +47,64 @@ function CustomTooltip({ active, payload, label }) {
 function toolSummary(description) {
   const line = (description || '').split(/\r?\n/).map((l) => l.trim()).find((l) => l.length > 0) || ''
   return line.replace(/^#+\s*/, '').replace(/\*\*(.*?)\*\*/g, '$1').replace(/`/g, '')
+}
+
+/** A JSON-schema object's properties as rows: name, type (+ enum / default), required, description. */
+function schemaRows(schema) {
+  const props = schema?.properties || {}
+  const required = new Set(schema?.required || [])
+  return Object.entries(props).map(([name, def]) => {
+    const d = def && typeof def === 'object' ? def : {}
+    const type = Array.isArray(d.type) ? d.type.join(' | ') : (d.type || (d.enum ? 'enum' : d.anyOf ? 'any' : 'object'))
+    return { name, type, enum: Array.isArray(d.enum) ? d.enum : null, def: d.default, description: d.description || '', required: required.has(name) }
+  })
+}
+
+function ToolSchema({ schema }) {
+  const { t } = useTranslation()
+  const [view, setView] = useState('table')
+  const rows = schemaRows(schema)
+  return (
+    <div className="overflow-hidden rounded-lg border border-border bg-background/60">
+      <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-1.5">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-subtle-foreground">{t('services.common.inputSchema')}</span>
+        <SegmentedControl
+          size="sm"
+          value={view}
+          onChange={setView}
+          items={[{ key: 'table', label: t('services.common.schemaView.table') }, { key: 'json', label: 'JSON' }]}
+        />
+      </div>
+      {view === 'json' ? (
+        <pre className="max-h-64 overflow-auto p-3 font-mono text-[11px] leading-relaxed text-foreground">{JSON.stringify(schema, null, 2)}</pre>
+      ) : rows.length === 0 ? (
+        <p className="px-3 py-2.5 text-xs text-muted-foreground">{t('services.common.noParams')}</p>
+      ) : (
+        <div className="max-h-64 overflow-auto">
+          <div className="divide-y divide-border">
+            {rows.map((r) => (
+              <div key={r.name} className="px-3 py-2">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <code className="font-mono text-xs font-medium text-foreground">{r.name}</code>
+                  <Badge tone="neutral" mono>{r.type}</Badge>
+                  {r.required && <Badge tone="warning">{t('services.common.paramRequired')}</Badge>}
+                  {r.def !== undefined && (
+                    <span className="text-[11px] text-subtle-foreground">{t('services.common.paramDefault')} <code className="font-mono text-foreground">{JSON.stringify(r.def)}</code></span>
+                  )}
+                </div>
+                {r.enum && (
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {r.enum.map((v) => <Badge key={String(v)} tone="neutral" mono size="sm">{String(v)}</Badge>)}
+                  </div>
+                )}
+                {r.description && <p className="mt-1 text-xs text-muted-foreground">{r.description}</p>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
 }
 
 function ToolItem({ tool }) {
@@ -91,15 +150,14 @@ function ToolItem({ tool }) {
       {isExpanded && (
         <div className="space-y-3 px-2 pb-3 pl-12">
           {tool.description && (
-            <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-lg border border-border border-l-2 border-l-primary/60 bg-background/60 px-3 py-2.5 font-sans text-xs leading-relaxed text-muted-foreground">{tool.description}</pre>
+            <div className="max-h-72 overflow-auto rounded-lg border border-border border-l-2 border-l-primary/60 bg-background/60 px-3.5 py-3">
+              <MarkdownLite text={tool.description} />
+            </div>
           )}
+          {tool.input_schema && <ToolSchema schema={tool.input_schema} />}
           {tool.input_schema && (
-            <div className="overflow-hidden rounded-lg border border-border bg-background/60">
-              <div className="flex items-center justify-between border-b border-border px-3 py-1.5">
-                <span className="text-[11px] font-semibold uppercase tracking-wide text-subtle-foreground">{t('services.common.inputSchema')}</span>
-                <IconButton size="sm" icon={Copy} onClick={handleCopySchema} title={t('services.common.copyInputSchema')} />
-              </div>
-              <pre className="max-h-64 overflow-auto p-3 font-mono text-[11px] leading-relaxed text-foreground">{JSON.stringify(tool.input_schema, null, 2)}</pre>
+            <div className="flex justify-end">
+              <Button variant="ghost" size="xs" icon={Copy} onClick={handleCopySchema}>{t('services.common.copyInputSchema')}</Button>
             </div>
           )}
         </div>
