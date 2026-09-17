@@ -5,6 +5,7 @@
     "tokens": "Token",
     "issueToken": "簽發 Token",
     "clients": "OAuth Client",
+    "consents": "已記住的同意",
     "marketplace": "市集",
     "audit": "稽核日誌"
   },
@@ -132,6 +133,29 @@
     "noRedirect": "伺服器沒有回傳導向網址。",
     "errorTitle": "無法取得授權請求",
     "backToDashboard": "返回儀表板"
+  },
+  "consents": {
+    "list": {
+      "title": "已記住的同意",
+      "subtitle": "你在同意畫面勾選「記住這次的決定」後留下的紀錄。只要 scope 涵蓋,該 client 之後對同一個 server 的請求就會略過同意畫面。",
+      "refresh": "重新整理",
+      "searchPlaceholder": "搜尋 client、server、scope...",
+      "colClient": "Client",
+      "colAudience": "Server / Audience",
+      "colScopes": "已記住的 scope",
+      "colGranted": "最後授權",
+      "colActions": "操作",
+      "noAudience": "不限 server",
+      "empty": "沒有已記住的同意",
+      "emptyHint": "在同意畫面勾選「記住這次的決定」後,紀錄會出現在這裡。",
+      "adjustFilters": "請調整搜尋條件",
+      "forgetTitle": "忘記這筆同意",
+      "forgetTarget": "{{name}} 的同意紀錄",
+      "forgetSuccess": "已忘記這筆同意,該 client 下次會重新詢問。",
+      "forgetFail": "無法忘記同意:{{message}}",
+      "loadFail": "無法載入同意紀錄",
+      "count": "共 {{count}} 筆"
+    }
   },
   "dashboard": {
     "title": "儀表板",
@@ -871,7 +895,8 @@
       "service": "服務",
       "admin": "管理員",
       "system": "系統",
-      "oauth_client": "OAuth Client"
+      "oauth_client": "OAuth Client",
+      "oauth_consent": "同意紀錄"
     },
     "status": {
       "success": "成功",
@@ -885,6 +910,7 @@
       "oauth_client_approve": "核准 Client",
       "oauth_client_revoke": "撤銷 Client",
       "oauth_client_delete": "刪除 Client",
+      "oauth_consent_delete": "移除同意紀錄",
       "oauth_key_rotate": "輪替簽章金鑰",
       "refresh_tools": "重新整理 Tools",
       "scan_services": "網路掃描",

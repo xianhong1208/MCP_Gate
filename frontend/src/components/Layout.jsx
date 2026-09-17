@@ -16,6 +16,7 @@ import {
   Store,
   LogOut,
   Bot,
+  ShieldCheck,
   FileText,
   Settings,
   Menu,
@@ -47,6 +48,7 @@ const navItems = [
   { to: '/tokens', end: true, icon: Key, labelKey: 'nav.tokens' },
   { to: '/tokens/create', icon: Plus, labelKey: 'nav.issueToken' },
   { to: '/clients', icon: Bot, labelKey: 'nav.clients' },
+  { to: '/consents', icon: ShieldCheck, labelKey: 'nav.consents' },
   { to: '/marketplace', icon: Store, labelKey: 'nav.marketplace' },
   { to: '/audit', icon: FileText, labelKey: 'nav.audit' },
 ]

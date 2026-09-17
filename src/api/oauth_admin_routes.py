@@ -247,10 +247,14 @@ async def list_consents(db: Session = Depends(get_db), user: AdminUser = Depends
 
 
 @router.delete("/consents/{consent_id}")
-async def delete_consent(consent_id: str, db: Session = Depends(get_db), _: AdminUser = Depends(get_current_user)):
-    """Forget a remembered consent; the client will ask again next time."""
-    if not OAuthConsentAdapter.delete(db, consent_id):
+async def delete_consent(consent_id: str, request: Request, db: Session = Depends(get_db),
+                         user: AdminUser = Depends(get_current_user)):
+    """Forget a remembered consent; the client will ask again next time. Only the owner's own consents are reachable."""
+    consent = OAuthConsentAdapter.delete(db, consent_id, user.id)
+    if consent is None:
         raise HTTPException(status_code=404, detail={"error": "oauth.consent_not_found", "fallback": "Consent not found"})
+    _audit(db, request, user, AuditAction.OAUTH_CONSENT_DELETE, ResourceType.OAUTH_CONSENT, consent_id,
+           details={"client_id": consent["client_id"], "audience": consent["audience"], "scopes": consent["scopes"]})
     return {"message": "Consent removed"}
 
 
