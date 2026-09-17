@@ -184,7 +184,7 @@ Access token 的 claim:`iss`、`sub`、`aud`、`scope`、`client_id`、`jti`、`
 | private_key_jwt | 不用共享 secret 的 client 認證:client 登記 JWKS(直接貼上或提供 `jwks_uri`),每次向 token 端點請求時簽一個短效 JWT。適合 CI 工作、後端服務等機器對機器的 client。 |
 | Audience | token 對哪個 MCP URL 有效(`aud` claim)。在管理台逐台設定;server 的 `JWTVerifier(audience=…)` 必須一致。 |
 | Resource server | 你的 MCP server。只驗 token、從不簽發。管理台稱之為 *service*。 |
-| Scope | token 在 server 上可以做什麼,例如 `mcp:tools:invoke`。管理台的 scope 註冊表定義整個集合。 |
+| Scope | token 在 server 上可以做什麼,例如 `mcp:tools:invoke`。管理台的全域 scope 註冊表定義共用集合;每台 server 還可以宣告只有簽給它的 token 才能帶的專屬 scope。 |
 | DCR | 動態註冊(RFC 7591):client 第一次連線時自己建立 `client_id`。 |
 | PAT | Personal access token:從管理台簽的長效 access token,當一般 bearer token 使用。 |
 
@@ -211,7 +211,7 @@ Access token 的 claim:`iss`、`sub`、`aud`、`scope`、`client_id`、`jti`、`
 | 頁面 | 在這裡做什麼 |
 |---|---|
 | **Dashboard** | 服務健康、token 活動、最近事件、系統狀態。 |
-| **Services** | 登記或掃描 MCP server、設定 audience 與允許的 scope、更新 tools、執行健康檢查、複製接入片段。 |
+| **Services** | 登記或掃描 MCP server、設定 audience 與允許的 scope、宣告 server 專屬 scope、更新 tools、執行健康檢查、複製接入片段。 |
 | **Tokens · Issue Token** | MCP Center 簽發過的所有 token——OAuth 授權與 PAT——含撤銷、到期與最後使用資訊。 |
 | **OAuth Clients** | 動態註冊與受信任的 client:核准、撤銷、刪除;scope 註冊表;簽章金鑰輪替。 |
 | **Marketplace** | 從 catalog 部署 MCP server,或自帶 `{command, args, env}`。 |

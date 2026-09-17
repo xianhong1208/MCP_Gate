@@ -27,6 +27,7 @@ from db.models import (
 from db.seed import CONSOLE_CLIENT_ID, SCANNER_CLIENT_ID
 from src.adapters import (
     OAuthAuthRequestAdapter, OAuthClientAdapter, OAuthCodeAdapter, OAuthConsentAdapter, OAuthScopeAdapter,
+    ServiceScopeAdapter,
     OAuthTokenAdapter, ServiceAdapter, TokenUsageAdapter, normalize_audience,
 )
 from src.config import Config
@@ -144,8 +145,9 @@ def register_client(
 
     scope = metadata.get("scope")
     if scope:
-        registry = {s.name for s in OAuthScopeAdapter.list_all(db)}
-        unknown = set(str(scope).split()) - registry
+        # No server context at registration time: any scope some server may grant is acceptable here; the
+        # per-server check happens at /authorize against the requested resource.
+        unknown = set(str(scope).split()) - set(supported_scope_names(db))
         if unknown:
             raise OAuthError("invalid_client_metadata", f"unknown scope: {' '.join(sorted(unknown))}")
 
@@ -274,29 +276,47 @@ def validate_redirect_uri(client: OAuthClient, redirect_uri: str) -> bool:
 # ---------------------------------------------------------------------------
 # scope / resource
 # ---------------------------------------------------------------------------
-def scope_registry(db: Session) -> dict:
-    return {s.name: s for s in OAuthScopeAdapter.list_all(db)}
+def scope_registry(db: Session, service: Optional[Service] = None) -> dict:
+    """Scopes that exist for a request: the global registry plus, when a server is known, that server's own
+    scopes (names are disjoint by construction)."""
+    registry = {s.name: s for s in OAuthScopeAdapter.list_all(db)}
+    if service is not None:
+        registry.update({s.name: s for s in ServiceScopeAdapter.list_for_service(db, service.id)})
+    return registry
 
 
 def supported_scope_names(db: Session) -> list[str]:
-    return [s.name for s in OAuthScopeAdapter.list_all(db)]
+    """Every scope name any server may grant: the global registry plus all service-declared scopes."""
+    names = {s.name for s in OAuthScopeAdapter.list_all(db)} | {s.name for s in ServiceScopeAdapter.list_all(db)}
+    return sorted(names)
+
+
+def effective_scopes(db: Session, service: Service) -> list[dict]:
+    """What a token for ``service`` may carry, for the console: global scopes (restricted by
+    Service.oauth_scopes when set) then the server's own scopes, each tagged with its source."""
+    restricted = set(service.oauth_scopes.split()) if service.oauth_scopes else None
+    out = [dict(s.to_dict(), source="global") for s in OAuthScopeAdapter.list_all(db)
+           if restricted is None or s.name in restricted]
+    out += [dict(s.to_dict(), source="service") for s in ServiceScopeAdapter.list_for_service(db, service.id)]
+    return out
 
 
 def resolve_scope(db: Session, requested: Optional[str], client: Optional[OAuthClient],
                   service: Optional[Service]) -> str:
     """Decide the scope actually granted.
 
-    - unknown scope -> invalid_scope
+    - unknown scope -> invalid_scope (the registry is the global one plus the server's own scopes)
     - client registered with a restricted scope -> cannot exceed it
-    - service configured with oauth_scopes -> cannot exceed it
+    - service configured with oauth_scopes -> global scopes cannot exceed it; its own scopes are always allowed
     - nothing requested -> default scope, intersected with the limits above
     """
-    registry = scope_registry(db)
+    registry = scope_registry(db, service)
     allowed: Optional[set] = None
     if client and client.scope:
         allowed = set(client.scope.split())
     if service and service.oauth_scopes:
-        svc_allowed = set(service.oauth_scopes.split())
+        own = {s.name for s in ServiceScopeAdapter.list_for_service(db, service.id)}
+        svc_allowed = set(service.oauth_scopes.split()) | own
         allowed = svc_allowed if allowed is None else (allowed & svc_allowed)
 
     if requested and requested.strip():
@@ -399,9 +419,9 @@ def get_pending_request(db: Session, request_id: str) -> OAuthAuthorizationReque
 
 def describe_request(db: Session, req: OAuthAuthorizationRequest, user: AdminUser) -> dict:
     """Information shown on the consent page."""
-    registry = scope_registry(db)
     scopes = req.scope.split() if req.scope else []
     service = ServiceAdapter.get_by_audience(db, req.resource) if req.resource else None
+    registry = scope_registry(db, service)
     return {
         "request_id": req.id,
         "client": {

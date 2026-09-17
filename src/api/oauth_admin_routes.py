@@ -15,7 +15,7 @@ from db import get_db
 from db.models import AdminUser
 from src.adapters import (
     OAuthClientAdapter, OAuthConsentAdapter, OAuthKeyAdapter, OAuthScopeAdapter, OAuthTokenAdapter,
-    ServiceAdapter, TokenUsageAdapter,
+    ServiceAdapter, ServiceScopeAdapter, TokenUsageAdapter,
 )
 from src.adapters.exceptions import AdapterError
 from src.audit import ActorType, AuditAction, AuditService, AuditStatus, ResourceType
@@ -160,21 +160,82 @@ async def list_scopes(db: Session = Depends(get_db), _: AdminUser = Depends(get_
     return {"scopes": [s.to_dict() for s in scopes], "total": len(scopes)}
 
 
-@router.put("/scopes/{name}")
-async def upsert_scope(name: str, body: ScopeUpsertRequest, db: Session = Depends(get_db),
-                       _: AdminUser = Depends(get_current_user)):
-    """Create or update a scope and whether it is granted by default."""
+def _scope_name(name: str) -> str:
     name = name.strip()
     if not name or " " in name:
         raise HTTPException(status_code=400, detail={"error": "oauth.invalid_scope_name", "fallback": "Invalid scope name"})
-    return OAuthScopeAdapter.upsert(db, name=name, description=body.description, is_default=body.is_default).to_dict()
+    return name
+
+
+@router.put("/scopes/{name}")
+async def upsert_scope(name: str, body: ScopeUpsertRequest, request: Request, db: Session = Depends(get_db),
+                       user: AdminUser = Depends(get_current_user)):
+    """Create or update a global scope and whether it is granted by default. A name some server already declares
+    as its own scope is refused, so global and per-server names stay disjoint."""
+    name = _scope_name(name)
+    if OAuthScopeAdapter.get(db, name) is None and ServiceScopeAdapter.names_in_use(db, name):
+        raise HTTPException(status_code=409, detail={"error": "oauth.scope_owned_by_service",
+                                                     "fallback": "A server already declares a scope with this name"})
+    scope = OAuthScopeAdapter.upsert(db, name=name, description=body.description, is_default=body.is_default)
+    _audit(db, request, user, AuditAction.OAUTH_SCOPE_UPSERT, ResourceType.OAUTH_SCOPE, name,
+           details={"scope": "global", "is_default": scope.is_default})
+    return scope.to_dict()
 
 
 @router.delete("/scopes/{name}")
-async def delete_scope(name: str, db: Session = Depends(get_db), _: AdminUser = Depends(get_current_user)):
-    """Delete a scope from the registry."""
+async def delete_scope(name: str, request: Request, db: Session = Depends(get_db),
+                       user: AdminUser = Depends(get_current_user)):
+    """Delete a global scope from the registry."""
     if not OAuthScopeAdapter.delete(db, name):
         raise HTTPException(status_code=404, detail={"error": "oauth.scope_not_found", "fallback": "Scope not found"})
+    _audit(db, request, user, AuditAction.OAUTH_SCOPE_DELETE, ResourceType.OAUTH_SCOPE, name, details={"scope": "global"})
+    return {"message": "Scope deleted"}
+
+
+# ---- per-server scopes -------------------------------------------------------
+@router.get("/services/{service_id}/scopes")
+async def list_service_scopes(service_id: str, db: Session = Depends(get_db), _: AdminUser = Depends(get_current_user)):
+    """A server's own scopes (`own`) and everything a token for it may carry (`effective`: global scopes, restricted
+    by the server's allow-list when set, plus its own; each tagged `source`)."""
+    try:
+        service = ServiceAdapter.get_existing(db, service_id)
+    except AdapterError as e:
+        raise _adapter_exc(e)
+    own = [s.to_dict() for s in ServiceScopeAdapter.list_for_service(db, service.id)]
+    return {"own": own, "effective": oauth.effective_scopes(db, service), "total": len(own)}
+
+
+@router.put("/services/{service_id}/scopes/{name}")
+async def upsert_service_scope(service_id: str, name: str, body: ScopeUpsertRequest, request: Request,
+                               db: Session = Depends(get_db), user: AdminUser = Depends(get_current_user)):
+    """Declare or update a scope that exists only for this server. Global names may not be reused."""
+    try:
+        service = ServiceAdapter.get_existing(db, service_id)
+    except AdapterError as e:
+        raise _adapter_exc(e)
+    name = _scope_name(name)
+    if OAuthScopeAdapter.get(db, name) is not None:
+        raise HTTPException(status_code=409, detail={"error": "oauth.scope_is_global",
+                                                     "fallback": "This name is a global scope; edit it in the registry"})
+    scope = ServiceScopeAdapter.upsert(db, service.id, name=name, description=body.description, is_default=body.is_default)
+    _audit(db, request, user, AuditAction.OAUTH_SCOPE_UPSERT, ResourceType.OAUTH_SCOPE, name,
+           details={"scope": "service", "service_id": str(service.id), "service": service.name,
+                    "is_default": scope.is_default})
+    return scope.to_dict()
+
+
+@router.delete("/services/{service_id}/scopes/{name}")
+async def delete_service_scope(service_id: str, name: str, request: Request, db: Session = Depends(get_db),
+                               user: AdminUser = Depends(get_current_user)):
+    """Remove a server-declared scope. Tokens already carrying it keep it until they expire."""
+    try:
+        service = ServiceAdapter.get_existing(db, service_id)
+    except AdapterError as e:
+        raise _adapter_exc(e)
+    if not ServiceScopeAdapter.delete(db, service.id, name):
+        raise HTTPException(status_code=404, detail={"error": "oauth.scope_not_found", "fallback": "Scope not found"})
+    _audit(db, request, user, AuditAction.OAUTH_SCOPE_DELETE, ResourceType.OAUTH_SCOPE, name,
+           details={"scope": "service", "service_id": str(service.id), "service": service.name})
     return {"message": "Scope deleted"}
 
 

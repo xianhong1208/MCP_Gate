@@ -184,7 +184,7 @@ To change when the consent screen appears, edit [`src/oauth/consent_policy.py`](
 | private_key_jwt | Client authentication without a shared secret: the client registers a JWKS (inline or by `jwks_uri`) and signs a short-lived JWT per token request. Meant for machine-to-machine clients such as CI jobs and backend services. |
 | Audience | The MCP URL a token is valid for (the `aud` claim). Set per server in the console; the server's `JWTVerifier(audience=…)` must match. |
 | Resource server | Your MCP server. It verifies tokens and never issues them. The console calls these *services*. |
-| Scope | What a token may do on a server, for example `mcp:tools:invoke`. The console's scope registry defines the set. |
+| Scope | What a token may do on a server, for example `mcp:tools:invoke`. The console's global scope registry defines the shared set; a server can additionally declare scopes of its own that only tokens for that server may carry. |
 | DCR | Dynamic client registration (RFC 7591): a client creates its own `client_id` on first connect. |
 | PAT | Personal access token: a long-lived access token minted from the console, used as a plain bearer token. |
 
@@ -211,7 +211,7 @@ Advanced: `SERVER_HOST` / `SERVER_PORT` override the bind address when it must d
 | Page | What you do there |
 |---|---|
 | **Dashboard** | Service health, token activity, recent events, system status. |
-| **Services** | Register or scan MCP servers, set audience and allowed scopes, refresh tools, run health checks, copy integration snippets. |
+| **Services** | Register or scan MCP servers, set audience and allowed scopes, declare server-specific scopes, refresh tools, run health checks, copy integration snippets. |
 | **Tokens · Issue Token** | Every token issued by MCP Center — OAuth grants and PATs — with revoke, expiry and last-use information. |
 | **OAuth Clients** | Dynamically registered and trusted clients: approve, revoke, delete; scope registry; signing-key rotation. |
 | **Marketplace** | Deploy MCP servers from the catalog or bring your own `{command, args, env}`. |

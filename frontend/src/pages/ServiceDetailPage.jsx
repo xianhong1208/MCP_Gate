@@ -12,6 +12,7 @@ import LastChecked from '../components/LastChecked'
 import CodeBlock from '../components/CodeBlock'
 import ServiceFormModal from '../components/ServiceFormModal'
 import HealthIndicator from '../components/HealthIndicator'
+import ScopeEditor from '../components/ScopeEditor'
 import { copyToClipboard } from '../utils/clipboard'
 import { useConfirm } from '../contexts/ConfirmContext'
 import { useToast } from '../contexts/ToastContext'
@@ -109,6 +110,8 @@ export default function ServiceDetailPage() {
 
   const [service, setService] = useState(null)
   const [scopes, setScopes] = useState([])
+  const [ownScopes, setOwnScopes] = useState([])
+  const [isLoadingOwnScopes, setIsLoadingOwnScopes] = useState(true)
   const [snippets, setSnippets] = useState(null)
   const [snippetFamily, setSnippetFamily] = useState('claude_code')
   const [snippetVariant, setSnippetVariant] = useState('oauth')
@@ -122,6 +125,35 @@ export default function ServiceDetailPage() {
   const [isRefreshingTools, setIsRefreshingTools] = useState(false)
   const [showEditModal, setShowEditModal] = useState(false)
   const [revokingJti, setRevokingJti] = useState(null)
+
+  const reloadOwnScopes = useCallback(async () => {
+    const res = await oauthApi.serviceScopes.list(decodedServiceId)
+    setOwnScopes(res.own || [])
+  }, [decodedServiceId])
+
+  const saveOwnScope = async ({ name, description, isDefault }) => {
+    try {
+      await oauthApi.serviceScopes.upsert(decodedServiceId, name, { description, isDefault })
+      toast.success(t('clients.scopes.saved'))
+      await reloadOwnScopes()
+      return true
+    } catch (err) {
+      toast.error(err.message || t('clients.scopes.saveFailed'))
+      return false
+    }
+  }
+
+  const deleteOwnScope = async (name) => {
+    const ok = await confirmDelete(t('clients.scopes.deleteTarget', { name }))
+    if (!ok) return
+    try {
+      await oauthApi.serviceScopes.delete(decodedServiceId, name)
+      toast.success(t('clients.scopes.deleted'))
+      await reloadOwnScopes()
+    } catch (err) {
+      toast.error(err.message || t('clients.scopes.deleteFailed'))
+    }
+  }
 
   const reload = useCallback(async () => {
     const updated = await servicesApi.getById(decodedServiceId, true)
@@ -138,12 +170,15 @@ export default function ServiceDetailPage() {
       oauthApi.scopes.list().catch(() => ({ scopes: [] })),
       oauthApi.snippets(decodedServiceId).catch(() => null),
       oauthApi.tokens.list({ serviceId: decodedServiceId }).catch(() => ({ tokens: [] })),
-    ]).then(([svc, sc, sn, tk]) => {
+      oauthApi.serviceScopes.list(decodedServiceId).catch(() => ({ own: [] })),
+    ]).then(([svc, sc, sn, tk, own]) => {
       if (cancelled) return
       setService(svc)
       setScopes(sc.scopes || [])
       setSnippets(sn)
       setTokens(tk.tokens || [])
+      setOwnScopes(own.own || [])
+      setIsLoadingOwnScopes(false)
     }).catch((err) => {
       if (!cancelled) setError(err.message || t('services.detail.loadFailed'))
     }).finally(() => { if (!cancelled) setIsLoading(false) })
@@ -460,6 +495,17 @@ export default function ServiceDetailPage() {
               {(!service.tags || service.tags.length === 0) && <span className="text-xs text-muted-foreground">{t('services.detail.noTags')}</span>}
             </div>
           </Card>
+
+          {/* Scopes this server declares for itself (in addition to the global registry) */}
+          <ScopeEditor
+            title={t('services.detail.ownScopesTitle')}
+            description={t('services.detail.ownScopesSubtitle')}
+            scopes={ownScopes}
+            isLoading={isLoadingOwnScopes}
+            onSave={saveOwnScope}
+            onDelete={deleteOwnScope}
+            emptyText={t('services.detail.ownScopesEmpty')}
+          />
 
           {/* Tools */}
           <Card>

@@ -343,6 +343,30 @@ class OAuthScope(Base):
         return {"name": self.name, "description": self.description, "is_default": self.is_default}
 
 
+class ServiceScope(Base):
+    """A scope declared by one MCP server, in addition to the global registry.
+
+    Global scopes (OAuthScope) apply to every server; a service scope only exists for the server that declared it
+    and may not reuse a global name. The scope a request may be granted for a server is the global registry
+    (restricted by Service.oauth_scopes when set) plus that server's own scopes.
+    """
+    __tablename__ = "service_scopes"
+    __table_args__ = (UniqueConstraint("service_id", "name", name="uq_service_scope"),)
+
+    id = Column(Uuid, primary_key=True, default=uuid.uuid4)
+    service_id = Column(Uuid, ForeignKey("services.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(128), nullable=False)
+    description = Column(String(256), nullable=True)
+    is_default = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, default=local_now, nullable=False)
+
+    service = relationship("Service")
+
+    def to_dict(self) -> dict:
+        return {"name": self.name, "description": self.description, "is_default": self.is_default,
+                "service_id": str(self.service_id)}
+
+
 class OAuthToken(Base):
     """Record of an issued token (access / refresh).
 
