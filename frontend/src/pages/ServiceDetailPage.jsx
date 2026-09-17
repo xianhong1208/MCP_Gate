@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { formatDateTime, formatDate } from '../utils/format'
+import { formatDate } from '../utils/format'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import {
@@ -685,7 +685,12 @@ export default function ServiceDetailPage() {
                         <KindBadge kind={tk.kind} />
                         <span className="min-w-0">
                           <span className="block truncate text-sm font-medium text-foreground transition-colors duration-200 group-hover:text-link">{tk.label || tk.client_name || tk.jti}</span>
-                          <span className="block truncate text-xs text-muted-foreground">{tk.client_name || tk.client_id}{tk.expires_at ? ` · ${t('services.detail.tokenExpires')} ${formatDateTime(tk.expires_at)}` : ''}</span>
+                          {/* Personal tokens always belong to the console, so only the expiry is worth a line */}
+                          <span className="block truncate text-xs text-muted-foreground">
+                            {tk.kind !== 'pat' && (tk.client_name || tk.client_id)}
+                            {tk.kind !== 'pat' && tk.expires_at && ' · '}
+                            {tk.expires_at && `${t('services.detail.tokenExpires')} ${formatDate(tk.expires_at)}`}
+                          </span>
                         </span>
                       </Link>
                       <StatusBadge status={tk.status} />
@@ -695,7 +700,8 @@ export default function ServiceDetailPage() {
                         onClick={() => handleRevokeToken(tk)}
                         disabled={revokingJti === tk.jti}
                         title={t('tokens.list.revokeTitle')}
-                        className={clsx(revokingJti === tk.jti && 'animate-spin')}
+                        className={clsx('opacity-0 transition-opacity duration-150 focus-visible:opacity-100 group-hover:opacity-100',
+                          revokingJti === tk.jti && 'animate-spin opacity-100')}
                       />
                     </div>
                     {/* Scopes on their own line so the long mono chips never fight the
