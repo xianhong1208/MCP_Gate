@@ -69,7 +69,7 @@ export default function TokensPage() {
   const [includeInactive, setIncludeInactive] = useState(false)
   const [page, setPage] = useState(1)
   const [revoking, setRevoking] = useState(null)
-  const pageSize = preferences.pageSize || 20
+  const pageSize = preferences.pageSize || 10
 
   const loadData = useCallback(async ({ silent = false } = {}) => {
     if (!silent) {
