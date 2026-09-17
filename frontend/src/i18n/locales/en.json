@@ -551,8 +551,8 @@
       "refreshAsTokenGroup": "Issued tokens for this server",
       "refreshAsTokenOption": "{{kind}} · {{name}}",
       "refreshAsHint": {
-        "scanner": "A short-lived token with no user identity. Servers that list the same tools for everyone need nothing more.",
-        "token": "Signs a short-lived copy of that token's claims (same subject, client, scopes and jti), so the server sees exactly what the token presents. The stored token itself is never read back. Use this when the server shows different tools per token."
+        "scanner": "Anonymous short-lived token; fine for servers that list the same tools for everyone.",
+        "token": "Presents this token's identity (same subject, client, scopes and jti) without reading the stored token."
       },
       "refreshTokenGone": "That token is no longer active; falling back to the scanner token.",
       "noToolsFound": "No tools found",

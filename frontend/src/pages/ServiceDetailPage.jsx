@@ -542,31 +542,32 @@ export default function ServiceDetailPage() {
               )}
             />
             {hasMcpConnection && (
-              <div className="mb-3 space-y-2 rounded-md border border-border bg-muted/40 p-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-xs text-muted-foreground">{t('services.detail.refreshAs')}</span>
-                  <Select size="sm" value={refreshIdentity} onChange={(e) => chooseRefreshIdentity(e.target.value)} className="min-w-0 max-w-full">
-                    <option value="scanner">{t('services.detail.refreshAsScanner')}</option>
-                    {inspectableTokens.length > 0 && (
-                      <optgroup label={t('services.detail.refreshAsTokenGroup')}>
-                        {inspectableTokens.map((tk) => (
-                          <option key={tk.jti} value={`token:${tk.jti}`}>
-                            {t('services.detail.refreshAsTokenOption', {
-                              kind: t(`tokens.kind.${tk.kind}`, tk.kind),
-                              name: tk.label || tk.client_name || tk.user_email || tk.jti.slice(0, 8),
-                            })}
-                          </option>
-                        ))}
-                      </optgroup>
-                    )}
-                  </Select>
-                </div>
-                <p className="text-xs text-muted-foreground">{t(`services.detail.refreshAsHint.${refreshMode}`)}</p>
+              <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                <span className="shrink-0 text-xs text-muted-foreground">{t('services.detail.refreshAs')}</span>
+                <Select
+                  size="sm"
+                  value={refreshIdentity}
+                  onChange={(e) => chooseRefreshIdentity(e.target.value)}
+                  title={t(`services.detail.refreshAsHint.${refreshMode}`)}
+                  className="min-w-0 flex-1"
+                >
+                  <option value="scanner">{t('services.detail.refreshAsScanner')}</option>
+                  {inspectableTokens.length > 0 && (
+                    <optgroup label={t('services.detail.refreshAsTokenGroup')}>
+                      {inspectableTokens.map((tk) => (
+                        <option key={tk.jti} value={`token:${tk.jti}`}>
+                          {t('services.detail.refreshAsTokenOption', {
+                            kind: t(`tokens.kind.${tk.kind}`, tk.kind),
+                            name: tk.label || tk.client_name || tk.user_email || tk.jti.slice(0, 8),
+                          })}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                </Select>
                 {refreshMode === 'token' && selectedInspectToken && (
-                  <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-                    <span className="font-mono">{selectedInspectToken.sub}</span>
-                    <span>·</span>
-                    <ScopeChips scopes={selectedInspectToken.scopes} max={6} />
+                  <div className="flex w-full items-center gap-1.5 overflow-hidden">
+                    <ScopeChips scopes={selectedInspectToken.scopes} max={3} />
                   </div>
                 )}
               </div>

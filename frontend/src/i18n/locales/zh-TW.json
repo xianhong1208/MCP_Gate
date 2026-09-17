@@ -551,8 +551,8 @@
       "refreshAsTokenGroup": "此伺服器已簽發的 token",
       "refreshAsTokenOption": "{{kind}} · {{name}}",
       "refreshAsHint": {
-        "scanner": "不帶使用者身分的短效 token。對所有人列出相同 tools 的 server 用這個就夠。",
-        "token": "以該 token 的 claims(相同的 subject、client、scope 與 jti)簽一份短效副本,server 看到的與那張 token 完全相同;原 token 本身不會被讀出。server 依 token 顯示不同 tools 時用這個。"
+        "scanner": "匿名短效 token;對所有人列出相同 tools 的 server 用這個即可。",
+        "token": "以這張 token 的身分(相同 subject、client、scope、jti)檢視,不會讀出原 token。"
       },
       "refreshTokenGone": "該 token 已失效,改用 scanner token。",
       "noToolsFound": "找不到 tools",
