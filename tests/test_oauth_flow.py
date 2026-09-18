@@ -301,7 +301,7 @@ def test_admin_client_management(owner_client):
 
 
 def test_key_rotation_keeps_old_tokens_verifiable(owner_client, service):
-    pat = owner_client.post("/api/oauth/tokens/personal", json={"service_id": service["id"], "expires_days": 1}).json()
+    pat = owner_client.post("/api/oauth/tokens/personal", json={"service_id": service["id"], "expires_days": 1, "label": "test"}).json()
     r = owner_client.post("/api/oauth/keys/rotate")
     assert r.status_code == 200
     keys = owner_client.get("/api/oauth/keys").json()["keys"]
@@ -312,7 +312,7 @@ def test_key_rotation_keeps_old_tokens_verifiable(owner_client, service):
     jwt.decode(pat["access_token"], _jwks_key(owner_client, pat["access_token"]), algorithms=["RS256"],
                audience=RESOURCE)
     # New tokens use the new kid
-    pat2 = owner_client.post("/api/oauth/tokens/personal", json={"service_id": service["id"], "expires_days": 1}).json()
+    pat2 = owner_client.post("/api/oauth/tokens/personal", json={"service_id": service["id"], "expires_days": 1, "label": "test"}).json()
     assert jwt.get_unverified_header(pat2["access_token"])["kid"] != jwt.get_unverified_header(pat["access_token"])["kid"]
 
 
@@ -326,3 +326,43 @@ def test_snippets(owner_client, service):
 @pytest.mark.parametrize("path", ["/api/oauth/clients", "/api/oauth/tokens", "/api/services", "/api/session/me"])
 def test_admin_endpoints_require_login(client, path):
     assert client.get(path).status_code == 401
+
+
+def test_forget_consent_asks_again_and_is_audited(owner_client, service):
+    reg = _register(owner_client)
+    _authorize_and_consent(owner_client, reg["client_id"], remember=True)
+    consent = owner_client.get("/api/oauth/consents").json()["consents"][0]
+
+    r = owner_client.delete(f"/api/oauth/consents/{consent['id']}")
+    assert r.status_code == 200, r.text
+    assert owner_client.get("/api/oauth/consents").json()["total"] == 0
+
+    # The next authorize request goes back through the consent screen instead of redirecting with a code
+    verifier, challenge = make_pkce()
+    r = owner_client.get("/oauth/authorize", params={
+        "response_type": "code", "client_id": reg["client_id"], "redirect_uri": REDIRECT_URI,
+        "code_challenge": challenge, "code_challenge_method": "S256", "resource": RESOURCE, "state": "again",
+    }, follow_redirects=False)
+    assert r.status_code == 302 and "/consent" in r.headers["location"]
+
+    entries = [e for e in owner_client.get("/api/audit/logs").json()["logs"] if e["action"] == "oauth_consent_delete"]
+    assert len(entries) == 1
+    assert entries[0]["resource_id"] == consent["id"]
+    assert entries[0]["details"]["client_id"] == reg["client_id"]
+
+    # Deleting twice reads as not found
+    assert owner_client.delete(f"/api/oauth/consents/{consent['id']}").status_code == 404
+
+
+def test_forget_consent_is_scoped_to_owner(owner_client, service, db_session):
+    """Another user's consent id is indistinguishable from a missing one, and stays untouched."""
+    from src.adapters import AdminUserAdapter, OAuthConsentAdapter
+
+    reg = _register(owner_client)
+    other = AdminUserAdapter.create(db_session, email="other@example.com", username="other", password_hash=None)
+    foreign = OAuthConsentAdapter.upsert(db_session, other.id, reg["client_id"], RESOURCE, "mcp:read")
+
+    r = owner_client.delete(f"/api/oauth/consents/{foreign.id}")
+    assert r.status_code == 404
+    assert OAuthConsentAdapter.get(db_session, other.id, reg["client_id"], RESOURCE) is not None
+    assert owner_client.get("/api/oauth/consents").json()["total"] == 0

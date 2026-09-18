@@ -17,7 +17,7 @@ from src.adapters import (
 from src.adapters.exceptions import AdapterError
 from src.api.schemas import (
     AuditLogInfo, AuditLogListResponse, AuditLogStatsResponse, BulkHealthCheckResponse, HealthResponse,
-    MCPToolInfo, RefreshToolsResponse, ServiceCreateRequest, ServiceHealthCheckResponse, ServiceHealthInfo,
+    MCPToolInfo, RefreshToolsRequest, RefreshToolsResponse, ServiceCreateRequest, ServiceHealthCheckResponse, ServiceHealthInfo,
     ServiceInfo, ServiceListResponse, ServiceUpdateRequest,
 )
 from src.audit import ActorType, AuditAction, AuditService, AuditStatus, ResourceType
@@ -172,15 +172,20 @@ async def get_service_tools(service_id: str, db: Session = Depends(get_db), _: A
 
 
 @router.post("/api/services/{service_id}/refresh-tools", response_model=RefreshToolsResponse, tags=["Services"])
-async def refresh_service_tools(service_id: str, http_request: Request, db: Session = Depends(get_db),
-                                user: AdminUser = Depends(get_current_user)):
+async def refresh_service_tools(service_id: str, http_request: Request, body: Optional[RefreshToolsRequest] = None,
+                                db: Session = Depends(get_db), user: AdminUser = Depends(get_current_user)):
     """Connect to the service, fetch its tools list and sync it.
 
-    Services protected by MCP Center OAuth connect with a self-signed short-lived token.
+    By default services protected by MCP Center OAuth are inspected with the anonymous scanner token. A server
+    that shows different tools per caller can be inspected as one of its issued tokens (`identity=token` +
+    `jti`): a short-lived copy of that token's claims is signed and presented.
     """
     from src.discovery.health_monitor import resolve_service_auth_token
     from src.discovery.scanner import get_scanner
+    from src.oauth import service as oauth_service
+    from src.oauth.errors import OAuthError
 
+    body = body or RefreshToolsRequest()
     try:
         service = ServiceAdapter.get_existing(db, service_id)
     except AdapterError as e:
@@ -188,10 +193,20 @@ async def refresh_service_tools(service_id: str, http_request: Request, db: Sess
     if not service.host or not service.port:
         raise HTTPException(status_code=400, detail={"error": "service.no_host_port",
                                                      "fallback": "Service has no host or port configured"})
+    if body.identity == "token":
+        record = OAuthTokenAdapter.get(db, body.jti or "")
+        if record is None:
+            raise HTTPException(status_code=404, detail={"error": "oauth.token_not_found", "fallback": "Token not found"})
+        try:
+            auth_token = oauth_service.mint_probe_token_like(db, record=record, service=service)
+        except OAuthError as e:
+            raise HTTPException(status_code=400, detail={"error": f"oauth.{e.error}", "fallback": e.description})
+    else:
+        auth_token = resolve_service_auth_token(db, service)
     try:
         tools = await get_scanner().get_tools_list(
             host=service.host, port=service.port, path=service.mcp_path, protocol=service.protocol,
-            auth_token=resolve_service_auth_token(db, service),
+            auth_token=auth_token,
         )
     except PermissionError:
         raise HTTPException(status_code=502, detail={"error": "service.remote_permission_denied",
@@ -205,7 +220,8 @@ async def refresh_service_tools(service_id: str, http_request: Request, db: Sess
     ])
     infos = [_tool_info(t) for t in MCPToolAdapter.get_by_service(db, service_id)]
     _audit(db, http_request, user, "refresh_tools", ResourceType.SERVICE, service_id,
-           {"service_name": service.name, "tools_count": len(infos)})
+           {"service_name": service.name, "tools_count": len(infos), "identity": body.identity,
+            **({"jti": body.jti} if body.identity == "token" else {})})
     return RefreshToolsResponse(success=True, message=f"Refreshed {len(infos)} tools", tools_count=len(infos),
                                 tools=infos)
 

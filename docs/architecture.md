@@ -76,4 +76,4 @@ Health changes are broadcast to the console over `WS /ws/services`.
 
 ## Managed servers
 
-`src/orchestrator` runs MCP servers as Docker containers: catalog entries (`catalog/*.yaml`) are HTTP images started directly; bring-your-own definitions run inside `mcp-runtime:1`, where `supergateway` bridges the server's stdio to HTTP. Every launch argument passes `src/marketplace/argv_policy.py`. Successful launches register a `Service` row automatically so tokens, health checks and tool sync work the same as for external servers.
+`src/orchestrator` runs MCP servers behind a `Runtime` (`docker_runtime.py`: sibling containers, the default; `process_runtime.py`: local subprocesses for hosts without Docker, `MCP_RUNTIME=process`). Under the Docker runtime: catalog entries (`catalog/*.yaml`) are HTTP images started directly; bring-your-own definitions run inside `mcp-runtime:1`, where `supergateway` bridges the server's stdio to HTTP. Every launch argument passes `src/marketplace/argv_policy.py`. Successful launches register a `Service` row automatically so tokens, health checks and tool sync work the same as for external servers.

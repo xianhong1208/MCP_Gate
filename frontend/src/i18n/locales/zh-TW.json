@@ -5,6 +5,7 @@
     "tokens": "Token",
     "issueToken": "簽發 Token",
     "clients": "OAuth Client",
+    "consents": "已記住的同意",
     "marketplace": "市集",
     "audit": "稽核日誌"
   },
@@ -133,6 +134,29 @@
     "errorTitle": "無法取得授權請求",
     "backToDashboard": "返回儀表板"
   },
+  "consents": {
+    "list": {
+      "title": "已記住的同意",
+      "subtitle": "你在同意畫面勾選「記住這次的決定」後留下的紀錄。只要 scope 涵蓋,該 client 之後對同一個 server 的請求就會略過同意畫面。",
+      "refresh": "重新整理",
+      "searchPlaceholder": "搜尋 client、server、scope...",
+      "colClient": "Client",
+      "colAudience": "Server / Audience",
+      "colScopes": "已記住的 scope",
+      "colGranted": "最後授權",
+      "colActions": "操作",
+      "noAudience": "不限 server",
+      "empty": "沒有已記住的同意",
+      "emptyHint": "在同意畫面勾選「記住這次的決定」後,紀錄會出現在這裡。",
+      "adjustFilters": "請調整搜尋條件",
+      "forgetTitle": "忘記這筆同意",
+      "forgetTarget": "{{name}} 的同意紀錄",
+      "forgetSuccess": "已忘記這筆同意,該 client 下次會重新詢問。",
+      "forgetFail": "無法忘記同意:{{message}}",
+      "loadFail": "無法載入同意紀錄",
+      "count": "共 {{count}} 筆"
+    }
+  },
   "dashboard": {
     "title": "儀表板",
     "subtitle": "MCP 服務、OAuth client 與 token 總覽",
@@ -181,6 +205,12 @@
       "title": "{{n}} 個 client 等待核准",
       "hint": "動態註冊的 client 在核准前無法取得 token。",
       "review": "前往審核"
+    },
+    "issuerMismatch": {
+      "title": "{{n}} 個 host 在存取 OAuth 端點時與 OAUTH_ISSUER({{issuer}})不一致",
+      "hint": "Token 的 iss 與 discovery 公告的網址都是上面的 issuer,透過以下位址存取的 client 會驗證失敗或連到錯的端點:",
+      "seen": "{{n}} 次請求",
+      "fix": "請把 OAUTH_ISSUER 改成 client 實際使用的位址,或改由 issuer 的 host 存取,並把反向代理加入 security.trusted_proxies。詳見 docs/troubleshooting.md。"
     },
     "chart": {
       "title": "Token 活動(最近 7 天)",
@@ -328,11 +358,13 @@
       "restrictedHint": "僅限此服務允許的 scope。",
       "noScopes": "尚未定義任何 scope,token 將不帶 scope。",
       "defaultTag": "預設",
+      "serverScopeTag": "僅此伺服器",
       "expiresLabel": "有效期限",
       "days": "{{n}} 天",
       "customDays": "自訂",
       "labelLabel": "標籤",
       "labelPlaceholder": "例如:my-laptop、ci-runner",
+      "labelHint": "必填。寫下要使用它的 client 或機器,列表與「以誰的身分檢視」都靠這個名稱辨認。",
       "cancel": "取消",
       "submit": "簽發 Token",
       "submitting": "簽發中...",
@@ -374,6 +406,13 @@
       "toolsCount_one": "{{n}} 個 tool",
       "toolsCount_other": "{{n}} 個 tools",
       "inputSchema": "Input Schema",
+      "paramCount": "{{n}} 個參數",
+      "schemaView": {
+        "table": "欄位"
+      },
+      "noParams": "此工具不需要參數。",
+      "paramRequired": "必填",
+      "paramDefault": "預設",
       "copyInputSchema": "複製 input schema",
       "noTools": "找不到 tools",
       "refreshHint": "點擊「從 MCP Server 重新整理」以取得 tools",
@@ -513,7 +552,17 @@
       "tagsTitle": "標籤",
       "noTags": "尚無標籤",
       "mcpToolsTitle": "MCP Tools ({{n}})",
+      "mcpToolsLabel": "MCP Tools",
       "refreshFromServer": "從 Server 重新整理",
+      "refreshAs": "以誰的身分檢視",
+      "refreshAsScanner": "Scanner token(匿名)",
+      "refreshAsTokenGroup": "此伺服器已簽發的 token",
+      "refreshAsTokenOption": "{{kind}} · {{name}}",
+      "refreshAsHint": {
+        "scanner": "匿名短效 token;對所有人列出相同 tools 的 server 用這個即可。",
+        "token": "以這張 token 的身分(相同 subject、client、scope、jti)檢視,不會讀出原 token。"
+      },
+      "refreshTokenGone": "該 token 已失效,改用 scanner token。",
       "noToolsFound": "找不到 tools",
       "usageHistoryTitle": "使用量歷史(最近 30 天)",
       "usageHistorySubtitle": "此服務的 Token 驗證請求",
@@ -541,6 +590,9 @@
       "staticTokenBadge": "已設定靜態 Bearer token",
       "scopesTitle": "允許的 scope",
       "scopesAll": "不限制,任何已註冊的 scope 都可簽發。",
+      "ownScopesTitle": "此伺服器宣告的 scope",
+      "ownScopesSubtitle": "只存在於這台伺服器,與全域註冊表並行;簽給其他伺服器的 token 不會帶有這些 scope。名稱不可與全域 scope 重複。",
+      "ownScopesEmpty": "此伺服器尚未宣告自己的 scope",
       "integrationTitle": "接入設定",
       "integrationSubtitle": "Server 端(FastMCP)與 MCP client 端可直接複製的設定。",
       "snippetsUnavailable": "目前無法取得接入範例。",
@@ -559,6 +611,7 @@
         "oauth": "OAuth",
         "pat": "個人 token",
         "server": "伺服器端",
+        "hooks": "伺服器端 + 撤銷清單",
         "client": "用戶端"
       }
     },
@@ -611,7 +664,8 @@
     "authMethod": {
       "none": "無(公開 client,PKCE)",
       "client_secret_basic": "Client secret(HTTP Basic)",
-      "client_secret_post": "Client secret(POST body)"
+      "client_secret_post": "Client secret(POST body)",
+      "private_key_jwt": "私鑰簽章 JWT(RFC 7523)"
     },
     "col": {
       "name": "Client",
@@ -628,7 +682,7 @@
       "revoked": "沒有已撤銷的 client"
     },
     "emptyHint": "Client 動態註冊後會出現在這裡,也可以手動登記。",
-    "confidential": "機密 client(有 secret)",
+    "confidential": "機密 client(需向 token 端點認證)",
     "public": "公開 client(PKCE)",
     "neverUsed": "從未",
     "noRedirect": "無",
@@ -653,6 +707,13 @@
       "grantTypes": "Grant type",
       "authMethod": "Token endpoint 認證方式",
       "authMethodHint": "伺服器端應用請選 client secret 方式;secret 只會在登記完成後顯示一次。",
+      "jwksIntro": "Client 每次向 token 端點請求時,用自己的私鑰簽一個短效 JWT;MCP Center 以下方的公鑰驗證。不會核發 secret。",
+      "jwksUri": "JWKS URI",
+      "jwksUriHint": "Client 的 JSON Web Key Set 網址(HTTPS)。第一次使用時抓取並快取;遇到未知的 kid 會重新抓取,因此可以輪替金鑰。",
+      "jwks": "JWKS 文件",
+      "jwksHint": "或直接貼上 JWKS JSON(只放公鑰,RSA 或 EC P-256)。兩者擇一填寫。",
+      "jwksRequired": "請提供 JWKS URI 或 JWKS 文件其中一項,不可同時填寫。",
+      "jwksInvalid": "JWKS 文件不是合法的 JSON。",
       "cancel": "取消",
       "submit": "登記",
       "submitting": "登記中...",
@@ -670,6 +731,7 @@
       "clientSecret": "client_secret",
       "oneTime": "Secret 只顯示這一次,請立即保存。",
       "publicClient": "這是公開 client,以 PKCE 認證,沒有 secret。",
+      "privateKeyJwt": "此 client 以簽章 JWT(private_key_jwt)認證,沒有 secret。請送出 client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer 與用已登記金鑰簽章的 client_assertion。",
       "done": "完成"
     },
     "scopes": {
@@ -871,7 +933,9 @@
       "service": "服務",
       "admin": "管理員",
       "system": "系統",
-      "oauth_client": "OAuth Client"
+      "oauth_client": "OAuth Client",
+      "oauth_consent": "同意紀錄",
+      "oauth_scope": "Scope"
     },
     "status": {
       "success": "成功",
@@ -885,6 +949,9 @@
       "oauth_client_approve": "核准 Client",
       "oauth_client_revoke": "撤銷 Client",
       "oauth_client_delete": "刪除 Client",
+      "oauth_consent_delete": "移除同意紀錄",
+      "oauth_scope_upsert": "儲存 Scope",
+      "oauth_scope_delete": "刪除 Scope",
       "oauth_key_rotate": "輪替簽章金鑰",
       "refresh_tools": "重新整理 Tools",
       "scan_services": "網路掃描",
@@ -949,6 +1016,8 @@
       "consent_not_found": "找不到同意紀錄",
       "invalid_scope_name": "Scope 名稱無效(不可含空白)",
       "scope_not_found": "找不到 scope",
+      "scope_owned_by_service": "已有伺服器宣告同名的 scope",
+      "scope_is_global": "此名稱是全域 scope,請到註冊表編輯",
       "system_client": "內建 client 不可修改",
       "invalid_request": "無效的授權請求",
       "access_denied": "存取被拒",

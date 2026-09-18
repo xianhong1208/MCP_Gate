@@ -8,9 +8,5 @@
 
 ## Planned
 - **Verify GitHub / Google sign-in against live accounts.** The providers are implemented and unit-tested but have not been exercised with real OAuth apps.
-- **Multi-issuer / reverse-proxy detection.** Warn when the request host differs from `OAUTH_ISSUER`.
-- **Usage visibility for offline-verified servers.** Only servers that call `/oauth/introspect` report usage; a lightweight usage hook for FastMCP would close the gap.
 - **`private_key_jwt` client authentication (RFC 7523)** for machine-to-machine clients.
-- **Per-server scopes.** The scope registry is global today; servers should be able to declare their own.
-- **Orchestrator:** multiple hosts and non-Docker runtimes.
-- **Console:** manage remembered consents from the UI (the API exists).
+- **Orchestrator:** multiple hosts (a host registry and a remote agent speaking the `Runtime` interface).

@@ -11,6 +11,7 @@ const STORAGE_KEY = 'mcp_redirect_after_login'
 export function safeRedirectPath(raw, fallback = '/') {
   if (typeof raw !== 'string' || raw.length === 0 || raw.length > 2048) return fallback
   if (!raw.startsWith('/') || raw.startsWith('//') || raw.startsWith('/\\')) return fallback
+  // eslint-disable-next-line no-control-regex -- rejecting control characters and spaces is the point
   if (/[\x00-\x20]/.test(raw)) return fallback
   for (const own of ['/login', '/setup']) {
     if (raw === own || raw.startsWith(`${own}?`) || raw.startsWith(`${own}/`)) return fallback

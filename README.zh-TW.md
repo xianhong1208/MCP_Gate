@@ -36,7 +36,7 @@ MCP Center 把標準化的身分驗證放在你每一台 MCP server 前面。[Fa
 - **同意頁。** 動態註冊的 client 第一次連線要請擁有者按「允許」;可依 client + server 記住。你自己登記的 client 免同意。
 - **Personal access token(PAT)。** 從管理台簽長效 bearer token 給腳本、CI 與不會走 OAuth 的 client,附上可直接貼的 `claude mcp add` 與 `mcpServers` 片段。
 - **服務登錄與健康監控。** 手動登記或自動掃描 MCP server、同步 tools 列表、每 30 秒健康檢查、狀態變更經 WebSocket 即時推播。
-- **Marketplace 與 orchestrator。** 從 catalog 一鍵部署 MCP server;或貼一段標準的 `{command, args, env}`,由 MCP Center 容器化並掛上 HTTP bridge(需要 Docker)。
+- **Marketplace 與 orchestrator。** 從 catalog 一鍵部署 MCP server;或貼一段標準的 `{command, args, env}`,由 MCP Center 掛上 HTTP bridge 執行,可以跑在 Docker 容器裡,也可以直接跑成本機行程(`MCP_RUNTIME=process`)。
 - **零設定啟動。** 預設 SQLite、首次啟動自動產生密鑰、瀏覽器內的擁有者帳號設定精靈。PostgreSQL 與 GitHub / Google 登入只差幾個環境變數。
 
 ## 安裝 MCP Center
@@ -44,7 +44,7 @@ MCP Center 把標準化的身分驗證放在你每一台 MCP server 前面。[Fa
 前置需求:
 
 - Python 3.11 以上與 [uv](https://docs.astral.sh/uv/)。
-- Docker——只有使用 Marketplace 或自帶 MCP server 時才需要。
+- Docker——只有 Marketplace 需要;自帶 MCP server 也可以不用 Docker(`MCP_RUNTIME=process`,需要 PATH 上有 `supergateway`)。
 - Node.js 18 以上——只有要改管理台前端時才需要。
 
 ```bash
@@ -165,7 +165,7 @@ MCP Center 扮演 MCP 規範中的 **authorization server**;你的 MCP server �
 | 步驟 | 誰 | 發生什麼事 |
 |---|---|---|
 | Discovery | client → server → MCP Center | server 回 `401` 並在 `WWW-Authenticate` 指向它的 protected-resource metadata,裡面寫著 MCP Center 是授權伺服器;client 再抓 `/.well-known/oauth-authorization-server`。 |
-| 註冊 | client → MCP Center | client 動態註冊(`POST /oauth/register`)拿到 `client_id`。public client 用 PKCE;confidential client 拿到 secret。 |
+| 註冊 | client → MCP Center | client 動態註冊(`POST /oauth/register`)拿到 `client_id`。public client 用 PKCE;confidential client 拿到 secret,或登記公鑰後以簽章 JWT 認證(`private_key_jwt`,RFC 7523)。 |
 | 授權 | 瀏覽器 → MCP Center | `/oauth/authorize` 驗證請求、用 `resource` 參數綁定目標 server,顯示同意頁(記住過或受信任的 client 直接略過)。 |
 | Token | client → MCP Center | `/oauth/token` 用授權碼——檢查 PKCE、redirect URI、resource——換出 RS256 access token 與 refresh token。 |
 | 驗證 | server | server 抓一次 JWKS,之後在本地驗簽章、issuer、audience、有效期與 scope。 |
@@ -181,9 +181,10 @@ Access token 的 claim:`iss`、`sub`、`aud`、`scope`、`client_id`、`jti`、`
 |---|---|
 | Issuer | MCP Center 的公開網址(`OAUTH_ISSUER`)。寫進每個 token 的 `iss`;client 與 server 用它做 discovery。 |
 | Classic client | 在管理台手動登記、允許不用 PKCE 並套用預設 resource 的機密 client;給 OAuth 模組只認 client_id / client_secret 的平台用。 |
+| private_key_jwt | 不用共享 secret 的 client 認證:client 登記 JWKS(直接貼上或提供 `jwks_uri`),每次向 token 端點請求時簽一個短效 JWT。適合 CI 工作、後端服務等機器對機器的 client。 |
 | Audience | token 對哪個 MCP URL 有效(`aud` claim)。在管理台逐台設定;server 的 `JWTVerifier(audience=…)` 必須一致。 |
 | Resource server | 你的 MCP server。只驗 token、從不簽發。管理台稱之為 *service*。 |
-| Scope | token 在 server 上可以做什麼,例如 `mcp:tools:invoke`。管理台的 scope 註冊表定義整個集合。 |
+| Scope | token 在 server 上可以做什麼,例如 `mcp:tools:invoke`。管理台的全域 scope 註冊表定義共用集合;每台 server 還可以宣告只有簽給它的 token 才能帶的專屬 scope。 |
 | DCR | 動態註冊(RFC 7591):client 第一次連線時自己建立 `client_id`。 |
 | PAT | Personal access token:從管理台簽的長效 access token,當一般 bearer token 使用。 |
 
@@ -210,7 +211,7 @@ Access token 的 claim:`iss`、`sub`、`aud`、`scope`、`client_id`、`jti`、`
 | 頁面 | 在這裡做什麼 |
 |---|---|
 | **Dashboard** | 服務健康、token 活動、最近事件、系統狀態。 |
-| **Services** | 登記或掃描 MCP server、設定 audience 與允許的 scope、更新 tools、執行健康檢查、複製接入片段。 |
+| **Services** | 登記或掃描 MCP server、設定 audience 與允許的 scope、宣告 server 專屬 scope、更新 tools、執行健康檢查、複製接入片段。 |
 | **Tokens · Issue Token** | MCP Center 簽發過的所有 token——OAuth 授權與 PAT——含撤銷、到期與最後使用資訊。 |
 | **OAuth Clients** | 動態註冊與受信任的 client:核准、撤銷、刪除;scope 註冊表;簽章金鑰輪替。 |
 | **Marketplace** | 從 catalog 部署 MCP server,或自帶 `{command, args, env}`。 |

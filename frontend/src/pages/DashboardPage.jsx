@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import clsx from 'clsx'
 import { useTranslation } from 'react-i18next'
 import {
-  Key, Activity, Plus, Server, BarChart3, Clock, Bot, Search, ShieldX, ArrowUpRight,
+  Key, Activity, Plus, Server, BarChart3, Clock, Bot, Search, ShieldX, ArrowUpRight, Globe,
 } from 'lucide-react'
 import { XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Line, LineChart } from 'recharts'
 import { servicesApi, statsApi, systemApi, oauthApi } from '../services/api'
@@ -11,7 +11,7 @@ import useServiceWebSocket from '../hooks/useServiceWebSocket'
 import LastChecked from '../components/LastChecked'
 import {
   PageHeader, Button, Card, CardHeader, StatTile, StatusPill, StatusDot, Alert, EmptyState, LoadingBlock, Select,
-  Table, THead, TBody, TR, TH, TD, SectionLabel, dotTones,
+  Table, TBody, TR, TD, SectionLabel, dotTones,
 } from '../components/ui'
 
 // recharts stroke attrs cannot read CSS vars: give fallback colors; the real line color
@@ -351,6 +351,29 @@ export default function DashboardPage() {
         </Alert>
       )}
 
+      {/* Issuer mismatch notice: OAuth requests arrived through a host that is not OAUTH_ISSUER (see #8) */}
+      {!isLoading && oauthOverview?.issuer_mismatches?.length > 0 && (
+        <Alert
+          tone="warning"
+          icon={Globe}
+          title={t('dashboard.issuerMismatch.title', { n: oauthOverview.issuer_mismatches.length, issuer: oauthOverview.issuer })}
+        >
+          <p>{t('dashboard.issuerMismatch.hint')}</p>
+          <ul className="mt-1.5 space-y-0.5">
+            {oauthOverview.issuer_mismatches.map((m) => (
+              <li key={m.base_url} className="flex flex-wrap items-baseline gap-x-2">
+                <code className="font-mono text-xs text-foreground">{m.base_url}</code>
+                <span className="text-xs tabular-nums">
+                  {t('dashboard.issuerMismatch.seen', { n: m.count })}
+                  {m.last_seen && <> · <LastChecked value={m.last_seen} withIcon={false} className="text-xs" /></>}
+                </span>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-1.5">{t('dashboard.issuerMismatch.fix')}</p>
+        </Alert>
+      )}
+
       {/* Chart + recent activity */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-2">
@@ -412,7 +435,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Health / usage / system */}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+      <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-3">
         <ServiceHealthCard health={overview.service_health} offlineServices={overview.offline_services} isLoading={isLoading} />
         <UsageSummaryCard summary={usageSummary} isLoading={isLoading} />
         <SystemStatusCard scheduler={overview.scheduler} adminCount={overview.admin_count} issuer={oauthOverview?.issuer} kindData={kindData} isLoading={isLoading} />

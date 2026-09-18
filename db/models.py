@@ -239,6 +239,10 @@ class OAuthClient(Base):
     response_types = Column(Text, nullable=False, default='["code"]')
     scope = Column(String(512), nullable=True)
     token_endpoint_auth_method = Column(String(32), default="none", nullable=False)
+    # private_key_jwt (RFC 7523): the client's public keys, either inline (a JWKS document as JSON text) or by
+    # reference (fetched and cached). Exactly one is set for such clients; both are null for every other method.
+    jwks = Column(Text, nullable=True)
+    jwks_uri = Column(String(512), nullable=True)
     # Classic-client compatibility (manually registered confidential clients only): PKCE may be skipped and
     # a default resource is assumed when the client sends none. MCP clients never need either.
     require_pkce = Column(Boolean, default=True, nullable=False)
@@ -269,7 +273,9 @@ class OAuthClient(Base):
             "response_types": _json_list(self.response_types) or ["code"],
             "scope": self.scope,
             "token_endpoint_auth_method": self.token_endpoint_auth_method,
-            "is_confidential": self.client_secret_hash is not None,
+            "is_confidential": self.token_endpoint_auth_method != "none",
+            "jwks_uri": self.jwks_uri,
+            "jwks": json.loads(self.jwks) if self.jwks else None,
             "require_pkce": self.require_pkce,
             "default_resource": self.default_resource,
             "created_via": self.created_via,
@@ -335,6 +341,30 @@ class OAuthScope(Base):
 
     def to_dict(self) -> dict:
         return {"name": self.name, "description": self.description, "is_default": self.is_default}
+
+
+class ServiceScope(Base):
+    """A scope declared by one MCP server, in addition to the global registry.
+
+    Global scopes (OAuthScope) apply to every server; a service scope only exists for the server that declared it
+    and may not reuse a global name. The scope a request may be granted for a server is the global registry
+    (restricted by Service.oauth_scopes when set) plus that server's own scopes.
+    """
+    __tablename__ = "service_scopes"
+    __table_args__ = (UniqueConstraint("service_id", "name", name="uq_service_scope"),)
+
+    id = Column(Uuid, primary_key=True, default=uuid.uuid4)
+    service_id = Column(Uuid, ForeignKey("services.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(128), nullable=False)
+    description = Column(String(256), nullable=True)
+    is_default = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, default=local_now, nullable=False)
+
+    service = relationship("Service")
+
+    def to_dict(self) -> dict:
+        return {"name": self.name, "description": self.description, "is_default": self.is_default,
+                "service_id": str(self.service_id)}
 
 
 class OAuthToken(Base):
@@ -450,6 +480,9 @@ class TokenUsage(Base):
     success = Column(Boolean, default=True, nullable=False)
     ip_address = Column(String(45), nullable=True)
     used_at = Column(DateTime, default=local_now, nullable=False, index=True)
+    # How many requests this row stands for: 1 for events recorded here, N for a batch an MCP server reported
+    # through /oauth/usage (event = verified)
+    count = Column(Integer, default=1, nullable=False, server_default="1")
 
     service = relationship("Service")
 

@@ -15,7 +15,7 @@ import hashlib
 import json
 import secrets
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Iterable, Optional
 from urllib.parse import urlencode, urlparse
 
@@ -27,17 +27,19 @@ from db.models import (
 from db.seed import CONSOLE_CLIENT_ID, SCANNER_CLIENT_ID
 from src.adapters import (
     OAuthAuthRequestAdapter, OAuthClientAdapter, OAuthCodeAdapter, OAuthConsentAdapter, OAuthScopeAdapter,
+    ServiceScopeAdapter,
     OAuthTokenAdapter, ServiceAdapter, TokenUsageAdapter, normalize_audience,
 )
 from src.config import Config
-from src.oauth import signing_keys
+from src.oauth import client_assertion, signing_keys
 from src.oauth.consent_policy import should_skip_consent
 from src.oauth.errors import OAuthError
 from src.oauth.jwt_utils import JWTVerifyError, decode_rs256, sign_rs256, unverified_header
 from src.utils.crypto import hash_token
 
 SERVER_GRANT_TYPES = ["authorization_code", "refresh_token", "client_credentials"]
-SERVER_AUTH_METHODS = ["client_secret_basic", "client_secret_post", "none"]
+SERVER_AUTH_METHODS = ["client_secret_basic", "client_secret_post", "private_key_jwt", "none"]
+ASSERTION_SIGNING_ALGS = ["RS256", "ES256"]
 CODE_CHALLENGE_METHOD = "S256"
 AUTH_REQUEST_TTL = timedelta(minutes=10)
 SCANNER_TOKEN_TTL_SECONDS = 120
@@ -112,6 +114,25 @@ def register_client(
     if "client_credentials" in grant_types and auth_method == "none":
         raise OAuthError("invalid_client_metadata", "client_credentials requires a confidential client")
 
+    # private_key_jwt: the client registers its public keys, inline or by reference (RFC 7591 jwks / jwks_uri)
+    jwks_doc = metadata.get("jwks")
+    jwks_uri = (metadata.get("jwks_uri") or "").strip() or None
+    if auth_method == "private_key_jwt":
+        if bool(jwks_doc) == bool(jwks_uri):
+            raise OAuthError("invalid_client_metadata", "private_key_jwt requires exactly one of jwks or jwks_uri")
+        if jwks_doc:
+            if isinstance(jwks_doc, str):
+                try:
+                    jwks_doc = json.loads(jwks_doc)
+                except ValueError:
+                    raise OAuthError("invalid_client_metadata", "jwks must be a JSON object")
+            client_assertion.validate_jwks_document(jwks_doc)
+        else:
+            # MCP Center fetches this URL itself: public https only (loopback allowed on http-issuer dev setups)
+            client_assertion.validate_jwks_uri(jwks_uri, allow_loopback=issuer().startswith("http://"))
+    else:
+        jwks_doc, jwks_uri = None, None
+
     redirect_uris = metadata.get("redirect_uris") or []
     if not isinstance(redirect_uris, list):
         raise OAuthError("invalid_redirect_uri", "redirect_uris must be an array")
@@ -124,8 +145,9 @@ def register_client(
 
     scope = metadata.get("scope")
     if scope:
-        registry = {s.name for s in OAuthScopeAdapter.list_all(db)}
-        unknown = set(str(scope).split()) - registry
+        # No server context at registration time: any scope some server may grant is acceptable here; the
+        # per-server check happens at /authorize against the requested resource.
+        unknown = set(str(scope).split()) - set(supported_scope_names(db))
         if unknown:
             raise OAuthError("invalid_client_metadata", f"unknown scope: {' '.join(sorted(unknown))}")
 
@@ -144,7 +166,7 @@ def register_client(
 
     plaintext_secret = None
     secret_hash = None
-    if auth_method != "none":
+    if auth_method in ("client_secret_basic", "client_secret_post"):
         plaintext_secret = secrets.token_urlsafe(32)
         secret_hash = hash_token(plaintext_secret)
 
@@ -161,6 +183,8 @@ def register_client(
         response_types=json.dumps(metadata.get("response_types") or ["code"]),
         scope=(scope or None),
         token_endpoint_auth_method=auth_method,
+        jwks=json.dumps(jwks_doc) if jwks_doc else None,
+        jwks_uri=jwks_uri,
         require_pkce=require_pkce,
         default_resource=default_resource,
         created_via=created_via,
@@ -182,10 +206,20 @@ def registration_response(client: OAuthClient, secret: Optional[str]) -> dict:
     }
     if client.scope:
         body["scope"] = client.scope
+    if client.jwks_uri:
+        body["jwks_uri"] = client.jwks_uri
+    if client.jwks:
+        body["jwks"] = json.loads(client.jwks)
     if secret:
         body["client_secret"] = secret
         body["client_secret_expires_at"] = 0
     return body
+
+
+def is_resource_server(client: OAuthClient) -> bool:
+    """A confidential client (secret or private key) is trusted as a resource server: it may introspect any
+    token, read the revocation feed and report usage. Public clients may only act on their own tokens."""
+    return client.token_endpoint_auth_method != "none"
 
 
 def verify_client_secret(client: OAuthClient, secret: Optional[str]) -> bool:
@@ -195,9 +229,21 @@ def verify_client_secret(client: OAuthClient, secret: Optional[str]) -> bool:
 
 
 def authenticate_client(db: Session, *, authorization_header: str, form: dict) -> OAuthClient:
-    """Client authentication for the token / revoke / introspect endpoints (Basic, form body, or public client)."""
+    """Client authentication for the token / revoke / introspect endpoints: Basic, form body, a private_key_jwt
+    assertion (RFC 7523), or a public client."""
     client_id = form.get("client_id")
     client_secret = form.get("client_secret")
+    assertion = form.get("client_assertion")
+    assertion_type = form.get("client_assertion_type")
+    if assertion or assertion_type:
+        if assertion_type != client_assertion.CLIENT_ASSERTION_TYPE or not assertion:
+            raise OAuthError("invalid_client", "unsupported client_assertion_type", 401)
+        if client_secret or authorization_header.startswith("Basic "):
+            raise OAuthError("invalid_client", "use one client authentication method only", 401)
+        asserted = client_assertion.unverified_issuer(assertion)
+        if client_id and asserted and client_id != asserted:
+            raise OAuthError("invalid_client", "client_id does not match client_assertion", 401)
+        client_id = client_id or asserted
     if authorization_header.startswith("Basic "):
         try:
             decoded = base64.b64decode(authorization_header[6:]).decode()
@@ -211,7 +257,14 @@ def authenticate_client(db: Session, *, authorization_header: str, form: dict) -
         raise OAuthError("invalid_client", "unknown or revoked client", 401)
     if not client.is_approved:
         raise OAuthError("unauthorized_client", "client is pending approval", 403)
-    if client.token_endpoint_auth_method != "none" and not verify_client_secret(client, client_secret):
+    if client.token_endpoint_auth_method == "private_key_jwt":
+        if not assertion:
+            raise OAuthError("invalid_client", "client_assertion required", 401)
+        client_assertion.verify_client_assertion(client, assertion, token_endpoint=f"{issuer()}/oauth/token",
+                                                 issuer=issuer())
+    elif assertion:
+        raise OAuthError("invalid_client", "client is not registered for private_key_jwt", 401)
+    elif client.token_endpoint_auth_method != "none" and not verify_client_secret(client, client_secret):
         raise OAuthError("invalid_client", "client authentication failed", 401)
     return client
 
@@ -223,29 +276,47 @@ def validate_redirect_uri(client: OAuthClient, redirect_uri: str) -> bool:
 # ---------------------------------------------------------------------------
 # scope / resource
 # ---------------------------------------------------------------------------
-def scope_registry(db: Session) -> dict:
-    return {s.name: s for s in OAuthScopeAdapter.list_all(db)}
+def scope_registry(db: Session, service: Optional[Service] = None) -> dict:
+    """Scopes that exist for a request: the global registry plus, when a server is known, that server's own
+    scopes (names are disjoint by construction)."""
+    registry = {s.name: s for s in OAuthScopeAdapter.list_all(db)}
+    if service is not None:
+        registry.update({s.name: s for s in ServiceScopeAdapter.list_for_service(db, service.id)})
+    return registry
 
 
 def supported_scope_names(db: Session) -> list[str]:
-    return [s.name for s in OAuthScopeAdapter.list_all(db)]
+    """Every scope name any server may grant: the global registry plus all service-declared scopes."""
+    names = {s.name for s in OAuthScopeAdapter.list_all(db)} | {s.name for s in ServiceScopeAdapter.list_all(db)}
+    return sorted(names)
+
+
+def effective_scopes(db: Session, service: Service) -> list[dict]:
+    """What a token for ``service`` may carry, for the console: global scopes (restricted by
+    Service.oauth_scopes when set) then the server's own scopes, each tagged with its source."""
+    restricted = set(service.oauth_scopes.split()) if service.oauth_scopes else None
+    out = [dict(s.to_dict(), source="global") for s in OAuthScopeAdapter.list_all(db)
+           if restricted is None or s.name in restricted]
+    out += [dict(s.to_dict(), source="service") for s in ServiceScopeAdapter.list_for_service(db, service.id)]
+    return out
 
 
 def resolve_scope(db: Session, requested: Optional[str], client: Optional[OAuthClient],
                   service: Optional[Service]) -> str:
     """Decide the scope actually granted.
 
-    - unknown scope -> invalid_scope
+    - unknown scope -> invalid_scope (the registry is the global one plus the server's own scopes)
     - client registered with a restricted scope -> cannot exceed it
-    - service configured with oauth_scopes -> cannot exceed it
+    - service configured with oauth_scopes -> global scopes cannot exceed it; its own scopes are always allowed
     - nothing requested -> default scope, intersected with the limits above
     """
-    registry = scope_registry(db)
+    registry = scope_registry(db, service)
     allowed: Optional[set] = None
     if client and client.scope:
         allowed = set(client.scope.split())
     if service and service.oauth_scopes:
-        svc_allowed = set(service.oauth_scopes.split())
+        own = {s.name for s in ServiceScopeAdapter.list_for_service(db, service.id)}
+        svc_allowed = set(service.oauth_scopes.split()) | own
         allowed = svc_allowed if allowed is None else (allowed & svc_allowed)
 
     if requested and requested.strip():
@@ -348,9 +419,9 @@ def get_pending_request(db: Session, request_id: str) -> OAuthAuthorizationReque
 
 def describe_request(db: Session, req: OAuthAuthorizationRequest, user: AdminUser) -> dict:
     """Information shown on the consent page."""
-    registry = scope_registry(db)
     scopes = req.scope.split() if req.scope else []
     service = ServiceAdapter.get_by_audience(db, req.resource) if req.resource else None
+    registry = scope_registry(db, service)
     return {
         "request_id": req.id,
         "client": {
@@ -644,8 +715,8 @@ def revoke_token(db: Session, *, client: OAuthClient, token: str, ip: Optional[s
 def introspect_token(db: Session, token: str, *, caller: OAuthClient, ip: Optional[str] = None) -> dict:
     """RFC 7662. Revoked / expired / signature failure all yield active=false.
 
-    Who may look: the client that owns the token, or a confidential client (has a secret, treated as a resource
-    server -- FastMCP's IntrospectionTokenVerifier is exactly this). A public client can only introspect its own
+    Who may look: the client that owns the token, or a confidential client (secret or private key; treated as a
+    resource server -- FastMCP's IntrospectionTokenVerifier is exactly this). A public client can only introspect its own
     tokens, so nobody can register a throwaway client via DCR and read another token's sub / email / scope.
     """
     inactive = {"active": False}
@@ -654,7 +725,7 @@ def introspect_token(db: Session, token: str, *, caller: OAuthClient, ip: Option
     except OAuthError:
         return inactive
     is_owner = claims.get("client_id") == caller.client_id
-    if not is_owner and not caller.client_secret_hash:
+    if not is_owner and not is_resource_server(caller):
         return inactive
     rec = OAuthTokenAdapter.get(db, claims.get("jti", ""))
     if rec is not None:
@@ -681,6 +752,70 @@ def introspect_token(db: Session, token: str, *, caller: OAuthClient, ip: Option
 
 
 # ---------------------------------------------------------------------------
+# offline verifiers: revocation feed + usage reports
+# ---------------------------------------------------------------------------
+def revoked_feed(db: Session, *, caller: OAuthClient, since: Optional[float] = None) -> dict:
+    """Tokens revoked but not yet expired, for MCP servers that verify JWTs offline and want revocation to take
+    effect before expiry. Bounded by the access-token lifetime. Resource servers only."""
+    if not is_resource_server(caller):
+        raise OAuthError("unauthorized_client", "only confidential clients may read the revocation feed", 403)
+    since_dt = None
+    if since is not None:
+        try:
+            since_dt = datetime.fromtimestamp(float(since), tz=timezone.utc).replace(tzinfo=None)
+        except (TypeError, ValueError, OverflowError):
+            raise OAuthError("invalid_request", "since must be a unix timestamp")
+    now = local_now()
+    rows = OAuthTokenAdapter.list_revoked_unexpired(db, since=since_dt)
+    return {
+        "revoked": [{"jti": t.jti, "revoked_at": int(t.revoked_at.replace(tzinfo=timezone.utc).timestamp()),
+                     "exp": int(t.expires_at.replace(tzinfo=timezone.utc).timestamp())} for t in rows],
+        "now": int(now.replace(tzinfo=timezone.utc).timestamp()),
+    }
+
+
+MAX_USAGE_EVENTS = 1000
+
+
+def report_usage(db: Session, *, caller: OAuthClient, events, ip: Optional[str] = None) -> dict:
+    """Fold verifications an offline MCP server batched up into the token counters and the usage statistics.
+    ``events`` is a list of {jti, count, last_seen (unix)}. Unknown jtis are returned, not stored. Resource
+    servers only."""
+    if not is_resource_server(caller):
+        raise OAuthError("unauthorized_client", "only confidential clients may report usage", 403)
+    if not isinstance(events, list):
+        raise OAuthError("invalid_request", "events must be an array")
+    if len(events) > MAX_USAGE_EVENTS:
+        raise OAuthError("invalid_request", f"at most {MAX_USAGE_EVENTS} events per report")
+    accepted, unknown = 0, []
+    for ev in events:
+        if not isinstance(ev, dict) or not isinstance(ev.get("jti"), str):
+            raise OAuthError("invalid_request", "each event needs a jti")
+        try:
+            count = max(1, int(ev.get("count", 1)))
+        except (TypeError, ValueError):
+            raise OAuthError("invalid_request", "count must be an integer")
+        last_seen = None
+        if ev.get("last_seen") is not None:
+            try:
+                last_seen = datetime.fromtimestamp(float(ev["last_seen"]), tz=timezone.utc).replace(tzinfo=None)
+            except (TypeError, ValueError, OverflowError):
+                raise OAuthError("invalid_request", "last_seen must be a unix timestamp")
+        rec = OAuthTokenAdapter.get(db, ev["jti"])
+        if rec is None:
+            unknown.append(ev["jti"])
+            continue
+        OAuthTokenAdapter.apply_usage(db, rec, count=count, last_seen=last_seen)
+        TokenUsageAdapter.record(
+            db, event="verified", jti=rec.jti, client_id=rec.client_id, sub=rec.sub, audience=rec.audience,
+            service_id=str(rec.service_id) if rec.service_id else None, success=True, ip_address=ip,
+            count=count, used_at=last_seen,
+        )
+        accepted += 1
+    return {"accepted": accepted, "unknown": unknown}
+
+
+# ---------------------------------------------------------------------------
 # console helpers
 # ---------------------------------------------------------------------------
 def mint_personal_token(db: Session, *, user: AdminUser, service: Service, scopes: Optional[Iterable[str]],
@@ -699,6 +834,30 @@ def mint_personal_token(db: Session, *, user: AdminUser, service: Service, scope
     _record_event(db, event="issued", jti=rec.jti, grant_type="personal_access_token", client_id=CONSOLE_CLIENT_ID,
                   sub=str(user.id), audience=audience, service=service)
     return token, rec
+
+
+def mint_probe_token_like(db: Session, *, record: OAuthToken, service: Service) -> str:
+    """A short-lived copy of an issued token's claims (sub, client_id, scope, aud, email/name and the same jti),
+    signed now, for inspecting a server that shows different tools per caller. The stored token itself cannot
+    be read back (only its record exists), so this is how "refresh as that token" works; the server verifies
+    the copy against the JWKS like the original and sees exactly what that token presents."""
+    if record.kind not in ("access", "pat"):
+        raise OAuthError("invalid_request", "only access tokens and personal access tokens can be used")
+    if record.is_revoked or record.is_expired:
+        raise OAuthError("invalid_request", "that token is no longer active")
+    audience = normalize_audience(service.effective_audience)
+    if not audience or normalize_audience(record.audience or "") != audience:
+        raise OAuthError("invalid_request", "that token was not issued for this server")
+    now = _now_ts()
+    payload = {
+        "iss": issuer(), "sub": record.sub, "client_id": record.client_id, "scope": record.scope or "",
+        "iat": now, "exp": now + SCANNER_TOKEN_TTL_SECONDS, "jti": record.jti, "token_use": "access",
+        "aud": audience,
+    }
+    if record.user:
+        payload["email"] = record.user.email
+        payload["name"] = record.user.username
+    return _sign(db, payload, typ="at+jwt")
 
 
 def mint_scanner_token(db: Session, service: Service) -> Optional[str]:
@@ -750,9 +909,15 @@ def build_metadata(db: Session) -> dict:
         "grant_types_supported": SERVER_GRANT_TYPES,
         "code_challenge_methods_supported": ["S256"],
         "token_endpoint_auth_methods_supported": SERVER_AUTH_METHODS,
+        "token_endpoint_auth_signing_alg_values_supported": ASSERTION_SIGNING_ALGS,
         "revocation_endpoint_auth_methods_supported": SERVER_AUTH_METHODS,
+        "revocation_endpoint_auth_signing_alg_values_supported": ASSERTION_SIGNING_ALGS,
         "introspection_endpoint_auth_methods_supported": SERVER_AUTH_METHODS,
+        "introspection_endpoint_auth_signing_alg_values_supported": ASSERTION_SIGNING_ALGS,
         "resource_parameter_supported": True,
         "authorization_response_iss_parameter_supported": True,
+        # MCP Center extensions for servers that verify tokens offline (see examples/mcp_center_hooks.py)
+        "revoked_tokens_endpoint": f"{base}/oauth/revoked",
+        "usage_report_endpoint": f"{base}/oauth/usage",
         "service_documentation": f"{base}/docs",
     }

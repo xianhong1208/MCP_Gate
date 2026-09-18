@@ -26,6 +26,7 @@ npm run build                 # writes static/web, which the API serves in produ
 ```bash
 uv run pytest                 # backend suite; uses temporary SQLite files, no services required
 uv run ruff check src db main.py tests
+cd frontend && npm run lint   # ESLint: recommended rules + React hooks, must report 0 errors
 cd frontend && npm test       # node-based unit tests, including i18n key parity
 cd frontend && npm run build  # must succeed with 0 errors
 ```
@@ -71,7 +72,17 @@ The console follows the design system in `design-system/*/MASTER.md` (tokens in 
 
 - [ ] Tests added or updated for the behaviour you changed; `uv run pytest` passes.
 - [ ] `uv run ruff check src db main.py tests` passes.
-- [ ] `npm run build` and `npm test` pass if you touched `frontend/`.
+- [ ] `npm run lint`, `npm test` and `npm run build` pass if you touched `frontend/`.
 - [ ] Documentation updated (`README.md` **and** `README.zh-TW.md`, `docs/`, `.env.example`) if behaviour or configuration changed.
 - [ ] No secrets, `.env`, `data/` or screenshots committed.
 - [ ] One focused change per pull request.
+
+## Releasing
+
+Releases are cut from `main`; feature work lands on `dev` first.
+
+1. On `dev`, bump `[project].version` in `pyproject.toml`. It is the single source of truth: `npm run sync-version` (also run by `prebuild`) copies it into `frontend/package.json`, `npm install --package-lock-only` refreshes the lock file, and `uv lock` refreshes `uv.lock`.
+2. Add the `## [x.y.z] — YYYY-MM-DD` section to `CHANGELOG.md` and rebuild `static/web` so the bundle carries the new version.
+3. Open a pull request from `dev` to `main` and merge it.
+4. On the merge commit: `git tag -a vx.y.z -m "MCP Center x.y.z"` and `git push origin vx.y.z`.
+5. Publish a GitHub Release for the tag; its notes mirror the CHANGELOG section.

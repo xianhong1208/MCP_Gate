@@ -2,24 +2,24 @@ import { useState, useEffect, useCallback } from 'react'
 import { formatDateTime } from '../utils/format'
 import { useTranslation } from 'react-i18next'
 import {
-  Bot, Plus, RefreshCw, Check, Ban, Trash2, KeyRound, Lock, Unlock, Pencil,
+  Bot, Plus, RefreshCw, Check, Ban, Trash2, KeyRound, Lock, Unlock,
 } from 'lucide-react'
 import { oauthApi, servicesApi } from '../services/api'
 import { useConfirm } from '../contexts/ConfirmContext'
 import { useToast } from '../contexts/ToastContext'
 import CodeBlock from '../components/CodeBlock'
 import LastChecked from '../components/LastChecked'
+import ScopeEditor from '../components/ScopeEditor'
 import clsx from 'clsx'
-import { describeScope } from '../utils/scopes'
 import {
   PageHeader, Button, IconButton, Badge, StatusPill, Card, CardHeader, EmptyState, Alert, LoadingBlock, Tabs,
   Table, THead, TBody, TR, TH, TD, RowActions,
-  Dialog, DialogBody, DialogFooter, Field, Input, Select, Textarea, Checkbox, CheckRow,
+  Dialog, DialogBody, DialogFooter, Field, Input, Select, Textarea, CheckRow,
 } from '../components/ui'
 
 const TABS = ['approved', 'pending', 'revoked']
 const GRANT_TYPES = ['authorization_code', 'refresh_token', 'client_credentials']
-const AUTH_METHODS = ['none', 'client_secret_basic', 'client_secret_post']
+const AUTH_METHODS = ['none', 'client_secret_basic', 'client_secret_post', 'private_key_jwt']
 const STATUS_TONE = { approved: 'success', pending: 'warning', revoked: 'neutral' }
 
 function clientStatus(c) {
@@ -32,12 +32,13 @@ function RegisterClientModal({ onClose, onCreated }) {
   const { t } = useTranslation()
   const [form, setForm] = useState({
     clientName: '', clientUri: '', redirectUris: '', grantTypes: new Set(['authorization_code', 'refresh_token']),
-    authMethod: 'none', classic: false, defaultResource: '',
+    authMethod: 'none', classic: false, defaultResource: '', jwksUri: '', jwks: '',
   })
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState('')
   const [services, setServices] = useState([])
   const confidential = form.authMethod !== 'none'
+  const privateKeyJwt = form.authMethod === 'private_key_jwt'
 
   // Registered servers, offered as the default resource for classic clients
   useEffect(() => {
@@ -56,6 +57,23 @@ function RegisterClientModal({ onClose, onCreated }) {
   const handleSubmit = async (e) => {
     e.preventDefault()
     setError('')
+    // private_key_jwt: exactly one of a JWKS URI or an inline JWKS document, and the document must parse
+    let jwks = null
+    const jwksUri = privateKeyJwt ? form.jwksUri.trim() : ''
+    if (privateKeyJwt) {
+      if (!!jwksUri === !!form.jwks.trim()) {
+        setError(t('clients.form.jwksRequired'))
+        return
+      }
+      if (form.jwks.trim()) {
+        try {
+          jwks = JSON.parse(form.jwks)
+        } catch {
+          setError(t('clients.form.jwksInvalid'))
+          return
+        }
+      }
+    }
     setIsLoading(true)
     try {
       const res = await oauthApi.clients.create({
@@ -66,6 +84,8 @@ function RegisterClientModal({ onClose, onCreated }) {
         tokenEndpointAuthMethod: form.authMethod,
         requirePkce: !(confidential && form.classic),
         defaultResource: confidential && form.classic ? form.defaultResource || null : null,
+        jwksUri: jwksUri || null,
+        jwks,
       })
       onCreated(res)
     } catch (err) {
@@ -123,6 +143,17 @@ function RegisterClientModal({ onClose, onCreated }) {
               {AUTH_METHODS.map((m) => <option key={m} value={m}>{t(`clients.authMethod.${m}`)}</option>)}
             </Select>
           </Field>
+          {privateKeyJwt && (
+            <div className="space-y-3 rounded-md border border-border bg-muted/40 p-4">
+              <p className="text-xs text-muted-foreground">{t('clients.form.jwksIntro')}</p>
+              <Field label={t('clients.form.jwksUri')} help={t('clients.form.jwksUriHint')}>
+                <Input value={form.jwksUri} onChange={(e) => setForm({ ...form, jwksUri: e.target.value })} placeholder="https://client.example.com/.well-known/jwks.json" />
+              </Field>
+              <Field label={t('clients.form.jwks')} help={t('clients.form.jwksHint')}>
+                <Textarea rows={5} value={form.jwks} onChange={(e) => setForm({ ...form, jwks: e.target.value })} placeholder='{"keys": [{"kty": "RSA", "kid": "…", "n": "…", "e": "AQAB"}]}' className="font-mono text-xs" />
+              </Field>
+            </div>
+          )}
           {confidential && (
             <div className="space-y-3 rounded-md border border-border bg-muted/40 p-4">
               <CheckRow
@@ -168,6 +199,8 @@ function SecretModal({ client, onClose }) {
             <CodeBlock title={t('clients.secret.clientSecret')} value={client.client_secret} sensitive />
             <Alert tone="warning">{t('clients.secret.oneTime')}</Alert>
           </>
+        ) : client.token_endpoint_auth_method === 'private_key_jwt' ? (
+          <p className="text-xs text-muted-foreground">{t('clients.secret.privateKeyJwt')}</p>
         ) : (
           <p className="text-xs text-muted-foreground">{t('clients.secret.publicClient')}</p>
         )}
@@ -186,8 +219,6 @@ function ScopesSection() {
   const { confirmDelete } = useConfirm()
   const [scopes, setScopes] = useState([])
   const [isLoading, setIsLoading] = useState(true)
-  const [editing, setEditing] = useState(null)   // {name, description, isDefault, isNew}
-  const [saving, setSaving] = useState(false)
 
   const load = useCallback(async () => {
     try {
@@ -202,18 +233,15 @@ function ScopesSection() {
 
   useEffect(() => { load() }, [load])
 
-  const save = async () => {
-    if (!editing?.name.trim()) return
-    setSaving(true)
+  const save = async ({ name, description, isDefault }) => {
     try {
-      await oauthApi.scopes.upsert(editing.name.trim(), { description: editing.description, isDefault: editing.isDefault })
+      await oauthApi.scopes.upsert(name, { description, isDefault })
       toast.success(t('clients.scopes.saved'))
-      setEditing(null)
       await load()
+      return true
     } catch (err) {
       toast.error(err.message || t('clients.scopes.saveFailed'))
-    } finally {
-      setSaving(false)
+      return false
     }
   }
 
@@ -230,82 +258,14 @@ function ScopesSection() {
   }
 
   return (
-    <Card>
-      <CardHeader
-        title={t('clients.scopes.title')}
-        description={t('clients.scopes.subtitle')}
-        action={
-          <Button variant="secondary" size="sm" icon={Plus} onClick={() => setEditing({ name: '', description: '', isDefault: false, isNew: true })}>
-            {t('clients.scopes.add')}
-          </Button>
-        }
-      />
-
-      {editing && (
-        <div className="mb-4 space-y-3 rounded-md border border-border bg-muted/40 p-4">
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-            <Input
-              type="text"
-              size="sm"
-              value={editing.name}
-              onChange={(e) => setEditing({ ...editing, name: e.target.value })}
-              placeholder={t('clients.scopes.namePlaceholder')}
-              disabled={!editing.isNew}
-              pattern="[^\s]+"
-              autoFocus
-              mono
-            />
-            <Input
-              type="text"
-              size="sm"
-              value={editing.description || ''}
-              onChange={(e) => setEditing({ ...editing, description: e.target.value })}
-              placeholder={t('clients.scopes.descriptionPlaceholder')}
-            />
-          </div>
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <label className="flex cursor-pointer items-center gap-2 text-sm text-foreground">
-              <Checkbox checked={editing.isDefault} onChange={(e) => setEditing({ ...editing, isDefault: e.target.checked })} />
-              {t('clients.scopes.isDefault')}
-            </label>
-            <div className="flex items-center gap-2">
-              <Button variant="ghost" size="sm" onClick={() => setEditing(null)}>{t('clients.scopes.cancel')}</Button>
-              <Button variant="primary" size="sm" icon={Check} onClick={save} loading={saving} disabled={!editing.name.trim()}>
-                {t('clients.scopes.save')}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {isLoading ? (
-        <LoadingBlock className="py-6" size="sm" />
-      ) : scopes.length === 0 ? (
-        <EmptyState compact title={t('clients.scopes.empty')} />
-      ) : (
-        <div className="divide-y divide-border">
-          {scopes.map((s) => (
-            <div key={s.name} className="group flex items-center justify-between gap-3 py-2.5">
-              <div className="min-w-0">
-                <p className="flex items-center gap-2 font-mono text-xs font-medium text-foreground">
-                  {s.name}
-                  {s.is_default && <Badge tone="success">{t('clients.scopes.default')}</Badge>}
-                </p>
-                <p className="truncate text-xs text-muted-foreground">{describeScope(t, s.name, s.description) || t('clients.scopes.noDescription')}</p>
-              </div>
-              <RowActions>
-                <IconButton
-                  icon={Pencil}
-                  onClick={() => setEditing({ name: s.name, description: s.description || '', isDefault: !!s.is_default, isNew: false })}
-                  title={t('clients.scopes.edit')}
-                />
-                <IconButton variant="destructive" icon={Trash2} onClick={() => remove(s.name)} title={t('clients.scopes.delete')} />
-              </RowActions>
-            </div>
-          ))}
-        </div>
-      )}
-    </Card>
+    <ScopeEditor
+      title={t('clients.scopes.title')}
+      description={t('clients.scopes.subtitle')}
+      scopes={scopes}
+      isLoading={isLoading}
+      onSave={save}
+      onDelete={remove}
+    />
   )
 }
 
@@ -580,7 +540,7 @@ export default function OAuthClientsPage() {
         )}
       </div>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+      <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
         <ScopesSection />
         <KeysSection />
       </div>

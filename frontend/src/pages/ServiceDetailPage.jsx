@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback } from 'react'
-import { formatDateTime, formatDate } from '../utils/format'
+import { formatDate } from '../utils/format'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import {
-  Copy, Check, Trash2, Clock, RefreshCw, ChevronDown, ChevronUp,
+  Copy, Check, Trash2, Clock, RefreshCw, ChevronDown,
   Activity, Key, Edit3, Wrench, Terminal, FileJson, Code2,
 } from 'lucide-react'
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
@@ -12,14 +12,16 @@ import LastChecked from '../components/LastChecked'
 import CodeBlock from '../components/CodeBlock'
 import ServiceFormModal from '../components/ServiceFormModal'
 import HealthIndicator from '../components/HealthIndicator'
+import ScopeEditor from '../components/ScopeEditor'
+import MarkdownLite from '../components/MarkdownLite'
 import { copyToClipboard } from '../utils/clipboard'
 import { useConfirm } from '../contexts/ConfirmContext'
 import { useToast } from '../contexts/ToastContext'
 import { KindBadge, StatusBadge, ScopeChips } from './TokensPage'
 import clsx from 'clsx'
 import {
-  PageHeader, Button, IconButton, Badge, StatusPill, StatusDot, Card, CardHeader, SectionLabel, DescriptionList,
-  EmptyState, Alert, LoadingBlock, Tabs, SegmentedControl,
+  PageHeader, Button, IconButton, Badge, StatusDot, Card, CardHeader, SectionLabel, DescriptionList,
+  EmptyState, Alert, LoadingBlock, Tabs, SegmentedControl, Select,
 } from '../components/ui'
 
 // recharts stroke attrs cannot read CSS vars: give fallback colors; the real line color
@@ -41,10 +43,76 @@ function CustomTooltip({ active, payload, label }) {
   )
 }
 
+/** First meaningful line of a tool description, with markdown emphasis / headings stripped, for the collapsed row. */
+function toolSummary(description) {
+  const line = (description || '').split(/\r?\n/).map((l) => l.trim()).find((l) => l.length > 0) || ''
+  return line.replace(/^#+\s*/, '').replace(/\*\*(.*?)\*\*/g, '$1').replace(/`/g, '')
+}
+
+/** A JSON-schema object's properties as rows: name, type (+ enum / default), required, description. */
+function schemaRows(schema) {
+  const props = schema?.properties || {}
+  const required = new Set(schema?.required || [])
+  return Object.entries(props).map(([name, def]) => {
+    const d = def && typeof def === 'object' ? def : {}
+    const type = Array.isArray(d.type) ? d.type.join(' | ') : (d.type || (d.enum ? 'enum' : d.anyOf ? 'any' : 'object'))
+    return { name, type, enum: Array.isArray(d.enum) ? d.enum : null, def: d.default, description: d.description || '', required: required.has(name) }
+  })
+}
+
+function ToolSchema({ schema }) {
+  const { t } = useTranslation()
+  const [view, setView] = useState('table')
+  const rows = schemaRows(schema)
+  return (
+    <div className="overflow-hidden rounded-lg border border-border bg-background/60">
+      <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-1.5">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-subtle-foreground">{t('services.common.inputSchema')}</span>
+        <SegmentedControl
+          size="sm"
+          value={view}
+          onChange={setView}
+          items={[{ key: 'table', label: t('services.common.schemaView.table') }, { key: 'json', label: 'JSON' }]}
+        />
+      </div>
+      {view === 'json' ? (
+        <pre className="max-h-64 overflow-auto p-3 font-mono text-[11px] leading-relaxed text-foreground">{JSON.stringify(schema, null, 2)}</pre>
+      ) : rows.length === 0 ? (
+        <p className="px-3 py-2.5 text-xs text-muted-foreground">{t('services.common.noParams')}</p>
+      ) : (
+        <div className="max-h-64 overflow-auto">
+          <div className="divide-y divide-border">
+            {rows.map((r) => (
+              <div key={r.name} className="px-3 py-2">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <code className="font-mono text-xs font-medium text-foreground">{r.name}</code>
+                  <Badge tone="neutral" mono>{r.type}</Badge>
+                  {r.required && <Badge tone="warning">{t('services.common.paramRequired')}</Badge>}
+                  {r.def !== undefined && (
+                    <span className="text-[11px] text-subtle-foreground">{t('services.common.paramDefault')} <code className="font-mono text-foreground">{JSON.stringify(r.def)}</code></span>
+                  )}
+                </div>
+                {r.enum && (
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {r.enum.map((v) => <Badge key={String(v)} tone="neutral" mono size="sm">{String(v)}</Badge>)}
+                  </div>
+                )}
+                {r.description && <p className="mt-1 text-xs text-muted-foreground">{r.description}</p>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function ToolItem({ tool }) {
   const { t } = useTranslation()
   const [isExpanded, setIsExpanded] = useState(false)
   const toast = useToast()
+  const summary = toolSummary(tool.description)
+  const paramCount = Object.keys(tool.input_schema?.properties || {}).length
   const handleCopySchema = async () => {
     try {
       await copyToClipboard(JSON.stringify(tool.input_schema, null, 2))
@@ -54,30 +122,44 @@ function ToolItem({ tool }) {
     }
   }
   return (
-    <div className="py-3">
-      <div className="flex items-start justify-between gap-2">
+    <div className={clsx('group -mx-2 rounded-lg transition-colors duration-150', isExpanded ? 'bg-muted/40' : 'hover:bg-muted/40')}>
+      <div className="flex items-center gap-3 px-2 py-2">
         <button
           type="button"
           onClick={() => setIsExpanded(!isExpanded)}
-          className="flex min-w-0 flex-1 items-start gap-2 text-left"
+          className="flex min-w-0 flex-1 items-center gap-3 text-left"
           aria-expanded={isExpanded}
         >
-          {isExpanded
-            ? <ChevronUp className="mt-0.5 h-4 w-4 shrink-0 text-subtle-foreground" aria-hidden="true" />
-            : <ChevronDown className="mt-0.5 h-4 w-4 shrink-0 text-subtle-foreground" aria-hidden="true" />}
-          <span className="min-w-0">
-            <span className="block truncate font-mono text-xs font-medium text-foreground">{tool.name}</span>
-            {tool.description && <span className="mt-0.5 block text-xs text-muted-foreground">{tool.description}</span>}
+          <span className={clsx(
+            'flex h-7 w-7 shrink-0 items-center justify-center rounded-md border transition-colors duration-150',
+            isExpanded ? 'border-primary/40 bg-primary-soft/60 text-primary-soft-foreground' : 'border-border bg-muted text-subtle-foreground',
+          )}>
+            <Wrench className="h-3.5 w-3.5" aria-hidden="true" />
           </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate font-mono text-xs font-medium text-foreground">{tool.name}</span>
+            {/* Collapsed: one line only. Long agent-facing descriptions (headings, mode tables, rules) open on click. */}
+            {summary && <span className="mt-0.5 block truncate text-xs text-muted-foreground" title={summary}>{summary}</span>}
+          </span>
+          {paramCount > 0 && (
+            <span className="hidden shrink-0 text-[11px] tabular-nums text-subtle-foreground sm:inline">{t('services.common.paramCount', { n: paramCount })}</span>
+          )}
+          <ChevronDown className={clsx('h-4 w-4 shrink-0 text-subtle-foreground transition-transform duration-200', isExpanded && 'rotate-180')} aria-hidden="true" />
         </button>
-        {tool.input_schema && (
-          <IconButton size="sm" icon={Copy} onClick={handleCopySchema} title={t('services.common.copyInputSchema')} />
-        )}
       </div>
-      {isExpanded && tool.input_schema && (
-        <div className="ml-6 mt-2">
-          <p className="mb-1.5 text-xs text-muted-foreground">{t('services.common.inputSchema')}</p>
-          <pre className="overflow-x-auto rounded-md border border-border bg-muted/50 p-3 font-mono text-xs text-foreground">{JSON.stringify(tool.input_schema, null, 2)}</pre>
+      {isExpanded && (
+        <div className="space-y-3 px-2 pb-3 pl-12">
+          {tool.description && (
+            <div className="max-h-72 overflow-auto rounded-lg border border-border border-l-2 border-l-primary/60 bg-background/60 px-3.5 py-3">
+              <MarkdownLite text={tool.description} />
+            </div>
+          )}
+          {tool.input_schema && <ToolSchema schema={tool.input_schema} />}
+          {tool.input_schema && (
+            <div className="flex justify-end">
+              <Button variant="ghost" size="xs" icon={Copy} onClick={handleCopySchema}>{t('services.common.copyInputSchema')}</Button>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -96,7 +178,7 @@ function describeHealthError(t, raw) {
 const SNIPPET_FAMILIES = [
   { key: 'claude_code', labelKey: 'services.detail.snippetFamily.claudeCode', icon: Terminal, lang: 'bash', variants: ['oauth', 'pat'] },
   { key: 'mcp_json', labelKey: 'services.detail.snippetFamily.mcpJson', icon: FileJson, lang: 'json', variants: ['oauth', 'pat'] },
-  { key: 'fastmcp', labelKey: 'services.detail.snippetFamily.fastmcp', icon: Code2, lang: 'python', variants: ['server', 'client'] },
+  { key: 'fastmcp', labelKey: 'services.detail.snippetFamily.fastmcp', icon: Code2, lang: 'python', variants: ['server', 'hooks', 'client'] },
 ]
 
 export default function ServiceDetailPage() {
@@ -109,6 +191,12 @@ export default function ServiceDetailPage() {
 
   const [service, setService] = useState(null)
   const [scopes, setScopes] = useState([])
+  const [ownScopes, setOwnScopes] = useState([])
+  // Who the tools/list request looks like to the server: 'scanner' | 'token:<jti>' (remembered per service)
+  const [refreshIdentity, setRefreshIdentity] = useState(() => {
+    try { return localStorage.getItem(`refreshIdentity:${decodedServiceId}`) || 'scanner' } catch { return 'scanner' }
+  })
+  const [isLoadingOwnScopes, setIsLoadingOwnScopes] = useState(true)
   const [snippets, setSnippets] = useState(null)
   const [snippetFamily, setSnippetFamily] = useState('claude_code')
   const [snippetVariant, setSnippetVariant] = useState('oauth')
@@ -122,6 +210,35 @@ export default function ServiceDetailPage() {
   const [isRefreshingTools, setIsRefreshingTools] = useState(false)
   const [showEditModal, setShowEditModal] = useState(false)
   const [revokingJti, setRevokingJti] = useState(null)
+
+  const reloadOwnScopes = useCallback(async () => {
+    const res = await oauthApi.serviceScopes.list(decodedServiceId)
+    setOwnScopes(res.own || [])
+  }, [decodedServiceId])
+
+  const saveOwnScope = async ({ name, description, isDefault }) => {
+    try {
+      await oauthApi.serviceScopes.upsert(decodedServiceId, name, { description, isDefault })
+      toast.success(t('clients.scopes.saved'))
+      await reloadOwnScopes()
+      return true
+    } catch (err) {
+      toast.error(err.message || t('clients.scopes.saveFailed'))
+      return false
+    }
+  }
+
+  const deleteOwnScope = async (name) => {
+    const ok = await confirmDelete(t('clients.scopes.deleteTarget', { name }))
+    if (!ok) return
+    try {
+      await oauthApi.serviceScopes.delete(decodedServiceId, name)
+      toast.success(t('clients.scopes.deleted'))
+      await reloadOwnScopes()
+    } catch (err) {
+      toast.error(err.message || t('clients.scopes.deleteFailed'))
+    }
+  }
 
   const reload = useCallback(async () => {
     const updated = await servicesApi.getById(decodedServiceId, true)
@@ -138,12 +255,15 @@ export default function ServiceDetailPage() {
       oauthApi.scopes.list().catch(() => ({ scopes: [] })),
       oauthApi.snippets(decodedServiceId).catch(() => null),
       oauthApi.tokens.list({ serviceId: decodedServiceId }).catch(() => ({ tokens: [] })),
-    ]).then(([svc, sc, sn, tk]) => {
+      oauthApi.serviceScopes.list(decodedServiceId).catch(() => ({ own: [] })),
+    ]).then(([svc, sc, sn, tk, own]) => {
       if (cancelled) return
       setService(svc)
       setScopes(sc.scopes || [])
       setSnippets(sn)
       setTokens(tk.tokens || [])
+      setOwnScopes(own.own || [])
+      setIsLoadingOwnScopes(false)
     }).catch((err) => {
       if (!cancelled) setError(err.message || t('services.detail.loadFailed'))
     }).finally(() => { if (!cancelled) setIsLoading(false) })
@@ -185,10 +305,30 @@ export default function ServiceDetailPage() {
     }
   }
 
+  const chooseRefreshIdentity = (value) => {
+    setRefreshIdentity(value)
+    try { localStorage.setItem(`refreshIdentity:${decodedServiceId}`, value) } catch { /* per-viewer convenience only */ }
+  }
+
+  // Active PATs / OAuth access tokens of this server that the tools list can be fetched as
+  const inspectableTokens = tokens.filter((tk) => tk.status === 'active' && (tk.kind === 'pat' || tk.kind === 'access'))
+  const selectedInspectToken = refreshIdentity.startsWith('token:')
+    ? inspectableTokens.find((tk) => tk.jti === refreshIdentity.slice(6)) || null
+    : null
+  const refreshMode = refreshIdentity.startsWith('token:') ? 'token' : 'scanner'
+
   const handleRefreshTools = async () => {
+    if (refreshMode === 'token' && !selectedInspectToken) {
+      toast.error(t('services.detail.refreshTokenGone'))
+      chooseRefreshIdentity('scanner')
+      return
+    }
     setIsRefreshingTools(true)
     try {
-      const result = await servicesApi.refreshTools(decodedServiceId)
+      const result = await servicesApi.refreshTools(decodedServiceId, {
+        identity: refreshMode,
+        jti: refreshMode === 'token' ? selectedInspectToken.jti : null,
+      })
       toast.success(t('services.detail.refreshToolsSuccess', { n: result.tools_count }))
       await reload()
     } catch (err) {
@@ -461,16 +601,59 @@ export default function ServiceDetailPage() {
             </div>
           </Card>
 
+          {/* Scopes this server declares for itself (in addition to the global registry) */}
+          <ScopeEditor
+            title={t('services.detail.ownScopesTitle')}
+            description={t('services.detail.ownScopesSubtitle')}
+            scopes={ownScopes}
+            isLoading={isLoadingOwnScopes}
+            onSave={saveOwnScope}
+            onDelete={deleteOwnScope}
+            emptyText={t('services.detail.ownScopesEmpty')}
+          />
+
           {/* Tools */}
           <Card>
             <CardHeader
-              title={t('services.detail.mcpToolsTitle', { n: service.tools?.length || 0 })}
+              title={<span className="flex items-center gap-2">{t('services.detail.mcpToolsLabel')}<Badge tone="neutral">{service.tools?.length || 0}</Badge></span>}
               action={hasMcpConnection && (
                 <Button variant="ghost" size="xs" icon={RefreshCw} onClick={handleRefreshTools} loading={isRefreshingTools}>
                   {t('services.detail.refreshFromServer')}
                 </Button>
               )}
             />
+            {hasMcpConnection && (
+              <div className="mb-3 flex flex-wrap items-center gap-x-2 gap-y-1.5 rounded-lg border border-border bg-muted/40 px-2.5 py-1.5">
+                <Key className="h-3.5 w-3.5 shrink-0 text-subtle-foreground" aria-hidden="true" />
+                <span className="shrink-0 text-[11px] font-semibold uppercase tracking-wide text-subtle-foreground">{t('services.detail.refreshAs')}</span>
+                <Select
+                  size="sm"
+                  value={refreshIdentity}
+                  onChange={(e) => chooseRefreshIdentity(e.target.value)}
+                  title={t(`services.detail.refreshAsHint.${refreshMode}`)}
+                  className="min-w-0 flex-1"
+                >
+                  <option value="scanner">{t('services.detail.refreshAsScanner')}</option>
+                  {inspectableTokens.length > 0 && (
+                    <optgroup label={t('services.detail.refreshAsTokenGroup')}>
+                      {inspectableTokens.map((tk) => (
+                        <option key={tk.jti} value={`token:${tk.jti}`}>
+                          {t('services.detail.refreshAsTokenOption', {
+                            kind: t(`tokens.kind.${tk.kind}`, tk.kind),
+                            name: tk.label || tk.client_name || tk.user_email || tk.jti.slice(0, 8),
+                          })}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                </Select>
+                {refreshMode === 'token' && selectedInspectToken && (
+                  <div className="flex w-full items-center gap-1.5 overflow-hidden pl-6">
+                    <ScopeChips scopes={selectedInspectToken.scopes} max={3} />
+                  </div>
+                )}
+              </div>
+            )}
             {(service.tools || []).length === 0 ? (
               <EmptyState
                 compact
@@ -479,7 +662,7 @@ export default function ServiceDetailPage() {
                 description={hasMcpConnection ? t('services.common.refreshServerHint') : undefined}
               />
             ) : (
-              <div className="divide-y divide-border">
+              <div className="space-y-0.5">
                 {service.tools.map((tool) => <ToolItem key={tool.id || tool.name} tool={tool} />)}
               </div>
             )}
@@ -502,7 +685,12 @@ export default function ServiceDetailPage() {
                         <KindBadge kind={tk.kind} />
                         <span className="min-w-0">
                           <span className="block truncate text-sm font-medium text-foreground transition-colors duration-200 group-hover:text-link">{tk.label || tk.client_name || tk.jti}</span>
-                          <span className="block truncate text-xs text-muted-foreground">{tk.client_name || tk.client_id}{tk.expires_at ? ` · ${t('services.detail.tokenExpires')} ${formatDateTime(tk.expires_at)}` : ''}</span>
+                          {/* Personal tokens always belong to the console, so only the expiry is worth a line */}
+                          <span className="block truncate text-xs text-muted-foreground">
+                            {tk.kind !== 'pat' && (tk.client_name || tk.client_id)}
+                            {tk.kind !== 'pat' && tk.expires_at && ' · '}
+                            {tk.expires_at && `${t('services.detail.tokenExpires')} ${formatDate(tk.expires_at)}`}
+                          </span>
                         </span>
                       </Link>
                       <StatusBadge status={tk.status} />
@@ -512,7 +700,8 @@ export default function ServiceDetailPage() {
                         onClick={() => handleRevokeToken(tk)}
                         disabled={revokingJti === tk.jti}
                         title={t('tokens.list.revokeTitle')}
-                        className={clsx(revokingJti === tk.jti && 'animate-spin')}
+                        className={clsx('opacity-0 transition-opacity duration-150 focus-visible:opacity-100 group-hover:opacity-100',
+                          revokingJti === tk.jti && 'animate-spin opacity-100')}
                       />
                     </div>
                     {/* Scopes on their own line so the long mono chips never fight the

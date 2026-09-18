@@ -194,8 +194,13 @@ export const servicesApi = {
   },
 
   /** Connect to the service and fetch tools; for MCP Center protected services the backend self-signs a token */
-  async refreshTools(id) {
-    return request(`/api/services/${encodeURIComponent(id)}/refresh-tools`, { method: 'POST' })
+  /** identity: 'scanner' (anonymous scanner token, default) | 'token' (one of this server's issued tokens, by jti)
+   *  -- for servers that show different tools per caller */
+  async refreshTools(id, { identity = 'scanner', jti = null } = {}) {
+    return request(`/api/services/${encodeURIComponent(id)}/refresh-tools`, {
+      method: 'POST',
+      body: JSON.stringify({ identity, jti }),
+    })
   },
 
   async getHealth(id) {
@@ -305,7 +310,7 @@ export const oauthApi = {
       return request(`/api/oauth/clients${qs({ status })}`)
     },
     /** Manually register a trusted client from the admin console (approved directly); secret is returned once */
-    async create({ clientName, redirectUris, grantTypes, tokenEndpointAuthMethod, scope, clientUri, requirePkce, defaultResource }) {
+    async create({ clientName, redirectUris, grantTypes, tokenEndpointAuthMethod, scope, clientUri, requirePkce, defaultResource, jwksUri, jwks }) {
       return request('/api/oauth/clients', {
         method: 'POST',
         body: JSON.stringify({
@@ -316,6 +321,8 @@ export const oauthApi = {
           scope: scope || null,
           client_uri: clientUri || null,
           require_pkce: requirePkce !== false,
+          jwks_uri: jwksUri || null,
+          jwks: jwks || null,
           default_resource: defaultResource || null,
         }),
       })
@@ -346,6 +353,21 @@ export const oauthApi = {
     },
     async delete(name) {
       return request(`/api/oauth/scopes/${encodeURIComponent(name)}`, { method: 'DELETE' })
+    },
+  },
+  /** Scopes one server declares for itself; `effective` is everything a token for that server may carry */
+  serviceScopes: {
+    async list(serviceId) {
+      return request(`/api/oauth/services/${encodeURIComponent(serviceId)}/scopes`)
+    },
+    async upsert(serviceId, name, { description, isDefault }) {
+      return request(`/api/oauth/services/${encodeURIComponent(serviceId)}/scopes/${encodeURIComponent(name)}`, {
+        method: 'PUT',
+        body: JSON.stringify({ description: description || null, is_default: !!isDefault }),
+      })
+    },
+    async delete(serviceId, name) {
+      return request(`/api/oauth/services/${encodeURIComponent(serviceId)}/scopes/${encodeURIComponent(name)}`, { method: 'DELETE' })
     },
   },
 

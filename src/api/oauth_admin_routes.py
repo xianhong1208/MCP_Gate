@@ -8,19 +8,20 @@ from __future__ import annotations
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from db import get_db
 from db.models import AdminUser
 from src.adapters import (
     OAuthClientAdapter, OAuthConsentAdapter, OAuthKeyAdapter, OAuthScopeAdapter, OAuthTokenAdapter,
-    ServiceAdapter, TokenUsageAdapter,
+    ServiceAdapter, ServiceScopeAdapter, TokenUsageAdapter,
 )
 from src.adapters.exceptions import AdapterError
 from src.audit import ActorType, AuditAction, AuditService, AuditStatus, ResourceType
 from src.config import Config
 from src.identity import get_current_user
+from src.middleware.issuer_check import observed_mismatches
 from src.oauth import service as oauth
 from src.oauth import signing_keys
 from src.oauth.errors import OAuthError
@@ -57,6 +58,9 @@ class ClientCreateRequest(BaseModel):
     # Classic-client compatibility (confidential clients only): skip PKCE / assume a resource when absent
     require_pkce: bool = True
     default_resource: Optional[str] = None
+    # private_key_jwt: exactly one of these
+    jwks_uri: Optional[str] = None
+    jwks: Optional[dict] = None
 
 
 @router.get("/clients")
@@ -156,21 +160,82 @@ async def list_scopes(db: Session = Depends(get_db), _: AdminUser = Depends(get_
     return {"scopes": [s.to_dict() for s in scopes], "total": len(scopes)}
 
 
-@router.put("/scopes/{name}")
-async def upsert_scope(name: str, body: ScopeUpsertRequest, db: Session = Depends(get_db),
-                       _: AdminUser = Depends(get_current_user)):
-    """Create or update a scope and whether it is granted by default."""
+def _scope_name(name: str) -> str:
     name = name.strip()
     if not name or " " in name:
         raise HTTPException(status_code=400, detail={"error": "oauth.invalid_scope_name", "fallback": "Invalid scope name"})
-    return OAuthScopeAdapter.upsert(db, name=name, description=body.description, is_default=body.is_default).to_dict()
+    return name
+
+
+@router.put("/scopes/{name}")
+async def upsert_scope(name: str, body: ScopeUpsertRequest, request: Request, db: Session = Depends(get_db),
+                       user: AdminUser = Depends(get_current_user)):
+    """Create or update a global scope and whether it is granted by default. A name some server already declares
+    as its own scope is refused, so global and per-server names stay disjoint."""
+    name = _scope_name(name)
+    if OAuthScopeAdapter.get(db, name) is None and ServiceScopeAdapter.names_in_use(db, name):
+        raise HTTPException(status_code=409, detail={"error": "oauth.scope_owned_by_service",
+                                                     "fallback": "A server already declares a scope with this name"})
+    scope = OAuthScopeAdapter.upsert(db, name=name, description=body.description, is_default=body.is_default)
+    _audit(db, request, user, AuditAction.OAUTH_SCOPE_UPSERT, ResourceType.OAUTH_SCOPE, name,
+           details={"scope": "global", "is_default": scope.is_default})
+    return scope.to_dict()
 
 
 @router.delete("/scopes/{name}")
-async def delete_scope(name: str, db: Session = Depends(get_db), _: AdminUser = Depends(get_current_user)):
-    """Delete a scope from the registry."""
+async def delete_scope(name: str, request: Request, db: Session = Depends(get_db),
+                       user: AdminUser = Depends(get_current_user)):
+    """Delete a global scope from the registry."""
     if not OAuthScopeAdapter.delete(db, name):
         raise HTTPException(status_code=404, detail={"error": "oauth.scope_not_found", "fallback": "Scope not found"})
+    _audit(db, request, user, AuditAction.OAUTH_SCOPE_DELETE, ResourceType.OAUTH_SCOPE, name, details={"scope": "global"})
+    return {"message": "Scope deleted"}
+
+
+# ---- per-server scopes -------------------------------------------------------
+@router.get("/services/{service_id}/scopes")
+async def list_service_scopes(service_id: str, db: Session = Depends(get_db), _: AdminUser = Depends(get_current_user)):
+    """A server's own scopes (`own`) and everything a token for it may carry (`effective`: global scopes, restricted
+    by the server's allow-list when set, plus its own; each tagged `source`)."""
+    try:
+        service = ServiceAdapter.get_existing(db, service_id)
+    except AdapterError as e:
+        raise _adapter_exc(e)
+    own = [s.to_dict() for s in ServiceScopeAdapter.list_for_service(db, service.id)]
+    return {"own": own, "effective": oauth.effective_scopes(db, service), "total": len(own)}
+
+
+@router.put("/services/{service_id}/scopes/{name}")
+async def upsert_service_scope(service_id: str, name: str, body: ScopeUpsertRequest, request: Request,
+                               db: Session = Depends(get_db), user: AdminUser = Depends(get_current_user)):
+    """Declare or update a scope that exists only for this server. Global names may not be reused."""
+    try:
+        service = ServiceAdapter.get_existing(db, service_id)
+    except AdapterError as e:
+        raise _adapter_exc(e)
+    name = _scope_name(name)
+    if OAuthScopeAdapter.get(db, name) is not None:
+        raise HTTPException(status_code=409, detail={"error": "oauth.scope_is_global",
+                                                     "fallback": "This name is a global scope; edit it in the registry"})
+    scope = ServiceScopeAdapter.upsert(db, service.id, name=name, description=body.description, is_default=body.is_default)
+    _audit(db, request, user, AuditAction.OAUTH_SCOPE_UPSERT, ResourceType.OAUTH_SCOPE, name,
+           details={"scope": "service", "service_id": str(service.id), "service": service.name,
+                    "is_default": scope.is_default})
+    return scope.to_dict()
+
+
+@router.delete("/services/{service_id}/scopes/{name}")
+async def delete_service_scope(service_id: str, name: str, request: Request, db: Session = Depends(get_db),
+                               user: AdminUser = Depends(get_current_user)):
+    """Remove a server-declared scope. Tokens already carrying it keep it until they expire."""
+    try:
+        service = ServiceAdapter.get_existing(db, service_id)
+    except AdapterError as e:
+        raise _adapter_exc(e)
+    if not ServiceScopeAdapter.delete(db, service.id, name):
+        raise HTTPException(status_code=404, detail={"error": "oauth.scope_not_found", "fallback": "Scope not found"})
+    _audit(db, request, user, AuditAction.OAUTH_SCOPE_DELETE, ResourceType.OAUTH_SCOPE, name,
+           details={"scope": "service", "service_id": str(service.id), "service": service.name})
     return {"message": "Scope deleted"}
 
 
@@ -181,7 +246,16 @@ class PersonalTokenRequest(BaseModel):
     service_id: str
     scopes: Optional[List[str]] = None
     expires_days: int = Field(30, ge=1)
-    label: Optional[str] = None
+    # Required: the label is how a token is told apart everywhere (token list, "Inspect as" picker, audit)
+    label: str = Field(..., min_length=1, max_length=128)
+
+    @field_validator("label")
+    @classmethod
+    def _label_not_blank(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("label must not be blank")
+        return v
 
 
 @router.get("/tokens")
@@ -247,10 +321,14 @@ async def list_consents(db: Session = Depends(get_db), user: AdminUser = Depends
 
 
 @router.delete("/consents/{consent_id}")
-async def delete_consent(consent_id: str, db: Session = Depends(get_db), _: AdminUser = Depends(get_current_user)):
-    """Forget a remembered consent; the client will ask again next time."""
-    if not OAuthConsentAdapter.delete(db, consent_id):
+async def delete_consent(consent_id: str, request: Request, db: Session = Depends(get_db),
+                         user: AdminUser = Depends(get_current_user)):
+    """Forget a remembered consent; the client will ask again next time. Only the owner's own consents are reachable."""
+    consent = OAuthConsentAdapter.delete(db, consent_id, user.id)
+    if consent is None:
         raise HTTPException(status_code=404, detail={"error": "oauth.consent_not_found", "fallback": "Consent not found"})
+    _audit(db, request, user, AuditAction.OAUTH_CONSENT_DELETE, ResourceType.OAUTH_CONSENT, consent_id,
+           details={"client_id": consent["client_id"], "audience": consent["audience"], "scopes": consent["scopes"]})
     return {"message": "Consent removed"}
 
 
@@ -301,6 +379,8 @@ async def overview(db: Session = Depends(get_db), _: AdminUser = Depends(get_cur
         "issued_24h": TokenUsageAdapter.get_total_count(db, days=1, event="issued"),
         "issued_7d": TokenUsageAdapter.get_total_count(db, days=7, event="issued"),
         "dcr_auto_approve": Config.get_oauth_config().dcr_auto_approve,
+        # Hosts that reached the OAuth endpoints while differing from the issuer (see IssuerMismatchMiddleware)
+        "issuer_mismatches": observed_mismatches(),
     }
 
 
@@ -344,6 +424,31 @@ def hello(name: str) -> str:
 if __name__ == "__main__":
     mcp.run(transport="http", host="{service.host or '127.0.0.1'}", port={service.port or 8000})
 '''
+    fastmcp_hooks = f'''# Same server, but revocations take effect within seconds and usage shows up in the console.
+# Copy examples/mcp_center_hooks.py from the MCP Center repository next to this file, and register a
+# confidential client in the console (OAuth Clients -> Register trusted client, client secret or
+# private_key_jwt) whose credentials this server uses to talk back to MCP Center.
+from fastmcp import FastMCP
+from fastmcp.server.auth import RemoteAuthProvider
+from mcp_center_hooks import MCPCenterVerifier
+from pydantic import AnyHttpUrl
+
+auth = RemoteAuthProvider(
+    token_verifier=MCPCenterVerifier(
+        jwks_uri="{base}/.well-known/jwks.json",
+        issuer="{base}",
+        audience="{audience}",
+        client_id="<CONFIDENTIAL_CLIENT_ID>",
+        client_secret="<CLIENT_SECRET>",          # or private_key_pem=open("client.pem").read(), kid="..."
+        poll_interval=15,                         # seconds between revocation-feed polls
+        flush_interval=30,                        # seconds between usage reports
+    ),
+    authorization_servers=[AnyHttpUrl("{base}")],
+    base_url="{audience}",
+)
+
+mcp = FastMCP(name="{service.name}", auth=auth)
+'''
     claude_code = f'claude mcp add --transport http {service.name} {mcp_url}'
     claude_code_pat = (f'claude mcp add --transport http {service.name} {mcp_url} '
                        f'--header "Authorization: Bearer <PERSONAL_ACCESS_TOKEN>"')
@@ -360,6 +465,7 @@ async with Client("{mcp_url}", auth="oauth") as client:
         "audience": audience,
         "mcp_url": mcp_url,
         "fastmcp_server": fastmcp_server,
+        "fastmcp_hooks": fastmcp_hooks,
         "fastmcp_client": fastmcp_client,
         "claude_code_oauth": claude_code,
         "claude_code_pat": claude_code_pat,

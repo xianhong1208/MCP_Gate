@@ -26,6 +26,9 @@ class AuditAction(str, Enum):
     OAUTH_CLIENT_APPROVE = "oauth_client_approve"
     OAUTH_CLIENT_REVOKE = "oauth_client_revoke"
     OAUTH_CLIENT_DELETE = "oauth_client_delete"
+    OAUTH_CONSENT_DELETE = "oauth_consent_delete"
+    OAUTH_SCOPE_UPSERT = "oauth_scope_upsert"
+    OAUTH_SCOPE_DELETE = "oauth_scope_delete"
     OAUTH_KEY_ROTATE = "oauth_key_rotate"
 
     # Service operations
@@ -48,6 +51,8 @@ class ResourceType(str, Enum):
     """Resource types"""
     TOKEN = "token"
     OAUTH_CLIENT = "oauth_client"
+    OAUTH_CONSENT = "oauth_consent"
+    OAUTH_SCOPE = "oauth_scope"
     SERVICE = "service"
     ADMIN = "admin"
     SYSTEM = "system"

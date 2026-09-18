@@ -1,6 +1,6 @@
 [project]
 name = "mcp-center"
-version = "1.0.0"
+version = "1.1.0"
 description = "MCP Center - OAuth 2.1 Authorization Server and control plane for your MCP servers"
 readme = "README.md"
 license = { text = "MIT" }

@@ -36,7 +36,7 @@ MCP Center puts standards-based authentication in front of every MCP server you 
 - **Consent screen.** Dynamically registered clients ask the owner for permission on first connect; decisions can be remembered per client and server. Clients you register yourself skip the prompt.
 - **Personal access tokens (PATs).** Mint long-lived bearer tokens from the console for scripts, CI and clients that cannot run an OAuth flow, with ready-to-paste `claude mcp add` and `mcpServers` snippets.
 - **Server registry and health.** Register or auto-discover MCP servers, sync their tool lists, monitor health every 30 seconds and stream status changes over WebSocket.
-- **Marketplace and orchestrator.** Deploy MCP servers from a catalog with one click, or paste a standard `{command, args, env}` block and let MCP Center containerize it behind an HTTP bridge (requires Docker).
+- **Marketplace and orchestrator.** Deploy MCP servers from a catalog with one click, or paste a standard `{command, args, env}` block and let MCP Center run it behind an HTTP bridge, as a Docker container or as a local process (`MCP_RUNTIME=process`).
 - **Zero-config start.** SQLite by default, secrets generated on first run, an in-browser setup wizard for the owner account. PostgreSQL and GitHub / Google sign-in are a few environment variables away.
 
 ## Install MCP Center
@@ -44,7 +44,7 @@ MCP Center puts standards-based authentication in front of every MCP server you 
 Prerequisites:
 
 - Python 3.11 or later and [uv](https://docs.astral.sh/uv/).
-- Docker — only if you use the Marketplace or bring-your-own servers.
+- Docker — only for the Marketplace; bring-your-own servers can also run without it (`MCP_RUNTIME=process` needs `supergateway` on the PATH).
 - Node.js 18 or later — only if you work on the console UI.
 
 ```bash
@@ -165,7 +165,7 @@ MCP Center plays the **authorization server** role from the MCP specification. Y
 | Step | Who | What happens |
 |---|---|---|
 | Discovery | client → server → MCP Center | The server answers `401` with a `WWW-Authenticate` header pointing at its protected-resource metadata, which names MCP Center as the authorization server. The client fetches `/.well-known/oauth-authorization-server`. |
-| Registration | client → MCP Center | The client registers dynamically (`POST /oauth/register`) and gets a `client_id`. Public clients use PKCE; confidential clients get a secret. |
+| Registration | client → MCP Center | The client registers dynamically (`POST /oauth/register`) and gets a `client_id`. Public clients use PKCE; confidential clients get a secret, or register a public key and authenticate with a signed JWT (`private_key_jwt`, RFC 7523). |
 | Authorization | browser → MCP Center | `/oauth/authorize` validates the request, binds it to the target server through the `resource` parameter, and shows the consent screen (or skips it for remembered or trusted clients). |
 | Token | client → MCP Center | `/oauth/token` exchanges the code — checking PKCE, redirect URI and resource — for an RS256 access token plus a refresh token. |
 | Verification | server | The server fetches JWKS once, then verifies signature, issuer, audience, expiry and scopes locally. |
@@ -181,9 +181,10 @@ To change when the consent screen appears, edit [`src/oauth/consent_policy.py`](
 |---|---|
 | Issuer | MCP Center's public URL (`OAUTH_ISSUER`). Written into every token as `iss`; clients and servers use it for discovery. |
 | Classic client | A manually registered confidential client allowed to skip PKCE and use a default resource, for platforms whose OAuth module only knows client_id / client_secret. |
+| private_key_jwt | Client authentication without a shared secret: the client registers a JWKS (inline or by `jwks_uri`) and signs a short-lived JWT per token request. Meant for machine-to-machine clients such as CI jobs and backend services. |
 | Audience | The MCP URL a token is valid for (the `aud` claim). Set per server in the console; the server's `JWTVerifier(audience=…)` must match. |
 | Resource server | Your MCP server. It verifies tokens and never issues them. The console calls these *services*. |
-| Scope | What a token may do on a server, for example `mcp:tools:invoke`. The console's scope registry defines the set. |
+| Scope | What a token may do on a server, for example `mcp:tools:invoke`. The console's global scope registry defines the shared set; a server can additionally declare scopes of its own that only tokens for that server may carry. |
 | DCR | Dynamic client registration (RFC 7591): a client creates its own `client_id` on first connect. |
 | PAT | Personal access token: a long-lived access token minted from the console, used as a plain bearer token. |
 
@@ -210,7 +211,7 @@ Advanced: `SERVER_HOST` / `SERVER_PORT` override the bind address when it must d
 | Page | What you do there |
 |---|---|
 | **Dashboard** | Service health, token activity, recent events, system status. |
-| **Services** | Register or scan MCP servers, set audience and allowed scopes, refresh tools, run health checks, copy integration snippets. |
+| **Services** | Register or scan MCP servers, set audience and allowed scopes, declare server-specific scopes, refresh tools, run health checks, copy integration snippets. |
 | **Tokens · Issue Token** | Every token issued by MCP Center — OAuth grants and PATs — with revoke, expiry and last-use information. |
 | **OAuth Clients** | Dynamically registered and trusted clients: approve, revoke, delete; scope registry; signing-key rotation. |
 | **Marketplace** | Deploy MCP servers from the catalog or bring your own `{command, args, env}`. |

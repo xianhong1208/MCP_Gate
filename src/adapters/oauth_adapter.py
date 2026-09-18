@@ -6,6 +6,7 @@ from db.crud import (
     OAuthClientCRUD,
     OAuthCodeCRUD,
     OAuthConsentCRUD,
+    ServiceScopeCRUD,
     OAuthScopeCRUD,
     OAuthSigningKeyCRUD,
     OAuthTokenCRUD,
@@ -60,3 +61,7 @@ class TokenUsageAdapter(TokenUsageCRUD):
 
 class AuditLogAdapter(AuditLogCRUD):
     """Audit log cleanup."""
+
+
+class ServiceScopeAdapter(ServiceScopeCRUD):
+    """Scopes declared by one MCP server."""

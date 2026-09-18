@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 from db.models import (
     AdminUser, AuditLog, ManagedMcpProcess, MCPTool, OAuthAuthorizationCode,
     OAuthAuthorizationRequest, OAuthClient, OAuthConsent, OAuthScope, OAuthSigningKey,
-    OAuthToken, Service, TokenUsage, UserMcpDefinition, local_now,
+    OAuthToken, Service, ServiceScope, TokenUsage, UserMcpDefinition, local_now,
 )
 
 # Loopback aliases -> always stored / looked up as 127.0.0.1
@@ -279,10 +279,12 @@ class TokenUsageCRUD:
         db: Session, *, event: str, jti: Optional[str] = None, grant_type: Optional[str] = None,
         client_id: Optional[str] = None, sub: Optional[str] = None, audience: Optional[str] = None,
         service_id: Optional[str] = None, success: bool = True, ip_address: Optional[str] = None,
+        count: int = 1, used_at: Optional[datetime] = None,
     ) -> TokenUsage:
         usage = TokenUsage(
             event=event, jti=jti, grant_type=grant_type, client_id=client_id, sub=sub,
             audience=audience, service_id=_uuid(service_id), success=success, ip_address=ip_address,
+            count=max(1, int(count)), used_at=used_at or local_now(),
         )
         db.add(usage)
         db.commit()
@@ -310,8 +312,8 @@ class TokenUsageCRUD:
         for row in TokenUsageCRUD._query(db, start, service_id, audience, event).all():
             key = row.used_at.strftime("%Y-%m-%d")
             b = buckets.setdefault(key, {"total": 0, "success": 0})
-            b["total"] += 1
-            b["success"] += 1 if row.success else 0
+            b["total"] += row.count
+            b["success"] += row.count if row.success else 0
         stats = []
         current = start.date()
         while current <= end.date():
@@ -330,7 +332,7 @@ class TokenUsageCRUD:
         buckets: dict = {}
         for row in TokenUsageCRUD._query(db, start, service_id, audience, event).all():
             key = row.used_at.replace(minute=0, second=0, microsecond=0)
-            buckets[key] = buckets.get(key, 0) + 1
+            buckets[key] = buckets.get(key, 0) + row.count
         stats = []
         current = start.replace(minute=0, second=0, microsecond=0)
         while current <= end:
@@ -346,8 +348,8 @@ class TokenUsageCRUD:
         for row in TokenUsageCRUD._query(db, start).all():
             key = row.audience or "-"
             b = buckets.setdefault(key, {"total": 0, "success": 0, "clients": set(), "service_id": None})
-            b["total"] += 1
-            b["success"] += 1 if row.success else 0
+            b["total"] += row.count
+            b["success"] += row.count if row.success else 0
             if row.client_id:
                 b["clients"].add(row.client_id)
             if row.service_id:
@@ -360,12 +362,12 @@ class TokenUsageCRUD:
 
     @staticmethod
     def get_total_count(db: Session, days: Optional[int] = None, event: Optional[str] = None) -> int:
-        q = db.query(TokenUsage)
+        q = db.query(func.coalesce(func.sum(TokenUsage.count), 0))
         if days:
             q = q.filter(TokenUsage.used_at >= local_now() - timedelta(days=days))
         if event:
             q = q.filter(TokenUsage.event == event)
-        return q.count()
+        return int(q.scalar() or 0)
 
     @staticmethod
     def recent(db: Session, limit: int = 50) -> List[TokenUsage]:
@@ -659,6 +661,51 @@ class OAuthScopeCRUD:
         return True
 
 
+class ServiceScopeCRUD:
+    """Scopes declared by a single MCP server (see ServiceScope)."""
+
+    @staticmethod
+    def list_for_service(db: Session, service_id) -> List[ServiceScope]:
+        return (db.query(ServiceScope).filter(ServiceScope.service_id == _uuid(service_id))
+                .order_by(ServiceScope.name).all())
+
+    @staticmethod
+    def list_all(db: Session) -> List[ServiceScope]:
+        return db.query(ServiceScope).order_by(ServiceScope.name).all()
+
+    @staticmethod
+    def get(db: Session, service_id, name: str) -> Optional[ServiceScope]:
+        return db.query(ServiceScope).filter(
+            ServiceScope.service_id == _uuid(service_id), ServiceScope.name == name,
+        ).first()
+
+    @staticmethod
+    def names_in_use(db: Session, name: str) -> int:
+        """How many services declare ``name`` (used to keep global and service names disjoint)."""
+        return db.query(ServiceScope).filter(ServiceScope.name == name).count()
+
+    @staticmethod
+    def upsert(db: Session, service_id, *, name: str, description: Optional[str], is_default: bool) -> ServiceScope:
+        scope = ServiceScopeCRUD.get(db, service_id, name)
+        if scope is None:
+            scope = ServiceScope(service_id=_uuid(service_id), name=name)
+            db.add(scope)
+        scope.description = description
+        scope.is_default = bool(is_default)
+        db.commit()
+        db.refresh(scope)
+        return scope
+
+    @staticmethod
+    def delete(db: Session, service_id, name: str) -> bool:
+        scope = ServiceScopeCRUD.get(db, service_id, name)
+        if scope is None:
+            return False
+        db.delete(scope)
+        db.commit()
+        return True
+
+
 class OAuthTokenCRUD:
 
     @staticmethod
@@ -698,6 +745,28 @@ class OAuthTokenCRUD:
         if not include_inactive:
             q = q.filter(OAuthToken.revoked_at.is_(None), OAuthToken.expires_at >= local_now())
         return q.order_by(OAuthToken.issued_at.desc()).limit(limit).all()
+
+    @staticmethod
+    def list_revoked_unexpired(db: Session, *, since: Optional[datetime] = None,
+                               kinds: tuple = ("access", "pat")) -> List[OAuthToken]:
+        """Revoked tokens an offline verifier would otherwise still accept: revoked, not yet expired.
+        Bounded by the access-token lifetime, so the feed never grows without limit."""
+        q = db.query(OAuthToken).filter(
+            OAuthToken.revoked_at.isnot(None), OAuthToken.expires_at >= local_now(), OAuthToken.kind.in_(kinds),
+        )
+        if since is not None:
+            q = q.filter(OAuthToken.revoked_at >= since)
+        return q.order_by(OAuthToken.revoked_at.asc()).all()
+
+    @staticmethod
+    def apply_usage(db: Session, token: OAuthToken, *, count: int, last_seen: Optional[datetime]) -> OAuthToken:
+        """Fold a batch of verifications an MCP server reported into the token's counters."""
+        token.use_count = (token.use_count or 0) + max(1, int(count))
+        if last_seen is not None and (token.last_used_at is None or last_seen > token.last_used_at):
+            token.last_used_at = last_seen
+        db.commit()
+        db.refresh(token)
+        return token
 
     @staticmethod
     def revoke(db: Session, token: OAuthToken, reason: str = "revoked") -> OAuthToken:
@@ -788,13 +857,21 @@ class OAuthConsentCRUD:
                 .order_by(OAuthConsent.granted_at.desc()).all())
 
     @staticmethod
-    def delete(db: Session, consent_id: str) -> bool:
-        consent = db.query(OAuthConsent).filter(OAuthConsent.id == _uuid(consent_id)).first()
+    def delete(db: Session, consent_id: str, user_id) -> Optional[dict]:
+        """Forget one remembered consent. Scoped to its owner: another user's consent id reads as absent.
+
+        Returns a snapshot (``to_dict``) taken before the row is deleted, so callers can audit what was forgotten.
+        """
+        consent = db.query(OAuthConsent).filter(
+            OAuthConsent.id == _uuid(consent_id),
+            OAuthConsent.user_id == _uuid(user_id),
+        ).first()
         if not consent:
-            return False
+            return None
+        snapshot = consent.to_dict()
         db.delete(consent)
         db.commit()
-        return True
+        return snapshot
 
 
 # ==================== Managed / BYO MCP ====================

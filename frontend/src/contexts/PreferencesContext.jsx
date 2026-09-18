@@ -2,9 +2,14 @@ import { createContext, useContext, useState, useEffect, useCallback } from 'rea
 
 const PreferencesContext = createContext()
 
+// Bump when a default changes so browsers that only ever stored the old default pick up the new one;
+// a value the user chose in Settings after that is kept as-is.
+const PREFERENCES_VERSION = 2
+
 const DEFAULT_PREFERENCES = {
+  prefsVersion: PREFERENCES_VERSION,
   // Table preferences
-  pageSize: 20,
+  pageSize: 10,
   defaultSort: 'created_at',
   sortDirection: 'desc',
 
@@ -25,7 +30,11 @@ export function PreferencesProvider({ children }) {
     try {
       const saved = localStorage.getItem('userPreferences')
       if (saved) {
-        return { ...DEFAULT_PREFERENCES, ...JSON.parse(saved) }
+        const parsed = JSON.parse(saved)
+        if (parsed.prefsVersion !== PREFERENCES_VERSION) {
+          delete parsed.pageSize   // v1 persisted the old default (20) for everyone; let the new default apply
+        }
+        return { ...DEFAULT_PREFERENCES, ...parsed, prefsVersion: PREFERENCES_VERSION }
       }
     } catch (e) {
       console.error('Failed to load preferences:', e)

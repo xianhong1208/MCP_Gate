@@ -1,6 +1,6 @@
 """API request / response models."""
 
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict
 
@@ -197,6 +197,13 @@ class BulkHealthCheckResponse(BaseModel):
     online: int = 0
     offline: int = 0
     error: int = 0
+
+
+class RefreshToolsRequest(BaseModel):
+    """Who the tools/list request should look like to the server. Servers that show different tools per
+    caller (by subject or scope) need a real identity rather than the anonymous scanner token."""
+    identity: Literal["scanner", "token"] = "scanner"
+    jti: Optional[str] = None               # token: an issued PAT / OAuth access token of this server to present as
 
 
 class RefreshToolsResponse(BaseModel):

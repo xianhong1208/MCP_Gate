@@ -2,6 +2,38 @@
 
 All notable changes to MCP Center are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.1.0] — 2026-09-18
+
+### Added
+- **Remembered consents page.** `/consents` lists the decisions you chose to remember on the consent screen and lets each one be forgotten; the delete endpoint is scoped to the signed-in owner and audited. (#3, #4)
+- **Issuer mismatch detection.** Requests reaching `/.well-known/*` or `/oauth/*` through a scheme, host or port other than `OAUTH_ISSUER` are logged once per host, exposed on `GET /api/oauth/overview` as `issuer_mismatches`, and shown as a dashboard banner. Forwarded headers are honoured only from `security.trusted_proxies`. (#7, #8, #13, #19)
+- **`private_key_jwt` client authentication (RFC 7523).** Clients may register a JWKS document or a `jwks_uri` instead of a secret and authenticate to the token, revocation and introspection endpoints with a signed assertion (RS256 / ES256, `jti` replay protection, key rotation via refetch). Console client form gains the option. Migration `9f3a6c2d7e18`. (#14, #20)
+- **Revocation feed and usage reports for offline-verified MCP servers.** `POST /oauth/revoked` lists tokens revoked but not yet expired; `POST /oauth/usage` accepts batched verification counts. `examples/mcp_center_hooks.py` ships `MCPCenterVerifier`, a FastMCP `JWTVerifier` that polls the feed and reports usage, so revocation takes effect within the poll interval without per-request introspection. `token_usage.count` migration `b2c4d6e8f0a1`; new integration snippet variant. (#15, #21)
+- **Per-server scopes.** A server can declare scopes of its own next to the global registry (`service_scopes`, migration `c3d5e7f9a1b2`); tokens for other servers can never carry them, and global and per-server names stay disjoint. New service detail card and API under `/api/oauth/services/{id}/scopes`; scope CRUD is now audited. (#16, #22)
+- **Orchestrator runtime abstraction and a Docker-free process runtime.** Managed servers run behind a `Runtime` interface; `MCP_RUNTIME=process` runs bring-your-own servers as local subprocesses bridged by supergateway (pid and log files under `MCP_PROCESS_LOG_DIR`), `auto` falls back to it when Docker is absent. `GET /api/managed/runtime` reports the active runtime. (#18, #23)
+- **Inspect tools as an issued token.** "Refresh from Server" can present one of the server's personal access tokens or OAuth access tokens (a short-lived copy of its claims) so servers that show different tools per caller can be inspected. (#24, #25, #26)
+- Frontend ESLint flat config and `npm run lint`. (#9, #10)
+
+### Changed
+- Personal access tokens require a label. (#26)
+- Token list pages at 10 by default (adjustable in Settings), with fixed-width columns and day-only dates so it never scrolls horizontally. (#26)
+- MCP Tools card redesigned: one-line tool rows, markdown-rendered descriptions and a field list for input schemas on expand. Dashboard and OAuth Clients cards size to their content. (#26)
+- Discovery metadata advertises `private_key_jwt`, the assertion signing algorithms and the MCP Center extension endpoints.
+- `is_confidential` on clients now means "authenticates to the token endpoint" rather than "has a secret".
+
+### Fixed
+- `jwks_uri` is parsed and DNS-resolved before use (public https only, rechecked before every fetch) instead of prefix-matched, closing an SSRF path. (#21)
+- Port allocation for managed servers compared the UUID id column with a string and failed on every re-allocation. (#23)
+- Introspection treated key-authenticated clients as public clients. (#21)
+
+### Security
+- See "Fixed" for the `jwks_uri` hardening; `SECURITY.md` now describes the offline-revocation window as the poll interval.
+
+## [1.0.1] — 2026-09-15
+
+### Fixed
+- Service detail page: token scopes now render on their own line under each token in the sidebar card and are visible at every breakpoint; previously they were hidden below the 2xl breakpoint. (#1, #2)
+
 ## [1.0.0] — 2026-09-01
 
 First public release. MCP Center is an OAuth 2.1 authorization server and management console for Model Context Protocol servers.

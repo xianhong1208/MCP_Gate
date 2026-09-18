@@ -5,6 +5,7 @@
     "tokens": "Tokens",
     "issueToken": "Issue Token",
     "clients": "OAuth Clients",
+    "consents": "Consents",
     "marketplace": "Marketplace",
     "audit": "Audit Logs"
   },
@@ -133,6 +134,29 @@
     "errorTitle": "Authorization request unavailable",
     "backToDashboard": "Back to dashboard"
   },
+  "consents": {
+    "list": {
+      "title": "Remembered Consents",
+      "subtitle": "Decisions you chose to remember on the consent screen. A remembered consent lets that client skip the screen for the same server as long as its scopes are covered.",
+      "refresh": "Refresh",
+      "searchPlaceholder": "Search client, server, scope...",
+      "colClient": "Client",
+      "colAudience": "Server / Audience",
+      "colScopes": "Remembered scopes",
+      "colGranted": "Last granted",
+      "colActions": "Actions",
+      "noAudience": "Any server",
+      "empty": "No remembered consents",
+      "emptyHint": "Tick \"Remember this decision\" on the consent screen and it will show up here.",
+      "adjustFilters": "Try adjusting your search",
+      "forgetTitle": "Forget this consent",
+      "forgetTarget": "the remembered consent for {{name}}",
+      "forgetSuccess": "Consent forgotten. The client will ask again next time.",
+      "forgetFail": "Failed to forget consent: {{message}}",
+      "loadFail": "Failed to load consents",
+      "count": "{{count}} remembered"
+    }
+  },
   "dashboard": {
     "title": "Dashboard",
     "subtitle": "MCP services, OAuth clients and tokens at a glance",
@@ -181,6 +205,12 @@
       "title": "{{n}} client(s) awaiting approval",
       "hint": "Dynamically registered clients cannot obtain tokens until approved.",
       "review": "Review"
+    },
+    "issuerMismatch": {
+      "title": "{{n}} host(s) reached the OAuth endpoints without matching OAUTH_ISSUER ({{issuer}})",
+      "hint": "Tokens carry the issuer above and discovery advertises its URLs, so clients using these addresses will fail verification or reach the wrong endpoints:",
+      "seen": "{{n}} request(s)",
+      "fix": "Either set OAUTH_ISSUER to the address clients actually use, or reach the server through the issuer host and list your reverse proxy in security.trusted_proxies. See docs/troubleshooting.md."
     },
     "chart": {
       "title": "Token Activity (Last 7 Days)",
@@ -328,11 +358,13 @@
       "restrictedHint": "Limited to the scopes allowed for this service.",
       "noScopes": "No scopes are defined. The token will be issued without scopes.",
       "defaultTag": "default",
+      "serverScopeTag": "this server only",
       "expiresLabel": "Expires in",
       "days": "{{n}} days",
       "customDays": "Custom",
       "labelLabel": "Label",
       "labelPlaceholder": "e.g. my-laptop, ci-runner",
+      "labelHint": "Required. Name the client or machine that will use it; this is how the token is identified in lists and when inspecting a server as it.",
       "cancel": "Cancel",
       "submit": "Issue token",
       "submitting": "Issuing...",
@@ -374,6 +406,13 @@
       "toolsCount_one": "{{n}} tool",
       "toolsCount_other": "{{n}} tools",
       "inputSchema": "Input Schema",
+      "paramCount": "{{n}} params",
+      "schemaView": {
+        "table": "Fields"
+      },
+      "noParams": "This tool takes no parameters.",
+      "paramRequired": "required",
+      "paramDefault": "default",
       "copyInputSchema": "Copy input schema",
       "noTools": "No tools found",
       "refreshHint": "Click \"Refresh from MCP Server\" to fetch tools",
@@ -513,7 +552,17 @@
       "tagsTitle": "Tags",
       "noTags": "No tags",
       "mcpToolsTitle": "MCP Tools ({{n}})",
+      "mcpToolsLabel": "MCP Tools",
       "refreshFromServer": "Refresh from Server",
+      "refreshAs": "Inspect as",
+      "refreshAsScanner": "Scanner token (anonymous)",
+      "refreshAsTokenGroup": "Issued tokens for this server",
+      "refreshAsTokenOption": "{{kind}} · {{name}}",
+      "refreshAsHint": {
+        "scanner": "Anonymous short-lived token; fine for servers that list the same tools for everyone.",
+        "token": "Presents this token's identity (same subject, client, scopes and jti) without reading the stored token."
+      },
+      "refreshTokenGone": "That token is no longer active; falling back to the scanner token.",
       "noToolsFound": "No tools found",
       "usageHistoryTitle": "Usage History (Last 30 Days)",
       "usageHistorySubtitle": "Token verification requests for this service",
@@ -541,6 +590,9 @@
       "staticTokenBadge": "Static bearer token configured",
       "scopesTitle": "Allowed scopes",
       "scopesAll": "No restriction — any registered scope may be granted.",
+      "ownScopesTitle": "Scopes declared by this server",
+      "ownScopesSubtitle": "Exist only for this server, next to the global registry; tokens for other servers can never carry them. Names may not reuse a global scope.",
+      "ownScopesEmpty": "This server declares no scopes of its own",
       "integrationTitle": "Integration",
       "integrationSubtitle": "Copy-paste snippets for the server side (FastMCP) and for MCP clients.",
       "snippetsUnavailable": "Integration snippets are unavailable.",
@@ -559,6 +611,7 @@
         "oauth": "OAuth",
         "pat": "Personal token",
         "server": "Server",
+        "hooks": "Server + revocation feed",
         "client": "Client"
       }
     },
@@ -611,7 +664,8 @@
     "authMethod": {
       "none": "None (public client, PKCE)",
       "client_secret_basic": "Client secret (HTTP Basic)",
-      "client_secret_post": "Client secret (POST body)"
+      "client_secret_post": "Client secret (POST body)",
+      "private_key_jwt": "Private key JWT (RFC 7523)"
     },
     "col": {
       "name": "Client",
@@ -628,7 +682,7 @@
       "revoked": "No revoked clients"
     },
     "emptyHint": "Clients appear here when they register dynamically, or register one manually.",
-    "confidential": "Confidential client (has a secret)",
+    "confidential": "Confidential client (authenticates to the token endpoint)",
     "public": "Public client (PKCE)",
     "neverUsed": "Never",
     "noRedirect": "none",
@@ -653,6 +707,13 @@
       "grantTypes": "Grant types",
       "authMethod": "Token endpoint authentication",
       "authMethodHint": "Choose a client-secret method for server-side apps; the secret is shown once after registration.",
+      "jwksIntro": "The client signs a short-lived JWT with its private key on every token request; MCP Center verifies it against the public keys below. No secret is issued.",
+      "jwksUri": "JWKS URI",
+      "jwksUriHint": "HTTPS URL of the client's JSON Web Key Set. Fetched on first use and cached; an unknown kid triggers a refetch, so keys can be rotated.",
+      "jwks": "JWKS document",
+      "jwksHint": "Alternatively paste the JWKS JSON (public keys only, RSA or EC P-256). Fill in one of the two.",
+      "jwksRequired": "Provide either a JWKS URI or a JWKS document, not both.",
+      "jwksInvalid": "The JWKS document is not valid JSON.",
       "cancel": "Cancel",
       "submit": "Register",
       "submitting": "Registering...",
@@ -670,6 +731,7 @@
       "clientSecret": "client_secret",
       "oneTime": "The secret is shown only once. Store it now.",
       "publicClient": "This is a public client — it authenticates with PKCE and has no secret.",
+      "privateKeyJwt": "This client authenticates with a signed JWT (private_key_jwt); there is no secret. Send client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer and a client_assertion signed with the registered key.",
       "done": "Done"
     },
     "scopes": {
@@ -871,7 +933,9 @@
       "service": "Service",
       "admin": "Admin",
       "system": "System",
-      "oauth_client": "OAuth Client"
+      "oauth_client": "OAuth Client",
+      "oauth_consent": "Consent",
+      "oauth_scope": "Scope"
     },
     "status": {
       "success": "Success",
@@ -885,6 +949,9 @@
       "oauth_client_approve": "Client Approved",
       "oauth_client_revoke": "Client Revoked",
       "oauth_client_delete": "Client Deleted",
+      "oauth_consent_delete": "Consent Forgotten",
+      "oauth_scope_upsert": "Scope Saved",
+      "oauth_scope_delete": "Scope Deleted",
       "oauth_key_rotate": "Signing Key Rotated",
       "refresh_tools": "Tools Refreshed",
       "scan_services": "Network Scan",
@@ -949,6 +1016,8 @@
       "consent_not_found": "Consent record not found",
       "invalid_scope_name": "Invalid scope name (no spaces allowed)",
       "scope_not_found": "Scope not found",
+      "scope_owned_by_service": "A server already declares a scope with this name",
+      "scope_is_global": "This name is a global scope; edit it in the registry",
       "system_client": "Built-in clients cannot be modified",
       "invalid_request": "Invalid authorization request",
       "access_denied": "Access denied",
