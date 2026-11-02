@@ -79,6 +79,32 @@ def _valid_redirect_uri(uri: str) -> bool:
     return p.scheme not in ("javascript", "data", "file")
 
 
+LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1")
+# RFC 7591 informational URIs: shown to the owner (consent screen, OAuth Clients page), so web URLs only
+INFO_URI_FIELDS = ("client_uri", "logo_uri", "tos_uri", "policy_uri")
+MAX_REDIRECT_URIS = 20      # native/desktop MCP clients register one or two
+MAX_RESPONSE_TYPES = 5
+MAX_SCOPE_PARAM = 1024      # characters of a raw `scope` parameter
+MAX_RESOURCE_PARAM = 512    # characters of a raw `resource` parameter
+
+
+def _valid_info_uri(uri) -> bool:
+    """https with a host, or http to a loopback host (local development); nothing else (javascript:, data:, file:,
+    other hosts over plain http, scheme-relative ...)."""
+    if not isinstance(uri, str):
+        return False
+    try:
+        p = urlparse(uri)
+        host = (p.hostname or "").lower()
+    except ValueError:
+        return False
+    if not host:
+        return False
+    if p.scheme == "https":
+        return True
+    return p.scheme == "http" and host in LOOPBACK_HOSTS
+
+
 def redirect_with(base: str, params: dict) -> str:
     sep = "&" if "?" in base else "?"
     return f"{base}{sep}{urlencode({k: v for k, v in params.items() if v is not None})}"
@@ -98,19 +124,25 @@ def register_client(
     """Validate metadata per RFC 7591 and create the client; a confidential client's secret is returned only once."""
     if not isinstance(metadata, dict):
         raise OAuthError("invalid_client_metadata", "client metadata must be a JSON object")
-    client_name = (metadata.get("client_name") or "").strip()
-    if not client_name:
-        client_name = "Unnamed MCP client"
+    client_name = metadata.get("client_name") or ""
+    if not isinstance(client_name, str):
+        raise OAuthError("invalid_client_metadata", "client_name must be a string")
+    client_name = client_name.strip() or "Unnamed MCP client"
 
     grant_types = metadata.get("grant_types") or ["authorization_code", "refresh_token"]
-    if not isinstance(grant_types, list):
-        raise OAuthError("invalid_client_metadata", "grant_types must be an array")
+    if not isinstance(grant_types, list) or not all(isinstance(g, str) for g in grant_types):
+        raise OAuthError("invalid_client_metadata", "grant_types must be an array of strings")
+    grant_types = list(dict.fromkeys(grant_types))
+    response_types = metadata.get("response_types") or ["code"]
+    if (not isinstance(response_types, list) or len(response_types) > MAX_RESPONSE_TYPES
+            or not all(isinstance(r, str) and len(r) <= 32 for r in response_types)):
+        raise OAuthError("invalid_client_metadata", "response_types must be a short array of strings")
     unsupported = set(grant_types) - set(SERVER_GRANT_TYPES)
     if unsupported:
         raise OAuthError("invalid_client_metadata", f"unsupported grant_types: {' '.join(sorted(unsupported))}")
 
     auth_method = metadata.get("token_endpoint_auth_method") or "none"
-    if auth_method not in SERVER_AUTH_METHODS:
+    if not isinstance(auth_method, str) or auth_method not in SERVER_AUTH_METHODS:
         raise OAuthError("invalid_client_metadata", f"unsupported token_endpoint_auth_method: {auth_method}")
     if "client_credentials" in grant_types and auth_method == "none":
         raise OAuthError("invalid_client_metadata", "client_credentials requires a confidential client")
@@ -145,9 +177,11 @@ def register_client(
     redirect_uris = metadata.get("redirect_uris") or []
     if not isinstance(redirect_uris, list):
         raise OAuthError("invalid_redirect_uri", "redirect_uris must be an array")
-    if "authorization_code" in grant_types:
-        if not redirect_uris:
-            raise OAuthError("invalid_redirect_uri", "authorization_code requires at least one redirect_uri")
+    if len(redirect_uris) > MAX_REDIRECT_URIS:
+        raise OAuthError("invalid_redirect_uri", f"at most {MAX_REDIRECT_URIS} redirect_uris")
+    if "authorization_code" in grant_types and not redirect_uris:
+        raise OAuthError("invalid_redirect_uri", "authorization_code requires at least one redirect_uri")
+    if redirect_uris:  # validated whenever present: whatever is stored is shown in the console
         redirect_limit = column_limit(OAuthAuthorizationRequest.redirect_uri)
         for uri in redirect_uris:
             if not isinstance(uri, str) or not _valid_redirect_uri(uri):
@@ -165,6 +199,11 @@ def register_client(
             raise OAuthError("invalid_client_metadata", f"unknown scope: {' '.join(sorted(unknown))}")
 
     _check_metadata_lengths(metadata, jwks_uri)
+    for field in INFO_URI_FIELDS:
+        value = metadata.get(field)
+        if value is not None and value != "" and not _valid_info_uri(value):
+            raise OAuthError("invalid_client_metadata",
+                             f"{field} must be an https URL (http only for localhost / loopback)")
 
     if is_approved is None:
         is_approved = True if created_via != "dcr" else Config.get_oauth_config().dcr_auto_approve
@@ -200,7 +239,7 @@ def register_client(
         software_id=(metadata.get("software_id") or None),
         redirect_uris=json.dumps(redirect_uris),
         grant_types=json.dumps(grant_types),
-        response_types=json.dumps(metadata.get("response_types") or ["code"]),
+        response_types=json.dumps(response_types),
         scope=(scope or None),
         token_endpoint_auth_method=auth_method,
         jwks=json.dumps(jwks_doc) if jwks_doc else None,
@@ -224,6 +263,9 @@ def _check_metadata_lengths(metadata: dict, jwks_uri: Optional[str]) -> None:
         "software_id": (metadata.get("software_id"), OAuthClient.software_id),
         "scope": (metadata.get("scope"), OAuthClient.scope),
         "default_resource": (metadata.get("default_resource"), OAuthClient.default_resource),
+        # not stored, but bounded like the URIs that are
+        "tos_uri": (metadata.get("tos_uri"), OAuthClient.client_uri),
+        "policy_uri": (metadata.get("policy_uri"), OAuthClient.client_uri),
         "jwks_uri": (jwks_uri, OAuthClient.jwks_uri),
     }
     for field, (value, column) in values.items():
@@ -460,6 +502,10 @@ def begin_authorization(
     else:
         code_challenge_method = None  # classic confidential client: the secret proves identity at /token
 
+    if resource is not None and len(resource) > MAX_RESOURCE_PARAM:
+        raise OAuthError("invalid_target", "resource is too long", redirectable=True)
+    if scope is not None and len(scope) > MAX_SCOPE_PARAM:
+        raise OAuthError("invalid_scope", "scope is too long", redirectable=True)
     audience, service = resolve_resource(db, resource or client.default_resource)
     granted_scope = resolve_scope(db, scope, client, service)
     if granted_scope and len(granted_scope) > column_limit(OAuthAuthorizationRequest.scope):

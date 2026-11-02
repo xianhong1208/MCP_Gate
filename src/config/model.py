@@ -49,6 +49,9 @@ class OAuthConfig(BaseModel):
     dcr_auto_approve: bool = True
     # Maximum lifetime (days) allowed for Personal Access Tokens issued directly from the admin console
     pat_max_days: int = 365
+    # Dynamically registered clients that never obtained a token are deleted this many days after registration
+    # (anyone can register one, so they would otherwise pile up). 0 disables the purge.
+    dcr_unused_client_days: int = 30
 
 
 class OAuthLoginProviderConfig(BaseModel):

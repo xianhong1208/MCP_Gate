@@ -573,6 +573,20 @@ class OAuthClientCRUD:
         client.last_used_at = local_now()
         db.commit()
 
+    @staticmethod
+    def delete_unused_dcr(db: Session, older_than: timedelta) -> int:
+        """Delete dynamically registered clients that never obtained a token (no last use, no token record) and
+        were registered before ``older_than`` ago. Their pending requests, codes and consents go with them."""
+        has_tokens = db.query(OAuthToken.jti).filter(OAuthToken.client_id == OAuthClient.client_id).exists()
+        stale = db.query(OAuthClient).filter(
+            OAuthClient.created_via == "dcr", OAuthClient.last_used_at.is_(None),
+            OAuthClient.created_at < local_now() - older_than, ~has_tokens,
+        ).all()
+        for client in stale:
+            db.delete(client)
+        db.commit()
+        return len(stale)
+
 
 class OAuthAuthRequestCRUD:
 
