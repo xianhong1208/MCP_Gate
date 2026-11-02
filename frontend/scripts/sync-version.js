@@ -1,37 +1,58 @@
-// 讓前端 package.json 的 version 以 pyproject.toml 為唯一事實來源。
-// build 前執行(prebuild),把 ../pyproject.toml 的 [project].version 同步到 package.json,
-// 避免前端獨立維護一份會漂移的版本號。
-//
-// 注意:UI 顯示的版本是執行期打 /system/version 取得(後端 version.py 讀 pyproject),
-// 本腳本只負責讓「建置產物 metadata」也對齊 pyproject,不影響顯示邏輯。
-
+#!/usr/bin/env node
+/**
+ * Copy the project version from pyproject.toml into frontend/package.json.
+ *
+ * pyproject.toml's [project].version is the only place a release bumps the
+ * version. This script runs as `prebuild` (and by hand via `npm run
+ * sync-version`) so package.json never drifts from it. The console itself
+ * shows the version it gets from the backend at runtime; this only keeps the
+ * package metadata honest.
+ */
 import { readFileSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { dirname, resolve } from 'node:path'
 
-const here = dirname(fileURLToPath(import.meta.url))
-const pyprojectPath = resolve(here, '../../pyproject.toml')
-const packagePath = resolve(here, '../package.json')
-
-// 極簡解析:只抓 [project] 區段內第一個 version = "x.y.z"
-function readPyprojectVersion(text) {
-  const projectSection = text.split(/^\[/m).find((s) => s.startsWith('project]'))
-  const source = projectSection ?? text
-  const m = source.match(/^\s*version\s*=\s*["']([^"']+)["']/m)
-  return m ? m[1] : null
+const TAG = '[sync-version]'
+const frontendDir = join(dirname(fileURLToPath(import.meta.url)), '..')
+const files = {
+  pyproject: join(frontendDir, '..', 'pyproject.toml'),
+  packageJson: join(frontendDir, 'package.json'),
 }
 
-const version = readPyprojectVersion(readFileSync(pyprojectPath, 'utf-8'))
-if (!version) {
-  console.warn('[sync-version] pyproject.toml 找不到 version,略過同步')
+/**
+ * Return the `version = "..."` value from the [project] table, or null.
+ * A full TOML parser is overkill for one key: walk the lines, track which
+ * table we are in, and stop at the first version key inside [project].
+ */
+function projectVersion(toml) {
+  let table = null
+  for (const raw of toml.split(/\r?\n/)) {
+    const line = raw.trim()
+    const header = line.match(/^\[([^\]]+)\]$/)
+    if (header) {
+      table = header[1].trim()
+      continue
+    }
+    if (table !== 'project') continue
+    const kv = line.match(/^version\s*=\s*(["'])(.+?)\1/)
+    if (kv) return kv[2]
+  }
+  return null
+}
+
+const version = projectVersion(readFileSync(files.pyproject, 'utf-8'))
+if (version === null) {
+  // Not fatal: leave package.json alone rather than break the build.
+  console.warn(`${TAG} no [project].version in pyproject.toml; package.json left unchanged`)
   process.exit(0)
 }
 
-const pkg = JSON.parse(readFileSync(packagePath, 'utf-8'))
-if (pkg.version !== version) {
-  pkg.version = version
-  writeFileSync(packagePath, JSON.stringify(pkg, null, 2) + '\n', 'utf-8')
-  console.log(`[sync-version] package.json version -> ${version}(對齊 pyproject.toml)`)
+const pkg = JSON.parse(readFileSync(files.packageJson, 'utf-8'))
+if (pkg.version === version) {
+  console.log(`${TAG} package.json already at ${version}`)
 } else {
-  console.log(`[sync-version] package.json version 已是 ${version}`)
+  const previous = pkg.version
+  pkg.version = version
+  writeFileSync(files.packageJson, `${JSON.stringify(pkg, null, 2)}\n`, 'utf-8')
+  console.log(`${TAG} package.json ${previous} -> ${version} (from pyproject.toml)`)
 }
