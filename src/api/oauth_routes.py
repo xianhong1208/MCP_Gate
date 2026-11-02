@@ -14,7 +14,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 from typing import List, Optional
 from urllib.parse import parse_qs, urlencode
@@ -23,6 +22,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from db import get_db
 from db.models import AdminUser
@@ -30,7 +30,7 @@ from src.identity import get_current_user
 from src.logging import get_logger
 from src.oauth import service as oauth
 from src.oauth.errors import OAuthError
-from src.oauth.signing_keys import get_jwks
+from src.oauth.signing_keys import cached_jwks
 from src.utils.client_ip import resolve_client_ip
 
 logger = get_logger("oauth")
@@ -78,11 +78,26 @@ async def _form(request: Request, limit: int = FORM_BODY_LIMIT) -> dict:
     return {k: v[0] for k, v in parse_qs(raw).items() if v}
 
 
-async def _authenticate_client(request: Request, db: Session, form: dict):
-    """oauth.authenticate_client off the event loop: a private_key_jwt client may need its jwks_uri fetched,
-    a blocking network call (DNS + HTTPS, up to the fetch timeout) that must not stall every other request."""
-    return await asyncio.to_thread(oauth.authenticate_client, db,
-                                   authorization_header=request.headers.get("Authorization", ""), form=form)
+def _authenticate_client(request: Request, db: Session, form: dict):
+    """Called from the threadpool only: a private_key_jwt client may need its jwks_uri fetched, a blocking network
+    call (DNS + HTTPS, up to the fetch timeout) that must not stall every other request."""
+    return oauth.authenticate_client(db, authorization_header=request.headers.get("Authorization", ""), form=form)
+
+
+async def _off_loop(request: Request, read_body, handler, *args):
+    """Read the body on the loop (it is async), then run ``handler(request, *args, body)`` in the threadpool.
+    A body that cannot be read (too large) is answered here."""
+    try:
+        body = await read_body(request)
+    except OAuthError as e:
+        return _error_json(e)
+    return await run_in_threadpool(handler, request, *args, body)
+
+
+# Every handler below keeps its synchronous DB work off the event loop (H-06): either the handler is a plain
+# `def` (FastAPI runs it in the threadpool), or it awaits the request body and then hands the rest to
+# run_in_threadpool. A pool checkout that blocks on the loop freezes the whole server, because the connections
+# already checked out can only be returned by that same loop.
 
 
 # ---------------------------------------------------------------------------
@@ -90,15 +105,15 @@ async def _authenticate_client(request: Request, db: Session, form: dict):
 # ---------------------------------------------------------------------------
 @router.get("/.well-known/oauth-authorization-server")
 @router.get("/.well-known/openid-configuration")
-async def authorization_server_metadata(db: Session = Depends(get_db)):
+def authorization_server_metadata():
     """Authorization server metadata (RFC 8414). Lists every OAuth endpoint, supported grants, PKCE methods and scopes. Public."""
-    return JSONResponse(content=oauth.build_metadata(db), headers={"Cache-Control": "public, max-age=300"})
+    return JSONResponse(content=oauth.cached_metadata(), headers={"Cache-Control": "public, max-age=300"})
 
 
 @router.get("/.well-known/jwks.json")
-async def jwks(db: Session = Depends(get_db)):
+def jwks():
     """Public signing keys (JWKS). MCP servers fetch these to verify tokens offline; a rotated-out key stays published while tokens it signed can still be valid. Public."""
-    return JSONResponse(content=get_jwks(db), headers={"Cache-Control": "public, max-age=300"})
+    return JSONResponse(content=cached_jwks(), headers={"Cache-Control": "public, max-age=300"})
 
 
 # ---------------------------------------------------------------------------
@@ -107,11 +122,14 @@ async def jwks(db: Session = Depends(get_db)):
 @router.post("/oauth/register", status_code=201)
 async def register(request: Request, db: Session = Depends(get_db)):
     """Dynamic client registration (RFC 7591). Returns a client_id (and a one-time client_secret for confidential clients). Public."""
+    return await _off_loop(request, lambda r: _read_body(r, REGISTRATION_BODY_LIMIT, "invalid_client_metadata"),
+                           _register, db)
+
+
+def _register(request: Request, db: Session, raw: bytes) -> JSONResponse:
     try:
         try:
-            metadata = json.loads(await _read_body(request, REGISTRATION_BODY_LIMIT, "invalid_client_metadata"))
-        except OAuthError:
-            raise
+            metadata = json.loads(raw)
         except Exception:
             raise OAuthError("invalid_client_metadata", "request body must be a JSON object")
         client, secret = oauth.register_client(db, metadata, created_via="dcr")
@@ -126,7 +144,7 @@ async def register(request: Request, db: Session = Depends(get_db)):
 # authorization endpoint + consent
 # ---------------------------------------------------------------------------
 @router.get("/oauth/authorize")
-async def authorize(
+def authorize(
     request: Request,
     response_type: str = "",
     client_id: str = "",
@@ -160,8 +178,8 @@ async def authorize(
 
 
 @router.get("/oauth/authorize/requests/{request_id}")
-async def get_authorization_request(request_id: str, db: Session = Depends(get_db),
-                                    user: AdminUser = Depends(get_current_user)):
+def get_authorization_request(request_id: str, db: Session = Depends(get_db),
+                              user: AdminUser = Depends(get_current_user)):
     """Details of a pending authorization request for the consent screen: client, target server, requested scopes. Requires a console session."""
     try:
         req = oauth.get_pending_request(db, request_id)
@@ -177,8 +195,8 @@ class DecisionRequest(BaseModel):
 
 
 @router.post("/oauth/authorize/requests/{request_id}/decision")
-async def decide_authorization_request(request_id: str, body: DecisionRequest, db: Session = Depends(get_db),
-                                       user: AdminUser = Depends(get_current_user)):
+def decide_authorization_request(request_id: str, body: DecisionRequest, db: Session = Depends(get_db),
+                                 user: AdminUser = Depends(get_current_user)):
     """Approve or deny a pending authorization request. On approval an authorization code is issued; returns the URL to send the browser back to. Requires a console session."""
     try:
         req = oauth.get_pending_request(db, request_id)
@@ -199,8 +217,11 @@ async def decide_authorization_request(request_id: str, body: DecisionRequest, d
 @router.post("/oauth/token")
 async def token(request: Request, db: Session = Depends(get_db)):
     """Token endpoint. Grants: `authorization_code` (with PKCE), `refresh_token` (rotating), `client_credentials`. Form-encoded body per OAuth 2.1."""
+    return await _off_loop(request, _form, _token, db)
+
+
+def _token(request: Request, db: Session, form: dict) -> JSONResponse:
     try:
-        form = await _form(request)
         grant_type = form.get("grant_type")
         if not grant_type:
             raise OAuthError("invalid_request", "missing grant_type")
@@ -208,7 +229,7 @@ async def token(request: Request, db: Session = Depends(get_db)):
             raise OAuthError("invalid_scope", "scope is too long")
         if len(form.get("resource") or "") > oauth.MAX_RESOURCE_PARAM:
             raise OAuthError("invalid_target", "resource is too long")
-        client = await _authenticate_client(request, db, form)
+        client = _authenticate_client(request, db, form)
         if grant_type not in client.grant_type_list():
             raise OAuthError("unauthorized_client", f"client may not use grant_type={grant_type}")
         ip = _client_ip(request)
@@ -243,9 +264,12 @@ async def token(request: Request, db: Session = Depends(get_db)):
 @router.post("/oauth/revoke")
 async def revoke(request: Request, db: Session = Depends(get_db)):
     """Token revocation (RFC 7009). Only tokens issued to the authenticated client are revoked; always returns 200."""
+    return await _off_loop(request, _form, _revoke, db)
+
+
+def _revoke(request: Request, db: Session, form: dict) -> JSONResponse:
     try:
-        form = await _form(request)
-        client = await _authenticate_client(request, db, form)
+        client = _authenticate_client(request, db, form)
         if form.get("token"):
             oauth.revoke_token(db, client=client, token=form["token"], ip=_client_ip(request))
         return JSONResponse(content={}, status_code=200, headers=NO_STORE)
@@ -259,9 +283,12 @@ async def revoked_tokens(request: Request, db: Session = Depends(get_db)):
     """Revocation feed for MCP servers that verify JWTs offline: tokens revoked but not yet expired, optionally
     only those revoked since a unix timestamp (`since`). Requires a resource server: a console-registered
     confidential client bound to an MCP server; only that server's tokens are listed."""
+    return await _off_loop(request, _form, _revoked_tokens, db)
+
+
+def _revoked_tokens(request: Request, db: Session, form: dict) -> JSONResponse:
     try:
-        form = await _form(request)
-        caller = await _authenticate_client(request, db, form)
+        caller = _authenticate_client(request, db, form)
         return JSONResponse(content=oauth.revoked_feed(db, caller=caller, since=form.get("since")), headers=NO_STORE)
     except OAuthError as e:
         return _error_json(e)
@@ -272,9 +299,12 @@ async def usage_report(request: Request, db: Session = Depends(get_db)):
     """Usage report from an MCP server that verifies JWTs offline: `events` is a JSON array of
     {jti, count (1..1,000,000), last_seen}. Feeds the token counters and the dashboard. Requires a resource server
     (a console-registered confidential client bound to an MCP server); other servers' jtis are returned as unknown."""
+    return await _off_loop(request, lambda r: _form(r, USAGE_BODY_LIMIT), _usage_report, db)
+
+
+def _usage_report(request: Request, db: Session, form: dict) -> JSONResponse:
     try:
-        form = await _form(request, USAGE_BODY_LIMIT)
-        caller = await _authenticate_client(request, db, form)
+        caller = _authenticate_client(request, db, form)
         try:
             events = json.loads(form.get("events") or "[]")
         except ValueError:
@@ -290,9 +320,12 @@ async def usage_report(request: Request, db: Session = Depends(get_db)):
 async def introspect(request: Request, db: Session = Depends(get_db)):
     """Requires client authentication. A client can introspect its own tokens; a resource server (a
     console-registered confidential client bound to an MCP server) can introspect access tokens for that server."""
+    return await _off_loop(request, _form, _introspect, db)
+
+
+def _introspect(request: Request, db: Session, form: dict) -> JSONResponse:
     try:
-        form = await _form(request)
-        caller = await _authenticate_client(request, db, form)
+        caller = _authenticate_client(request, db, form)
         token_value = form.get("token")
         if not token_value:
             return JSONResponse(content={"active": False}, headers=NO_STORE)

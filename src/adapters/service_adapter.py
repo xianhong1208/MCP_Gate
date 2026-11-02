@@ -5,6 +5,7 @@ from typing import Optional
 from db.crud import ServiceCRUD, normalize_audience, normalize_service_host
 from db.models import Service
 from src.adapters.exceptions import ConflictError, NotFoundError, ValidationFailedError
+from src.utils import public_cache
 from src.utils.field_limits import FieldTooLongError, check_max_length, column_limit
 from src.utils.mcp_target import InvalidTargetError, validate_host, validate_mcp_path, validate_port, validate_protocol
 
@@ -83,6 +84,13 @@ def _check_lengths(fields: dict) -> None:
 
 
 class ServiceAdapter(ServiceCRUD):
+
+    @classmethod
+    def delete(cls, db, service_id):
+        """Delete a service; its declared scopes go with it (cascade), so the cached discovery metadata too."""
+        deleted = super().delete(db, service_id)
+        public_cache.invalidate()
+        return deleted
 
     @classmethod
     def adopt_server_name(cls, db, service, server_name: Optional[str]) -> Optional[str]:

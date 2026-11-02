@@ -18,6 +18,7 @@ def _age_retired_keys(db_session, minutes):
         key.rotated_at = key.rotated_at - timedelta(minutes=minutes)
         key.created_at = key.created_at - timedelta(minutes=minutes)
     db_session.commit()
+    _forget_cached_jwks()
 
 
 def _age_tokens(db_session, minutes, expire_access=False):
@@ -29,6 +30,15 @@ def _age_tokens(db_session, minutes, expire_access=False):
         if expire_access and t.kind == "access":
             t.expires_at = t.expires_at - timedelta(minutes=minutes)
     db_session.commit()
+    _forget_cached_jwks()
+
+
+def _forget_cached_jwks():
+    """These helpers rewrite rows behind the adapters' back, so the JWKS cache (which the adapters invalidate)
+    must be dropped by hand, as if its short lifetime had run out."""
+    from src.utils import public_cache
+
+    public_cache.invalidate()
 
 
 def test_retired_key_unpublished_after_access_lifetime(owner_client, service, db_session):

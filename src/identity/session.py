@@ -233,8 +233,9 @@ def _resolve_user(db: Session, token: str, binding: Optional[str]) -> AdminUser:
     return user
 
 
-async def get_current_user(request: Request, db: Session = Depends(get_db)) -> AdminUser:
-    """FastAPI dependency: login required (cookie or Bearer session, plus the session binding header)."""
+def get_current_user(request: Request, db: Session = Depends(get_db)) -> AdminUser:
+    """FastAPI dependency: login required (cookie or Bearer session, plus the session binding header). A plain
+    `def`, so FastAPI resolves it in the threadpool and the session lookup never blocks the event loop (H-06)."""
     token = session_manager.token_from_request(request)
     if not token:
         raise AuthenticationRequired()
@@ -244,7 +245,7 @@ async def get_current_user(request: Request, db: Session = Depends(get_db)) -> A
         raise AuthenticationRequired(e.code, str(e))
 
 
-async def get_optional_current_user(request: Request, db: Session = Depends(get_db)) -> Optional[AdminUser]:
+def get_optional_current_user(request: Request, db: Session = Depends(get_db)) -> Optional[AdminUser]:
     token = session_manager.token_from_request(request)
     if not token:
         return None

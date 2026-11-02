@@ -12,18 +12,18 @@ tokens it signed (they are only ever presented to MCP Gate).
 import base64
 import hashlib
 import json
+from datetime import timedelta
 from typing import Optional
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from sqlalchemy.orm import Session
 
-from db.models import OAuthSigningKey
-from datetime import timedelta
-
-from db.models import local_now
+from db.database import make_session
+from db.models import OAuthSigningKey, local_now
 from src.adapters import OAuthKeyAdapter, OAuthTokenAdapter
 from src.config import Config
+from src.utils import public_cache
 from src.utils.crypto import decrypt_token, encrypt_token
 
 DEFAULT_ALG = "RS256"
@@ -119,3 +119,35 @@ def published_keys(db: Session) -> list[OAuthSigningKey]:
 
 def get_jwks(db: Session) -> dict:
     return {"keys": [public_jwk_of(k) for k in published_keys(db)]}
+
+
+# How long a cached JWKS may be served at most. A retired key kept only by a live token it signed drops out when
+# that token expires or is revoked, which the cache cannot foresee; this bounds that delay.
+JWKS_CACHE_MAX_SECONDS = 30.0
+
+
+def _seconds_until_next_retirement(db: Session) -> float:
+    """Seconds until the next retired key leaves the JWKS on schedule (its grace period ends)."""
+    now, grace = local_now(), retired_key_grace()
+    ends = [(k.rotated_at or k.created_at) + grace for k in OAuthKeyAdapter.list_all(db)
+            if not k.is_active and (k.rotated_at or k.created_at) is not None]
+    upcoming = [(end - now).total_seconds() for end in ends if end > now]
+    return min(upcoming, default=JWKS_CACHE_MAX_SECONDS)
+
+
+def cached_jwks() -> dict:
+    """The JWKS served at /.well-known/jwks.json, from memory; opens a session only on a cache miss.
+
+    Invalidated by OAuthKeyAdapter whenever a key is created or deleted (rotation), and expires on its own at the
+    next scheduled retirement or after JWKS_CACHE_MAX_SECONDS, whichever comes first, so a retired key leaves the
+    JWKS on time."""
+
+    def build():
+        db = make_session()
+        try:
+            ttl = min(JWKS_CACHE_MAX_SECONDS, max(_seconds_until_next_retirement(db), 0.0))
+            return get_jwks(db), ttl
+        finally:
+            db.close()
+
+    return public_cache.get_or_build_expiring("jwks", build)
