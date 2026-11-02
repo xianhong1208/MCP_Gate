@@ -31,6 +31,7 @@ const ACTION_KEYS = [
   'oauth_client_create',
   'oauth_client_approve',
   'oauth_client_revoke',
+  'oauth_client_bind',
   'oauth_client_delete',
   'oauth_key_rotate',
   'create_service',

@@ -773,7 +773,23 @@
       "created": "建立於 {{date}}",
       "active": "使用中",
       "inactive": "已退役",
-      "empty": "沒有簽章金鑰"
+      "empty": "沒有簽章金鑰",
+      "published": "已停用，仍公開",
+      "publishedHint": "不再簽發新 token，但會留在 JWKS 中，直到它簽過的最後一個 token 過期。",
+      "retiredHint": "已不在 JWKS 中：它簽過的 token 不再被接受。"
+    },
+    "resourceServer": {
+      "label": "代表的資源伺服器",
+      "hint": "此 client 代表的 MCP 伺服器。只有綁定後的 client 能讀取撤銷清單、內省 token 與回報使用量，而且只限該伺服器的 token。",
+      "none": "不是資源伺服器",
+      "title": "資源伺服器：{{name}}",
+      "action": "資源伺服器…",
+      "boundTo": "代表 {{name}} 的資源伺服器",
+      "current": "目前綁定到",
+      "save": "儲存",
+      "saveFailed": "更新資源伺服器綁定失敗",
+      "bound": "{{name}} 已設為資源伺服器",
+      "unbound": "{{name}} 已不再是資源伺服器"
     }
   },
   "marketplace": {
@@ -972,7 +988,8 @@
       "admin_logout": "管理員登出",
       "admin_update": "管理員更新",
       "cleanup_expired": "清除過期項目",
-      "rate_limit_exceeded": "速率限制"
+      "rate_limit_exceeded": "速率限制",
+      "oauth_client_bind": "設定 Client 資源伺服器"
     },
     "detail": {
       "title": "稽核日誌詳情",

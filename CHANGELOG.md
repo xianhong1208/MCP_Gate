@@ -7,6 +7,7 @@ All notable changes to MCP Gate (formerly MCP Center) are documented here. The f
 ### Added
 - **Continuous integration.** `.github/workflows/ci.yml` runs on pushes and pull requests to `dev` and `main`: the backend suite and ruff on SQLite, the same suite on PostgreSQL 16, the frontend lint / tests / build with a check that the committed `static/web` matches the build, and a build and smoke test of the `mcp-runtime` image as its runtime user.
 - **The test suite runs on PostgreSQL.** Set `TEST_DATABASE_URL` to a throwaway database: the schema is rebuilt once per session and the tables are truncated before each test. SQLite stays the default.
+- **Console UI for resource-server binding and key retirement.** *OAuth Clients → Register trusted client* has a **Resource server for** picker for confidential clients (`resource_service_id`), and each console-registered confidential client has a **Resource server…** action to bind, change or remove it (`PUT /api/oauth/clients/{id}/resource-server`); the client list names the bound server. The signing-key list shows whether a retired key is still published in the JWKS, and the audit log labels the new `oauth_client_bind` action (en + zh-TW).
 - **Schema drift test.** `tests/test_schema_drift.py` migrates an empty database to head (and back down and up again) and compares it with the models using Alembic's autogenerate comparison.
 
 ### Changed

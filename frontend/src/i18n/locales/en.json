@@ -773,7 +773,23 @@
       "created": "created {{date}}",
       "active": "active",
       "inactive": "retired",
-      "empty": "No signing keys"
+      "empty": "No signing keys",
+      "published": "retired, still published",
+      "publishedHint": "No longer signs new tokens, but stays in the JWKS until the last token it signed has expired.",
+      "retiredHint": "No longer in the JWKS: tokens it signed are no longer accepted."
+    },
+    "resourceServer": {
+      "label": "Resource server for",
+      "hint": "The MCP server this client speaks for. Only a bound client may read the revocation feed, introspect tokens and report usage, and only for tokens of that server.",
+      "none": "Not a resource server",
+      "title": "Resource server: {{name}}",
+      "action": "Resource server…",
+      "boundTo": "Resource server for {{name}}",
+      "current": "Currently bound to",
+      "save": "Save",
+      "saveFailed": "Failed to update the resource-server binding",
+      "bound": "{{name}} is now a resource server",
+      "unbound": "{{name}} is no longer a resource server"
     }
   },
   "marketplace": {
@@ -972,7 +988,8 @@
       "admin_logout": "Admin Logout",
       "admin_update": "Admin Update",
       "cleanup_expired": "Cleanup Expired",
-      "rate_limit_exceeded": "Rate Limit"
+      "rate_limit_exceeded": "Rate Limit",
+      "oauth_client_bind": "Client Resource Server Set"
     },
     "detail": {
       "title": "Audit Log Details",
