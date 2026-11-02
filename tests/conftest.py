@@ -152,12 +152,39 @@ def app(seeded):
     return create_app()
 
 
+def make_console_client(app, **kwargs):
+    """A TestClient that behaves like the console SPA with respect to the session binding (H-04): it keeps the
+    ``session_binding`` a login / setup / password-change response returns and sends it as ``X-Session-Binding``
+    on every later request (and as a WebSocket subprotocol), exactly as the SPA does from localStorage."""
+    from fastapi.testclient import TestClient
+
+    from src.identity.session import SESSION_BINDING_HEADER, WS_PROTOCOL
+
+    class ConsoleTestClient(TestClient):
+        def request(self, method, url, *args, **kw):
+            response = super().request(method, url, *args, **kw)
+            if response.headers.get("content-type", "").startswith("application/json"):
+                try:
+                    body = response.json()
+                except ValueError:
+                    body = None
+                if isinstance(body, dict) and body.get("session_binding"):
+                    self.headers[SESSION_BINDING_HEADER] = body["session_binding"]
+            return response
+
+        def websocket_connect(self, url, subprotocols=None, **kw):
+            binding = self.headers.get(SESSION_BINDING_HEADER)
+            if subprotocols is None and binding:
+                subprotocols = [WS_PROTOCOL, f"{WS_PROTOCOL}.binding.{binding}"]
+            return super().websocket_connect(url, subprotocols=subprotocols, **kw)
+
+    return ConsoleTestClient(app, base_url="http://testserver", **kwargs)
+
+
 @pytest.fixture
 def client(app):
     """Unauthenticated TestClient (does not trigger lifespan, avoiding the scheduler / docker)."""
-    from fastapi.testclient import TestClient
-
-    with TestClient(app, base_url="http://testserver") as c:
+    with make_console_client(app) as c:
         yield c
 
 

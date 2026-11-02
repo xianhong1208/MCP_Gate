@@ -53,11 +53,15 @@ def _identity_error(e: IdentityError) -> JSONResponse:
 
 
 def _login_response(db: Session, user: AdminUser, extra: Optional[dict] = None) -> JSONResponse:
-    token, expires_at = session_manager.issue(db, user)
-    body = {"user": user.to_dict(), "idle_timeout_minutes": identity_service.session_idle_timeout_minutes()}
+    issued = session_manager.issue(db, user)
+    body = {
+        "user": user.to_dict(), "idle_timeout_minutes": identity_service.session_idle_timeout_minutes(),
+        # The second half of the session: the console keeps it in localStorage and sends it as X-Session-Binding
+        "session_binding": issued.binding,
+    }
     if extra:
         body.update(extra)
-    return session_manager.set_cookie(JSONResponse(content=body), token, expires_at)
+    return session_manager.set_cookie(JSONResponse(content=body), issued.token, issued.expires_at)
 
 
 @router.get("/status")
@@ -111,7 +115,8 @@ async def login(request: LoginRequest, http_request: Request, db: Session = Depe
 @router.post("/logout")
 async def logout(http_request: Request, db: Session = Depends(get_db)):
     """End the session server-side (a copied cookie stops working too) and clear the cookie."""
-    payload = session_manager.revoke(db, session_manager.token_from_request(http_request))
+    payload = session_manager.revoke(db, session_manager.token_from_request(http_request),
+                                     session_manager.binding_from_request(http_request))
     if payload is not None:
         AuditService.log_from_request(
             db=db, request=http_request, action=AuditAction.ADMIN_LOGOUT, resource_type=ResourceType.ADMIN,
@@ -222,7 +227,10 @@ async def oauth_login_callback(provider: str, request: Request, db: Session = De
         status=AuditStatus.SUCCESS, actor_type=ActorType.ADMIN, actor_id=str(user.id),
         actor_name=user.audit_name, details={"provider": provider},
     )
-    token, expires_at = session_manager.issue(db, user)
-    response = RedirectResponse(url=next_path, status_code=302)
+    issued = session_manager.issue(db, user)
+    # No response body to carry the session binding here: it rides in the fragment, which the browser keeps on the
+    # console's own origin (never sent to a server, not even this one); the console moves it into localStorage.
+    response = RedirectResponse(url=f"{next_path.partition('#')[0]}#{urlencode({'mcp_sb': issued.binding})}",
+                                status_code=302)
     response.delete_cookie(OAUTH_STATE_COOKIE, path="/api/session/oauth")
-    return session_manager.set_cookie(response, token, expires_at)
+    return session_manager.set_cookie(response, issued.token, issued.expires_at)

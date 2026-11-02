@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { Bot, ArrowLeft } from 'lucide-react'
@@ -54,6 +54,22 @@ export default function ConsentPage() {
     })
   }
 
+  // Consent may be skipped (remembered, or a console-registered client): approve without asking. The backend no
+  // longer does this inside /oauth/authorize, which only has the cookie (see src/api/oauth_routes.py).
+  // Runs once per request (a ref, not effect cleanup: StrictMode re-runs effects, and a second decision would fail).
+  const autoApproved = useRef(false)
+  useEffect(() => {
+    if (!req?.can_skip || !rid || autoApproved.current) return
+    autoApproved.current = true
+    setDeciding('approve')
+    oauthApi.authorizeRequest.decide(rid, { approve: true, scopes: null, remember: false })
+      .then((result) => {
+        if (result?.redirect_to) window.location.assign(result.redirect_to)
+        else { setError(t('consent.noRedirect')); setDeciding(null) }
+      })
+      .catch((err) => { setError(err.message || t('consent.decideFailed')); setDeciding(null) })
+  }, [req, rid, t])
+
   const decide = async (approve) => {
     setDeciding(approve ? 'approve' : 'deny')
     setError('')
@@ -75,7 +91,7 @@ export default function ConsentPage() {
     }
   }
 
-  if (isLoading) {
+  if (isLoading || (req?.can_skip && deciding === 'approve' && !error)) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background text-subtle-foreground">
         <Spinner size="lg" />

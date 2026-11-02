@@ -85,6 +85,16 @@ headers when the proxy is listed in `security.trusted_proxies`. A proxy that rew
 upstream address without sending `X-Forwarded-Host` makes every console change fail with 403
 `auth.csrf_origin_denied`.
 
+### Local use without a proxy
+
+Running on `http://localhost:4568` is fine for one person on one machine, but the browser shares the console's
+cookie with every other `localhost` port (see `SECURITY.md`, *Known limitations*). MCP Gate does not accept the
+cookie without the per-session binding the console keeps in its own origin's storage, so a local listener that
+receives the cookie cannot use it. If other local services you do not trust run on the same machine, give the
+console a host name of its own so the cookie is not sent to them at all: preferably HTTPS behind a proxy as below,
+or `OAUTH_ISSUER=http://mcp-gate.localhost:4568` (browsers resolve `*.localhost` to loopback without DNS; check
+that your MCP clients accept an `http` issuer that is not literally `localhost` / `127.0.0.1` first).
+
 ## 4. Run as a service
 
 `/etc/systemd/system/mcp-gate.service`:

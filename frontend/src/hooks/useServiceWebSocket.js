@@ -1,7 +1,9 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
+import { getBinding, wsProtocols } from '../utils/sessionBinding'
 
 /**
- * WebSocket hook for real-time service updates (/ws/services, authenticated via the session cookie)
+ * WebSocket hook for real-time service updates (/ws/services, authenticated via the session cookie plus the
+ * session binding, offered as a subprotocol)
  *
  * Handles:
  *   health_update / service_added / service_removed / service_updated / pong
@@ -51,7 +53,8 @@ export function useServiceWebSocket({ onHealthUpdate, onServiceAdded, onServiceR
 
     let ws
     try {
-      ws = new WebSocket(wsUrl)
+      // The session binding rides as a subprotocol: a browser WebSocket cannot send custom headers
+      ws = new WebSocket(wsUrl, wsProtocols(getBinding()))
     } catch (err) {
       console.error('[WS] Failed to construct WebSocket:', err)
       return
