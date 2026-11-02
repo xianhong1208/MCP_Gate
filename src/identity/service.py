@@ -9,7 +9,9 @@ from sqlalchemy.orm import Session
 from db.models import AdminUser
 from src.adapters import AdminUserAdapter
 from src.config import Config
-from src.identity.passwords import hash_password, validate_password_strength, verify_password
+from src.identity.passwords import (
+    hash_password, password_error_message, validate_password_strength, verify_password,
+)
 from src.identity.providers.base import ExternalIdentity
 
 
@@ -31,7 +33,7 @@ def setup_owner(db: Session, *, email: str, password: str, username: str = "owne
     email = _normalize_email(email)
     err = validate_password_strength(password)
     if err:
-        raise IdentityError(err, "Password too short")
+        raise IdentityError(err, password_error_message(err))
     return AdminUserAdapter.create(
         db, email=email, username=username or email.split("@")[0],
         password_hash=hash_password(password), auth_provider="local",
@@ -81,7 +83,7 @@ def change_password(db: Session, user: AdminUser, *, current_password: Optional[
         raise IdentityError("auth.invalid_current_password", "Current password is incorrect", 400)
     err = validate_password_strength(new_password)
     if err:
-        raise IdentityError(err, "Password too short")
+        raise IdentityError(err, password_error_message(err))
     AdminUserAdapter.set_password(db, user, hash_password(new_password))
 
 
