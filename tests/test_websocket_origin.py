@@ -18,7 +18,7 @@ def _ping(ws):
             return msg
 
 
-@pytest.mark.parametrize("origin", ["http://testserver", "http://localhost:5173", None])
+@pytest.mark.parametrize("origin", ["http://testserver", None])
 def test_console_origins_connect(owner_client, origin):
     headers = {"origin": origin} if origin else {}
     with owner_client.websocket_connect("/ws/services", headers=headers) as ws:
@@ -26,7 +26,7 @@ def test_console_origins_connect(owner_client, origin):
 
 
 @pytest.mark.parametrize("origin", [
-    "http://evil.example", "http://testserver:8080", "https://testserver", "null", "http://testserver.evil.example",
+    "http://evil.example", "http://testserver:8080", "http://localhost:5173", "https://testserver", "null", "http://testserver.evil.example",
 ])
 def test_foreign_origins_are_refused(owner_client, origin):
     with pytest.raises(WebSocketDisconnect) as e:

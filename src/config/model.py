@@ -2,7 +2,7 @@
 
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 
 class DatabaseConfig(BaseModel):
@@ -92,10 +92,20 @@ class SecurityConfig(BaseModel):
 
 
 class CORSConfig(BaseModel):
-    allowed_origins: List[str] = ["http://localhost:4568", "http://localhost:5173"]
+    """Credentialed CORS for the console API. The console itself is same-origin and needs none of it, so the
+    default is empty: every origin listed here can read and drive the admin API from the owner's browser.
+    ``allowed_origins`` also accepts one comma-separated string (``${CORS_ALLOWED_ORIGINS:-}`` in config.yaml)."""
+    allowed_origins: List[str] = []
     allow_methods: List[str] = ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
-    allow_headers: List[str] = ["Content-Type", "Authorization", "X-Requested-With"]
+    allow_headers: List[str] = ["Content-Type", "Authorization", "X-Requested-With", "X-Session-Binding"]
     allow_credentials: bool = True
+
+    @field_validator("allowed_origins", mode="before")
+    @classmethod
+    def _split_origins(cls, value):
+        if isinstance(value, str):
+            return [o.strip() for o in value.split(",") if o.strip()]
+        return value
 
 
 class LoggingConfig(BaseModel):

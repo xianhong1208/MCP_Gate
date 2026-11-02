@@ -18,6 +18,7 @@ For console work run Vite alongside the API:
 cd frontend
 npm install
 npm run dev                   # http://localhost:5173, proxies /api, /oauth, /.well-known, /ws to :4568
+                              # (same-origin through the proxy: no CORS entry needed for :5173)
 npm run build                 # writes static/web, which the API serves in production
 ```
 
