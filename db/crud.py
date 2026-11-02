@@ -390,6 +390,10 @@ class TokenUsageCRUD:
 
 # ==================== Console users ====================
 
+class OwnerSlotTaken(Exception):
+    """First-time setup lost the race: another request created the owner first."""
+
+
 class AdminSessionCRUD:
 
     @staticmethod
@@ -460,17 +464,22 @@ class AdminUserCRUD:
 
     @staticmethod
     def create(db: Session, *, email: str, username: str, password_hash: Optional[str],
-               auth_provider: str = "local", provider_sub: Optional[str] = None) -> AdminUser:
+               auth_provider: str = "local", provider_sub: Optional[str] = None,
+               owner: bool = False) -> AdminUser:
+        """``owner=True`` takes the single owner slot; raises OwnerSlotTaken if another account already has it."""
         user = AdminUser(
             email=email, username=username, password_hash=password_hash,
             auth_provider=auth_provider, provider_sub=provider_sub, is_active=True,
             password_changed_at=local_now() if password_hash else None,
+            owner_slot=1 if owner else None,
         )
         db.add(user)
         try:
             db.commit()
         except IntegrityError:
             db.rollback()
+            if owner and db.query(AdminUser).filter(AdminUser.owner_slot == 1).first() is not None:
+                raise OwnerSlotTaken("The owner account already exists")
             raise ValueError(f"Email '{email}' already exists")
         db.refresh(user)
         return user

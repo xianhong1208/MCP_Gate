@@ -66,8 +66,12 @@ class AdminUser(Base):
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime, default=local_now, nullable=False)
     last_login = Column(DateTime, nullable=True)
-    # After a password change, sessions whose iat is earlier than this time are treated as revoked
+    # When the password last changed (informational: sessions are revoked by deleting their admin_sessions rows)
     password_changed_at = Column(DateTime, nullable=True)
+    # 1 for the owner created by first-time setup (or ADMIN_EMAIL bootstrap), NULL for every other account. The
+    # unique constraint is what makes setup atomic: of several concurrent /setup requests only one INSERT can take
+    # the slot, on SQLite and PostgreSQL alike (both allow any number of NULLs in a unique column).
+    owner_slot = Column(Integer, nullable=True, unique=True)
 
     def __repr__(self):
         return f"<AdminUser(email={self.email}, provider={self.auth_provider})>"

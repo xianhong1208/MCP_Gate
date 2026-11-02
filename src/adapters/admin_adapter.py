@@ -1,6 +1,6 @@
 """Admin console user and session adapters."""
 
-from db.crud import AdminSessionCRUD, AdminUserCRUD
+from db.crud import AdminSessionCRUD, AdminUserCRUD, OwnerSlotTaken
 from src.adapters.exceptions import ConflictError, NotFoundError
 
 
@@ -17,6 +17,8 @@ class AdminUserAdapter(AdminUserCRUD):
     def create(cls, db, **kwargs):
         try:
             return super().create(db, **kwargs)
+        except OwnerSlotTaken:
+            raise ConflictError(code="auth.setup_already_done", fallback="Setup already completed")
         except ValueError:
             raise ConflictError(code="auth.email_exists", fallback="Email already registered")
 

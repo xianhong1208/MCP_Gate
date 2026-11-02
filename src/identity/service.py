@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from db.models import AdminUser
 from src.adapters import AdminSessionAdapter, AdminUserAdapter
+from src.adapters.exceptions import AdapterError
 from src.config import Config
 from src.identity.passwords import (
     hash_password, password_error_message, validate_password_strength, verify_password,
@@ -37,6 +38,8 @@ def needs_setup(db: Session) -> bool:
 
 
 def setup_owner(db: Session, *, email: str, password: str, username: str = "owner") -> AdminUser:
+    """Create the owner. Atomic: the early needs_setup() check only spares the bcrypt work; the account takes the
+    unique owner slot, so of several concurrent calls exactly one succeeds and the others get 409."""
     if not needs_setup(db):
         raise IdentityError("auth.setup_already_done", "Setup already completed", 409)
     email = _normalize_email(email)
@@ -45,10 +48,15 @@ def setup_owner(db: Session, *, email: str, password: str, username: str = "owne
     err = validate_password_strength(password)
     if err:
         raise IdentityError(err, password_error_message(err))
-    return AdminUserAdapter.create(
-        db, email=email, username=username or _default_username(email),
-        password_hash=hash_password(password), auth_provider="local",
-    )
+    password_hash = hash_password(password)
+    try:
+        return AdminUserAdapter.create(
+            db, email=email, username=username or _default_username(email),
+            password_hash=password_hash, auth_provider="local", owner=True,
+        )
+    except AdapterError as e:
+        raise IdentityError("auth.setup_already_done" if e.code == "auth.setup_already_done" else e.code,
+                            e.fallback, 409)
 
 
 def authenticate_local(db: Session, *, email: str, password: str) -> AdminUser:
