@@ -1138,7 +1138,7 @@ def cached_metadata() -> dict:
 
 
 def build_metadata(db: Session) -> dict:
-    """RFC 8414 Authorization Server Metadata。"""
+    """RFC 8414 Authorization Server Metadata."""
     base = issuer()
     return {
         "issuer": base,

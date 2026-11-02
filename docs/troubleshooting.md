@@ -85,7 +85,7 @@ Changing `OAUTH_ISSUER` or `ENCRYPTION_KEY` invalidates tokens: the first change
 **Health shows `error` / `offline` for a server that works**
 The health check connects with a self-minted token for servers that require auth. If the server uses its own static bearer token instead, set it on the service (**Edit → Static bearer token**). For servers without auth, untick **Requires authentication**.
 
-**Marketplace: `Image 'mcp-runtime:1' 尚未安裝` / bring-your-own deploy fails**
+**Marketplace: `Image 'mcp-runtime:1' is not installed yet` / bring-your-own deploy fails**
 Build the runtime image once: `docker build -t mcp-runtime:1 deploy/mcp-runtime`. See [deploy.md](deploy.md#6-optional-marketplace-and-bring-your-own-servers).
 
 ## Get more detail

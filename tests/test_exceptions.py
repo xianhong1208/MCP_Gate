@@ -132,7 +132,7 @@ class TestServiceExceptions:
 class TestBaseExceptions:
     """Base exception tests"""
 
-    def test_token_server_error(self):
+    def test_mcp_gate_error(self):
         """Test the base error exception"""
         from src.exceptions.base import MCPGateError
 
@@ -141,7 +141,7 @@ class TestBaseExceptions:
         assert exc.code == "TEST_ERROR"
         assert exc.status_code == 500
 
-    def test_token_server_http_exception(self):
+    def test_mcp_gate_http_exception(self):
         """Test the HTTP exception"""
         from src.exceptions.base import MCPGateHTTPException
 
