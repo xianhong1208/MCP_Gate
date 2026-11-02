@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from db import get_db
-from db.models import AdminUser, OAuthScope
+from db.models import AdminUser, OAuthScope, format_datetime
 from src.adapters import (
     OAuthClientAdapter, OAuthConsentAdapter, OAuthKeyAdapter, OAuthScopeAdapter, OAuthTokenAdapter,
     ServiceAdapter, ServiceScopeAdapter, TokenUsageAdapter,
@@ -408,7 +408,7 @@ async def activity(limit: int = Query(50, ge=1, le=500), db: Session = Depends(g
     """Recent token events: issued, introspected, revoked."""
     rows = TokenUsageAdapter.recent(db, limit=limit)
     return {"events": [{
-        "at": r.used_at.isoformat() if r.used_at else None,
+        "at": format_datetime(r.used_at),
         "event": r.event, "grant_type": r.grant_type, "client_id": r.client_id, "sub": r.sub,
         "audience": r.audience, "service_id": str(r.service_id) if r.service_id else None,
         "success": bool(r.success), "ip": r.ip_address,

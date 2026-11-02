@@ -22,7 +22,8 @@ from urllib.parse import urlencode, urlparse
 from sqlalchemy.orm import Session
 
 from db.models import (
-    AdminUser, OAuthAuthorizationCode, OAuthAuthorizationRequest, OAuthClient, OAuthToken, Service, local_now,
+    AdminUser, OAuthAuthorizationCode, OAuthAuthorizationRequest, OAuthClient, OAuthToken, Service, format_datetime,
+    local_now,
 )
 from db.seed import CONSOLE_CLIENT_ID, SCANNER_CLIENT_ID
 from src.adapters import (
@@ -554,7 +555,7 @@ def describe_request(db: Session, req: OAuthAuthorizationRequest, user: AdminUse
         "resource": req.resource,
         "service": {"id": str(service.id), "name": service.name} if service else None,
         "redirect_host": urlparse(req.redirect_uri).netloc or req.redirect_uri,
-        "expires_at": req.expires_at.isoformat(),
+        "expires_at": format_datetime(req.expires_at),
         "can_skip": should_skip_consent(db, user, req.client, req.resource, scopes),
     }
 
