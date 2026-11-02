@@ -248,7 +248,7 @@ def test_console_can_register_private_key_jwt_client(owner_client):
     ("https://localhost/jwks", ["127.0.0.1"], "this machine"),
 ])
 def test_jwks_uri_cannot_point_inside(client, monkeypatch, uri, resolved, message):
-    """MCP Center fetches jwks_uri itself, so it must never be steered at internal addresses (SSRF)."""
+    """MCP Gate fetches jwks_uri itself, so it must never be steered at internal addresses (SSRF)."""
     from src.config import Config
     monkeypatch.setattr(Config.get_oauth_config(), "issuer", "https://auth.example")  # production: no loopback
     monkeypatch.setattr(client_assertion, "_resolve_host",

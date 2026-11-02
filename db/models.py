@@ -533,7 +533,7 @@ class AuditLog(Base):
 # ==================== Managed / BYO MCP ====================
 
 class ManagedMcpProcess(Base):
-    """An MCP launched by MCP Center via Docker (from a marketplace catalog entry or a BYO definition)."""
+    """An MCP launched by MCP Gate via Docker (from a marketplace catalog entry or a BYO definition)."""
     __tablename__ = "managed_mcp_processes"
 
     id = Column(Uuid, primary_key=True, default=uuid.uuid4)

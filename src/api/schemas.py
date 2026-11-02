@@ -16,7 +16,7 @@ class ServiceCreateRequest(BaseModel):
     mcp_path: str = "/mcp"
     tags: Optional[List[str]] = None
     requires_auth: bool = True
-    # The external service's own static Bearer token (optional; not needed for services protected by MCP Center OAuth)
+    # The external service's own static Bearer token (optional; not needed for services protected by MCP Gate OAuth)
     auth_token: Optional[str] = None
     # OAuth audience (RFC 8707 resource); falls back to the MCP URL when empty
     oauth_audience: Optional[str] = None

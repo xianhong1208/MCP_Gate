@@ -1,10 +1,10 @@
 """Interop with the real FastMCP (the acceptance test for the rewrite).
 
 Starts two real HTTP servers:
-  - MCP Center (this project) -> issuer = http://127.0.0.1:<port>
+  - MCP Gate (this project) -> issuer = http://127.0.0.1:<port>
   - FastMCP demo server       -> RemoteAuthProvider(JWTVerifier(jwks_uri=<center>/.well-known/jwks.json))
 Then:
-  1. The RS's /.well-known/oauth-protected-resource points at MCP Center
+  1. The RS's /.well-known/oauth-protected-resource points at MCP Gate
   2. A Personal Access Token issued by the admin console can call a FastMCP tool directly; a bogus token is rejected
   3. FastMCP's own OAuth client (DCR + PKCE + consent page + token exchange) completes the full flow
 """
@@ -52,7 +52,7 @@ class _ThreadServer:
 
 @pytest.fixture
 def center(seeded):
-    """MCP Center over real HTTP; the issuer points at its own address."""
+    """MCP Gate over real HTTP; the issuer points at its own address."""
     from main import create_app
     from src.config import Config
 
@@ -74,7 +74,7 @@ def center(seeded):
 
 @pytest.fixture
 def mcp_server(center):
-    """FastMCP demo server that trusts only MCP Center's JWKS."""
+    """FastMCP demo server that trusts only MCP Gate's JWKS."""
     from fastmcp import FastMCP
     from fastmcp.server.auth import RemoteAuthProvider
     from fastmcp.server.auth.providers.jwt import JWTVerifier
@@ -89,13 +89,13 @@ def mcp_server(center):
         authorization_servers=[AnyHttpUrl(center["url"])],
         base_url=base_url,
     )
-    mcp = FastMCP("interop-demo", instructions="MCP Center demo server", auth=auth)
+    mcp = FastMCP("interop-demo", instructions="MCP Gate demo server", auth=auth)
 
     @mcp.tool
     def hello(name: str) -> str:
         return f"Hello, {name}!"
 
-    # Register this server in MCP Center (audience = MCP URL)
+    # Register this server in MCP Gate (audience = MCP URL)
     with httpx.Client(base_url=center["url"], cookies={"mcp_session": center["cookie"]}) as c:
         r = c.post("/api/services", json={"name": "interop-demo", "host": "127.0.0.1", "port": port, "mcp_path": "/mcp"})
         assert r.status_code == 201, r.text
@@ -133,8 +133,8 @@ async def test_personal_access_token_works_with_fastmcp(center, mcp_server):
     async with Client(mcp_server["url"], auth=BearerAuth(pat)) as client:
         tools = await client.list_tools()
         assert [t.name for t in tools] == ["hello"]
-        result = await client.call_tool("hello", {"name": "MCP Center"})
-        assert "Hello, MCP Center!" in str(result.content[0].text)
+        result = await client.call_tool("hello", {"name": "MCP Gate"})
+        assert "Hello, MCP Gate!" in str(result.content[0].text)
 
     with pytest.raises(Exception):
         async with Client(mcp_server["url"], auth=BearerAuth("not-a-real-token")) as client:
@@ -195,7 +195,7 @@ async def test_full_oauth_flow_with_fastmcp_client(center, mcp_server):
         result = await client.call_tool("hello", {"name": "OAuth"})
         assert "Hello, OAuth!" in str(result.content[0].text)
 
-    # MCP Center now holds the DCR client, the remembered consent and the issued tokens
+    # MCP Gate now holds the DCR client, the remembered consent and the issued tokens
     with httpx.Client(base_url=center["url"], cookies={"mcp_session": center["cookie"]}) as c:
         clients = c.get("/api/oauth/clients").json()["clients"]
         assert any(cl["client_name"] == "interop-test-client" and cl["created_via"] == "dcr" for cl in clients)
@@ -205,7 +205,7 @@ async def test_full_oauth_flow_with_fastmcp_client(center, mcp_server):
 
 
 def test_scan_inspects_server_protected_by_this_center(center, mcp_server):
-    """Scanning finds a FastMCP server that trusts MCP Center, reads its name and tools and registers it
+    """Scanning finds a FastMCP server that trusts MCP Gate, reads its name and tools and registers it
     as requiring authentication - without the operator supplying a token."""
     port = int(urlparse(mcp_server["base_url"]).port)
     with httpx.Client(base_url=center["url"], cookies={"mcp_session": center["cookie"]}, timeout=60) as c:
@@ -238,7 +238,7 @@ def test_health_check_keeps_operator_description(center, mcp_server):
         r = c.post(f"/api/services/{sid}/health-check")
         assert r.status_code == 200 and r.json()["status"] == "online", r.text
         desc = c.get(f"/api/services/{sid}").json()["description"]
-        assert desc == "MCP Center demo server"  # the demo server's one-line instructions
+        assert desc == "MCP Gate demo server"  # the demo server's one-line instructions
 
         r = c.put(f"/api/services/{sid}", json={"description": "Mine, hands off"})
         assert r.status_code == 200, r.text

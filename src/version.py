@@ -1,4 +1,4 @@
-"""MCP Center version information.
+"""MCP Gate version information.
 
 The single source of truth for the version is `[project].version` in `pyproject.toml`; this module reads it at
 import time so it never has to be synced by hand in several places. Resolution order: pyproject.toml -> installed
@@ -26,7 +26,7 @@ def _read_version() -> str:
     try:
         from importlib.metadata import PackageNotFoundError, version
         try:
-            return version("mcp-center")
+            return version("mcp-gate")
         except PackageNotFoundError:
             pass
     except Exception:

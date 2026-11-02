@@ -1,7 +1,7 @@
 """Marketplace catalog Pydantic schema
 
 Each catalog/*.yaml file maps to one CatalogEntry describing an MCP service template that
-can be installed from the MCP Center UI. The "Install" form the vendor sees is generated
+can be installed from the MCP Gate UI. The "Install" form the vendor sees is generated
 dynamically from this schema.
 
 Design principles:

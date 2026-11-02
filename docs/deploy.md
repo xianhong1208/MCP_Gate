@@ -1,6 +1,6 @@
-# Deploy MCP Center
+# Deploy MCP Gate
 
-This guide takes MCP Center from `localhost` to a public HTTPS address behind a reverse proxy. OAuth 2.1 requires HTTPS for every authorization-server endpoint, and MCP clients refuse `http://` issuers outside loopback.
+This guide takes MCP Gate from `localhost` to a public HTTPS address behind a reverse proxy. OAuth 2.1 requires HTTPS for every authorization-server endpoint, and MCP clients refuse `http://` issuers outside loopback.
 
 ## 1. Decide the public URL
 
@@ -9,7 +9,7 @@ Pick the address clients and servers will use, for example `https://mcp.example.
 - it must be reachable by every MCP server (to fetch JWKS) and every client (for discovery and the consent screen);
 - changing it later invalidates every issued token.
 
-## 2. Configure MCP Center
+## 2. Configure MCP Gate
 
 `.env`:
 
@@ -80,18 +80,18 @@ server {
 
 ## 4. Run as a service
 
-`/etc/systemd/system/mcp-center.service`:
+`/etc/systemd/system/mcp-gate.service`:
 
 ```ini
 [Unit]
-Description=MCP Center
+Description=MCP Gate
 After=network.target
 
 [Service]
 User=mcp
-WorkingDirectory=/opt/mcp-center
-EnvironmentFile=/opt/mcp-center/.env
-ExecStart=/opt/mcp-center/.venv/bin/python main.py
+WorkingDirectory=/opt/mcp-gate
+EnvironmentFile=/opt/mcp-gate/.env
+ExecStart=/opt/mcp-gate/.venv/bin/python main.py
 Restart=on-failure
 
 [Install]
@@ -99,7 +99,7 @@ WantedBy=multi-user.target
 ```
 
 ```bash
-sudo systemctl enable --now mcp-center
+sudo systemctl enable --now mcp-gate
 ```
 
 `data/` holds the SQLite database and `data/secrets.json`; back both up together. Losing `secrets.json` makes the encrypted private keys unreadable, which invalidates all tokens.
@@ -114,13 +114,13 @@ uv sync --extra postgres
 DATABASE_URL=postgresql://mcp:password@localhost/mcp_center
 ```
 
-MCP Center creates the database if the role has `CREATEDB`, runs migrations, and seeds default scopes at startup.
+MCP Gate creates the database if the role has `CREATEDB`, runs migrations, and seeds default scopes at startup.
 
 ## 6. Optional: Marketplace and bring-your-own servers
 
 These features run MCP servers in Docker on the same host and need:
 
-- Docker Engine with the MCP Center user in the `docker` group;
+- Docker Engine with the MCP Gate user in the `docker` group;
 - the runtime image for bring-your-own servers, built once:
 
   ```bash
@@ -129,11 +129,11 @@ These features run MCP servers in Docker on the same host and need:
 
   Override the image name with `MCP_RUNTIME_IMAGE` if you tag it differently.
 
-Managed servers bind to `127.0.0.1:<port>` on the host, so register them with host `127.0.0.1` and they stay reachable only from MCP Center's machine.
+Managed servers bind to `127.0.0.1:<port>` on the host, so register them with host `127.0.0.1` and they stay reachable only from MCP Gate's machine.
 
 ### Without Docker
 
-Set `MCP_RUNTIME=process` to run bring-your-own servers as local subprocesses instead of containers. MCP Center then needs only `supergateway` on its `PATH` (`npm install -g supergateway`, or point `MCP_SUPERGATEWAY_BIN` at it) plus whatever the servers themselves need (`npx`, `uvx`, …). Each server gets a pid file and a log file under `MCP_PROCESS_LOG_DIR` (default `data/managed`), so a restarted MCP Center finds, reads and stops servers it did not start itself. Catalog entries are Docker images and stay unavailable in this mode. `MCP_RUNTIME=auto` picks Docker when the daemon answers and falls back to the process runtime otherwise; `GET /api/managed/runtime` shows which one is active and whether it can start anything.
+Set `MCP_RUNTIME=process` to run bring-your-own servers as local subprocesses instead of containers. MCP Gate then needs only `supergateway` on its `PATH` (`npm install -g supergateway`, or point `MCP_SUPERGATEWAY_BIN` at it) plus whatever the servers themselves need (`npx`, `uvx`, …). Each server gets a pid file and a log file under `MCP_PROCESS_LOG_DIR` (default `data/managed`), so a restarted MCP Gate finds, reads and stops servers it did not start itself. Catalog entries are Docker images and stay unavailable in this mode. `MCP_RUNTIME=auto` picks Docker when the daemon answers and falls back to the process runtime otherwise; `GET /api/managed/runtime` shows which one is active and whether it can start anything.
 
 ## 7. Check the deployment
 

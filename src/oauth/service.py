@@ -128,7 +128,7 @@ def register_client(
                     raise OAuthError("invalid_client_metadata", "jwks must be a JSON object")
             client_assertion.validate_jwks_document(jwks_doc)
         else:
-            # MCP Center fetches this URL itself: public https only (loopback allowed on http-issuer dev setups)
+            # MCP Gate fetches this URL itself: public https only (loopback allowed on http-issuer dev setups)
             client_assertion.validate_jwks_uri(jwks_uri, allow_loopback=issuer().startswith("http://"))
     else:
         jwks_doc, jwks_uri = None, None
@@ -916,7 +916,7 @@ def build_metadata(db: Session) -> dict:
         "introspection_endpoint_auth_signing_alg_values_supported": ASSERTION_SIGNING_ALGS,
         "resource_parameter_supported": True,
         "authorization_response_iss_parameter_supported": True,
-        # MCP Center extensions for servers that verify tokens offline (see examples/mcp_center_hooks.py)
+        # MCP Gate extensions for servers that verify tokens offline (see examples/mcp_gate_hooks.py)
         "revoked_tokens_endpoint": f"{base}/oauth/revoked",
         "usage_report_endpoint": f"{base}/oauth/usage",
         "service_documentation": f"{base}/docs",

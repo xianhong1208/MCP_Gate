@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 def resolve_service_auth_token(db: Session, service: Service) -> Optional[str]:
     """The Bearer token to send for health checks / tool fetching.
 
-    1. Service is protected by MCP Center's own OAuth (requires_auth and no static token) -> self-sign a
+    1. Service is protected by MCP Gate's own OAuth (requires_auth and no static token) -> self-sign a
        short-lived token with aud=that service on the spot; nothing to store, nothing to expire.
     2. Service has its own static Bearer (auth_token_encrypted) -> decrypt and use it.
     3. No authentication required -> None.

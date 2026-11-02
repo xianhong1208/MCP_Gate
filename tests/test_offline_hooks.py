@@ -1,5 +1,5 @@
 """Revocation feed and usage reports for MCP servers that verify tokens offline, plus the FastMCP helper in
-examples/mcp_center_hooks.py driven against the app in-process."""
+examples/mcp_gate_hooks.py driven against the app in-process."""
 
 import importlib.util
 import json
@@ -112,11 +112,11 @@ def test_metadata_advertises_extension_endpoints(client):
 
 
 # ---------------------------------------------------------------------------
-# examples/mcp_center_hooks.py against the app, in-process
+# examples/mcp_gate_hooks.py against the app, in-process
 # ---------------------------------------------------------------------------
 def _load_hooks_module():
-    path = pathlib.Path(__file__).resolve().parents[1] / "examples" / "mcp_center_hooks.py"
-    spec = importlib.util.spec_from_file_location("mcp_center_hooks", path)
+    path = pathlib.Path(__file__).resolve().parents[1] / "examples" / "mcp_gate_hooks.py"
+    spec = importlib.util.spec_from_file_location("mcp_gate_hooks", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -129,7 +129,7 @@ async def test_verifier_rejects_after_poll_and_reports_usage(owner_client, servi
     pat = _issue_pat(owner_client, service)
 
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as http:
-        verifier = hooks.MCPCenterVerifier(
+        verifier = hooks.MCPGateVerifier(
             jwks_uri="http://testserver/.well-known/jwks.json", issuer="http://testserver",
             audience=service["effective_audience"], client_id=rs["client_id"], client_secret=rs["client_secret"],
             http_client=http, poll_interval=1000, flush_interval=1000,
@@ -162,7 +162,7 @@ async def test_verifier_with_private_key_jwt_client(owner_client, service, app):
                     jwks={"keys": [jwk]})
     pat = _issue_pat(owner_client, service)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as http:
-        verifier = hooks.MCPCenterVerifier(
+        verifier = hooks.MCPGateVerifier(
             jwks_uri="http://testserver/.well-known/jwks.json", issuer="http://testserver",
             audience=service["effective_audience"], client_id=reg["client_id"], private_key_pem=pem, kid="srv-1",
             http_client=http, poll_interval=1000, flush_interval=1000,

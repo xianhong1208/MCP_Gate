@@ -10,9 +10,9 @@
     "audit": "稽核日誌"
   },
   "layout": {
-    "appName": "MCP Center",
+    "appName": "MCP Gate",
     "subtitle": "OAUTH 授權中心",
-    "version": "MCP Center v{{version}}",
+    "version": "MCP Gate v{{version}}",
     "systemOnline": "系統運作中",
     "systemOffline": "系統離線",
     "profile": "查看個人資料",
@@ -51,7 +51,7 @@
     }
   },
   "auth": {
-    "appName": "MCP Center",
+    "appName": "MCP Gate",
     "tagline": "專為 MCP 打造的 OAuth 2.1 授權伺服器",
     "login": {
       "title": "登入",
@@ -67,7 +67,7 @@
     },
     "setup": {
       "title": "歡迎,先建立你的帳號",
-      "subtitle": "這是全新安裝。第一個帳號將成為這台 MCP Center 的擁有者。",
+      "subtitle": "這是全新安裝。第一個帳號將成為這台 MCP Gate 的擁有者。",
       "email": "電子郵件",
       "username": "顯示名稱",
       "usernamePlaceholder": "選填,預設使用電子郵件",
@@ -527,7 +527,7 @@
       "toolsCount": "{{n}} 個 tools",
       "registered": "已註冊",
       "alreadyExists": "已存在",
-      "protectedLabel": "由 MCP Center 保護"
+      "protectedLabel": "由 MCP Gate 保護"
     },
     "detail": {
       "backToServices": "返回服務列表",
@@ -629,7 +629,7 @@
       "noScopesDefined": "尚未定義任何 scope,請到「OAuth Client」頁新增。",
       "staticToken": "靜態 Bearer token(選填)",
       "staticTokenHint": "只給自帶認證的外部 server 使用,供健康檢查與抓取 tools;儲存後不會再顯示。",
-      "staticTokenPlaceholder": "受 MCP Center 保護的 server 請留空",
+      "staticTokenPlaceholder": "受 MCP Gate 保護的 server 請留空",
       "staticTokenKeep": "留空則保留目前儲存的 token",
       "staticTokenClear": "移除已儲存的 token"
     },
@@ -707,7 +707,7 @@
       "grantTypes": "Grant type",
       "authMethod": "Token endpoint 認證方式",
       "authMethodHint": "伺服器端應用請選 client secret 方式;secret 只會在登記完成後顯示一次。",
-      "jwksIntro": "Client 每次向 token 端點請求時,用自己的私鑰簽一個短效 JWT;MCP Center 以下方的公鑰驗證。不會核發 secret。",
+      "jwksIntro": "Client 每次向 token 端點請求時,用自己的私鑰簽一個短效 JWT;MCP Gate 以下方的公鑰驗證。不會核發 secret。",
       "jwksUri": "JWKS URI",
       "jwksUriHint": "Client 的 JSON Web Key Set 網址(HTTPS)。第一次使用時抓取並快取;遇到未知的 kid 會重新抓取,因此可以輪替金鑰。",
       "jwks": "JWKS 文件",
@@ -825,7 +825,7 @@
     "connection": {
       "title": "{{name}} 已就緒",
       "connectionUrl": "Connection URL",
-      "connectionUrlHint": "Agent 從 MCP Center 所在 host 呼叫此 URL",
+      "connectionUrlHint": "Agent 從 MCP Gate 所在 host 呼叫此 URL",
       "agentConfigExample": "Agent config(範例)",
       "statusLabel": "狀態:{{state}}",
       "containerLabel": "Container:",

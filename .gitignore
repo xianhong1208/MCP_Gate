@@ -59,7 +59,7 @@ frontend/.env
 
 # Build artifacts
 
-MCP_Center_Deployed
+MCP_Gate_Deployed
 # License (private keys and license files must not be committed)
 keys/
 *.lic
@@ -77,7 +77,7 @@ catalog/images/*
 # pytest conftest 產生的測試設定(每次測試重寫,不進 git)
 config/test_config.yaml
 
-# MCP Center 執行期資料(SQLite、自動產生的密鑰)
+# MCP Gate 執行期資料(SQLite、自動產生的密鑰)
 data/
 
 # Local screenshots / Playwright MCP artifacts

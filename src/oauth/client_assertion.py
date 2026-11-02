@@ -65,7 +65,7 @@ def _resolve_host(host: str) -> list[str]:
 
 
 def validate_jwks_uri(jwks_uri: str, *, allow_loopback: bool) -> str:
-    """A ``jwks_uri`` MCP Center will fetch server-side. https to a public address only; plain http is accepted
+    """A ``jwks_uri`` MCP Gate will fetch server-side. https to a public address only; plain http is accepted
     solely for loopback hosts and only when the deployment itself runs over http (development). The host is
     resolved here and again right before each fetch so a DNS record cannot be pointed at an internal address
     later (SSRF via rebinding)."""

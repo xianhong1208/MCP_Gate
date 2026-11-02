@@ -81,7 +81,7 @@ class ScannerSSRFError(Exception):
     """Connection target address rejected by SSRF protection"""
 
 
-# audience (the peer's MCP URL) -> short-lived bearer token, or None when MCP Center cannot mint one
+# audience (the peer's MCP URL) -> short-lived bearer token, or None when MCP Gate cannot mint one
 TokenFactory = Callable[[str], Optional[str]]
 
 
@@ -299,8 +299,8 @@ class MCPScanner:
 
         Uses a JSON-RPC initialize request to check whether the service is a valid MCP service.
         When the peer answers 401 with a Bearer challenge and `token_factory` is given, a token for the
-        peer's MCP URL is minted (MCP Center is the authorization server) and the probe is retried once,
-        so servers protected by MCP Center still report their real name, version and tools.
+        peer's MCP URL is minted (MCP Gate is the authorization server) and the probe is retried once,
+        so servers protected by MCP Gate still report their real name, version and tools.
         """
         public_url = f"{protocol}://{_url_host(host)}:{port}{path}"
         # SSRF protection (AUDIT-1): resolve and validate once, pin the connection to that IP (prevents
@@ -326,7 +326,7 @@ class MCPScanner:
                 "protocolVersion": "2024-11-05",
                 "capabilities": {},
                 "clientInfo": {
-                    "name": "mcp-center-scanner",
+                    "name": "mcp-gate-scanner",
                     "version": "1.0.0"
                 }
             }
@@ -366,7 +366,7 @@ class MCPScanner:
                                 error="HTTP 401 (not MCP - no Bearer challenge or JSON-RPC response)",
                                 response_time_ms=elapsed_ms,
                             )
-                        # MCP Center is the authorization server: mint a token for this URL and look inside
+                        # MCP Gate is the authorization server: mint a token for this URL and look inside
                         if token_factory is not None and not auth_token:
                             minted = token_factory(public_url)
                             if minted:
@@ -498,7 +498,7 @@ class MCPScanner:
                     "params": {
                         "protocolVersion": "2024-11-05",
                         "capabilities": {},
-                        "clientInfo": {"name": "mcp-center-scanner", "version": "1.0.0"}
+                        "clientInfo": {"name": "mcp-gate-scanner", "version": "1.0.0"}
                     }
                 }
 
@@ -589,7 +589,7 @@ class MCPScanner:
             verify: Whether to verify MCP services
             get_tools: Whether to fetch the tool list
             auth_token: Bearer token (optional, for MCP services that require authentication)
-            token_factory: Mints a token for a peer's MCP URL so servers protected by MCP Center itself
+            token_factory: Mints a token for a peer's MCP URL so servers protected by MCP Gate itself
                 can be inspected without the caller supplying a token
 
         Returns:

@@ -1,6 +1,6 @@
 """OAuth signing keys (RS256).
 
-The private key lives only in MCP Center (stored AES-256-GCM encrypted in the DB); the public key is published via
+The private key lives only in MCP Gate (stored AES-256-GCM encrypted in the DB); the public key is published via
 /.well-known/jwks.json and FastMCP's JWTVerifier uses it to verify signatures. kid = RFC 7638 JWK thumbprint, so
 several keys can coexist: on rotation the old key is retired (no longer signs) but stays in the JWKS, so old tokens
 that have not yet expired still verify.

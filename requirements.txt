@@ -4,11 +4,11 @@
 aiohappyeyeballs==2.6.1
     # via aiohttp
 aiohttp==3.13.5
-    # via mcp-center
+    # via mcp-gate
 aiosignal==1.4.0
     # via aiohttp
 alembic==1.18.1
-    # via mcp-center
+    # via mcp-gate
 annotated-doc==0.0.4
     # via fastapi
 annotated-types==0.7.0
@@ -18,11 +18,11 @@ anyio==4.12.1
     #   httpx
     #   starlette
 apscheduler==3.11.2
-    # via mcp-center
+    # via mcp-gate
 attrs==25.4.0
     # via aiohttp
 bcrypt==5.0.0
-    # via mcp-center
+    # via mcp-gate
 certifi==2026.1.4
     # via
     #   httpcore
@@ -39,11 +39,11 @@ colorama==0.4.6 ; sys_platform == 'win32'
     #   click
     #   loguru
 cryptography==46.0.7
-    # via mcp-center
+    # via mcp-gate
 docker==7.2.0
-    # via mcp-center
+    # via mcp-gate
 fastapi==0.128.0
-    # via mcp-center
+    # via mcp-gate
 frozenlist==1.8.0
     # via
     #   aiohttp
@@ -57,7 +57,7 @@ h11==0.16.0
 httpcore==1.0.9
     # via httpx
 httpx==0.28.1
-    # via mcp-center
+    # via mcp-gate
 idna==3.11
     # via
     #   anyio
@@ -65,7 +65,7 @@ idna==3.11
     #   requests
     #   yarl
 loguru==0.7.3
-    # via mcp-center
+    # via mcp-gate
 mako==1.3.10
     # via alembic
 markupsafe==3.0.3
@@ -83,23 +83,23 @@ pycparser==3.0 ; implementation_name != 'PyPy' and platform_python_implementatio
 pydantic==2.12.5
     # via
     #   fastapi
-    #   mcp-center
+    #   mcp-gate
 pydantic-core==2.41.5
     # via pydantic
 pyjwt==2.12.1
-    # via mcp-center
+    # via mcp-gate
 python-dotenv==1.2.1
-    # via mcp-center
+    # via mcp-gate
 pywin32==312 ; sys_platform == 'win32'
     # via docker
 pyyaml==6.0.3
-    # via mcp-center
+    # via mcp-gate
 requests==2.34.2
     # via docker
 sqlalchemy==2.0.45
     # via
     #   alembic
-    #   mcp-center
+    #   mcp-gate
 starlette==0.50.0
     # via fastapi
 typing-extensions==4.15.0
@@ -124,9 +124,9 @@ urllib3==2.7.0
     #   docker
     #   requests
 uvicorn==0.40.0
-    # via mcp-center
+    # via mcp-gate
 websockets==16.0
-    # via mcp-center
+    # via mcp-gate
 win32-setctime==1.2.0 ; sys_platform == 'win32'
     # via loguru
 yarl==1.22.0

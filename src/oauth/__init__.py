@@ -1,4 +1,4 @@
-"""MCP Center acting as an OAuth 2.1 Authorization Server.
+"""MCP Gate acting as an OAuth 2.1 Authorization Server.
 
 - signing_keys   RS256 keys (private key stored AES-encrypted in the DB) + JWKS
 - jwt_utils      RS256 sign / verify

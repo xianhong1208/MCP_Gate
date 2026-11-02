@@ -1,5 +1,5 @@
 /**
- * MCP Center API client.
+ * MCP Gate API client.
  *
  * Login state is an httpOnly cookie (mcp_session); the frontend never touches a session token.
  *
@@ -193,7 +193,7 @@ export const servicesApi = {
     return request(`/api/services/${encodeURIComponent(id)}/tools`)
   },
 
-  /** Connect to the service and fetch tools; for MCP Center protected services the backend self-signs a token */
+  /** Connect to the service and fetch tools; for MCP Gate protected services the backend self-signs a token */
   /** identity: 'scanner' (anonymous scanner token, default) | 'token' (one of this server's issued tokens, by jti)
    *  -- for servers that show different tools per caller */
   async refreshTools(id, { identity = 'scanner', jti = null } = {}) {

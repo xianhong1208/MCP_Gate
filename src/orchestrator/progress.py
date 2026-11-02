@@ -8,7 +8,7 @@ Design:
   - Operators (orchestrator / routes) call stage(key, name) at each stage and end(key) when done.
   - Readers (GET /auth/managed/progress) take snapshot(); the frontend polls and turns stages into text.
   - Key convention: process:<process_id> (start/stop/deploy), catalog:<catalog_id> (load image).
-  - Pure in-memory: MCP Center is a single process (Nuitka onefile), no cross-node needs;
+  - Pure in-memory: MCP Gate is a single process (Nuitka onefile), no cross-node needs;
     progress naturally disappears on restart, and the actual container state is aligned via
     the DB, so there is no consistency problem.
 """

@@ -1,1 +1,1 @@
-# MCP Center tests
+# MCP Gate tests

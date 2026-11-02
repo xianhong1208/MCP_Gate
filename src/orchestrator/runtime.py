@@ -4,7 +4,7 @@ The Orchestrator owns everything that is the same however a server runs: port al
 spec, argv-policy validation, waiting for the port, service registration and DB state. A ``Runtime``
 owns only how an instance is started, stopped, found and read: ``DockerRuntime`` runs it as a container,
 ``ProcessRuntime`` as a local subprocess. Both expose the stdio bridge (supergateway) on the same
-Streamable-HTTP path so the rest of MCP Center cannot tell them apart.
+Streamable-HTTP path so the rest of MCP Gate cannot tell them apart.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ class LaunchRequest:
     entrypoint_args: List[str]      # http: validated container command (may be empty)
     stdio_command: List[str]        # stdio: validated inner command + args
     env: Dict[str, str]             # decrypted env vars for the server
-    host_port: int                  # where MCP Center and clients reach it on 127.0.0.1
+    host_port: int                  # where MCP Gate and clients reach it on 127.0.0.1
     container_port: int             # where the server listens inside a container
     restart_on_failure: bool = False
     labels: Dict[str, str] = field(default_factory=dict)

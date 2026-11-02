@@ -10,9 +10,9 @@
     "audit": "Audit Logs"
   },
   "layout": {
-    "appName": "MCP Center",
+    "appName": "MCP Gate",
     "subtitle": "OAUTH AUTHORITY",
-    "version": "MCP Center v{{version}}",
+    "version": "MCP Gate v{{version}}",
     "systemOnline": "System Online",
     "systemOffline": "System Offline",
     "profile": "View profile",
@@ -51,7 +51,7 @@
     }
   },
   "auth": {
-    "appName": "MCP Center",
+    "appName": "MCP Gate",
     "tagline": "OAuth 2.1 authorization server for MCP",
     "login": {
       "title": "Sign in",
@@ -67,7 +67,7 @@
     },
     "setup": {
       "title": "Welcome — create your account",
-      "subtitle": "This is a fresh install. The first account becomes the owner of this MCP Center.",
+      "subtitle": "This is a fresh install. The first account becomes the owner of this MCP Gate.",
       "email": "Email",
       "username": "Display name",
       "usernamePlaceholder": "Optional — defaults to your email",
@@ -527,7 +527,7 @@
       "toolsCount": "{{n}} tools",
       "registered": "Registered",
       "alreadyExists": "Already exists",
-      "protectedLabel": "protected by MCP Center"
+      "protectedLabel": "protected by MCP Gate"
     },
     "detail": {
       "backToServices": "Back to Services",
@@ -629,7 +629,7 @@
       "noScopesDefined": "No scopes defined yet. Add some on the OAuth Clients page.",
       "staticToken": "Static bearer token (optional)",
       "staticTokenHint": "Only for external servers with their own token. Used for health checks and tool discovery; never shown again.",
-      "staticTokenPlaceholder": "Leave empty if this server is protected by MCP Center",
+      "staticTokenPlaceholder": "Leave empty if this server is protected by MCP Gate",
       "staticTokenKeep": "Leave empty to keep the stored token",
       "staticTokenClear": "Remove the stored token"
     },
@@ -707,7 +707,7 @@
       "grantTypes": "Grant types",
       "authMethod": "Token endpoint authentication",
       "authMethodHint": "Choose a client-secret method for server-side apps; the secret is shown once after registration.",
-      "jwksIntro": "The client signs a short-lived JWT with its private key on every token request; MCP Center verifies it against the public keys below. No secret is issued.",
+      "jwksIntro": "The client signs a short-lived JWT with its private key on every token request; MCP Gate verifies it against the public keys below. No secret is issued.",
       "jwksUri": "JWKS URI",
       "jwksUriHint": "HTTPS URL of the client's JSON Web Key Set. Fetched on first use and cached; an unknown kid triggers a refetch, so keys can be rotated.",
       "jwks": "JWKS document",
@@ -825,7 +825,7 @@
     "connection": {
       "title": "{{name}} is ready",
       "connectionUrl": "Connection URL",
-      "connectionUrlHint": "Agent calls this URL from the MCP Center host",
+      "connectionUrlHint": "Agent calls this URL from the MCP Gate host",
       "agentConfigExample": "Agent config (example)",
       "statusLabel": "Status: {{state}}",
       "containerLabel": "Container:",

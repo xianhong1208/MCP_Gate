@@ -1,12 +1,12 @@
 # Contributing
 
-Thanks for helping improve MCP Center. This page covers the development setup, the rules the test suite enforces, and what a pull request should contain.
+Thanks for helping improve MCP Gate. This page covers the development setup, the rules the test suite enforces, and what a pull request should contain.
 
 ## Set up a development environment
 
 ```bash
-git clone https://github.com/xianhong1208/MCP_Center.git
-cd MCP_Center
+git clone https://github.com/xianhong1208/MCP_Gate.git
+cd MCP_Gate
 uv sync --all-groups          # runtime + dev dependencies (pytest, ruff, fastmcp)
 cp .env.example .env
 uv run python main.py         # API + built console on http://localhost:4568
@@ -31,7 +31,7 @@ cd frontend && npm test       # node-based unit tests, including i18n key parity
 cd frontend && npm run build  # must succeed with 0 errors
 ```
 
-`tests/test_fastmcp_interop.py` starts a real MCP Center and a real FastMCP server on free ports and drives FastMCP's own OAuth client through registration, consent and token exchange. It is the acceptance test for anything that touches `src/oauth/`.
+`tests/test_fastmcp_interop.py` starts a real MCP Gate and a real FastMCP server on free ports and drives FastMCP's own OAuth client through registration, consent and token exchange. It is the acceptance test for anything that touches `src/oauth/`.
 
 ## Project layout
 
@@ -84,5 +84,5 @@ Releases are cut from `main`; feature work lands on `dev` first.
 1. On `dev`, bump `[project].version` in `pyproject.toml`. It is the single source of truth: `npm run sync-version` (also run by `prebuild`) copies it into `frontend/package.json`, `npm install --package-lock-only` refreshes the lock file, and `uv lock` refreshes `uv.lock`.
 2. Add the `## [x.y.z] — YYYY-MM-DD` section to `CHANGELOG.md` and rebuild `static/web` so the bundle carries the new version.
 3. Open a pull request from `dev` to `main` and merge it.
-4. On the merge commit: `git tag -a vx.y.z -m "MCP Center x.y.z"` and `git push origin vx.y.z`.
+4. On the merge commit: `git tag -a vx.y.z -m "MCP Gate x.y.z"` and `git push origin vx.y.z`.
 5. Publish a GitHub Release for the tag; its notes mirror the CHANGELOG section.

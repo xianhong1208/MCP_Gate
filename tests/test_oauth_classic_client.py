@@ -1,6 +1,6 @@
 """Classic OAuth clients: confidential, registered in the console, no PKCE, no `resource` parameter.
 
-Some platforms' OAuth modules only know client_id / client_secret (Google / Zoho style). MCP Center is
+Some platforms' OAuth modules only know client_id / client_secret (Google / Zoho style). MCP Gate is
 OAuth 2.1 and normally requires PKCE and an RFC 8707 `resource`; a console-registered confidential client
 may opt out of both, the secret proving its identity and `default_resource` deciding the audience.
 Public and dynamically registered clients cannot opt out.
