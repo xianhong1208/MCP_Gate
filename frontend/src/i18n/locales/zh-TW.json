@@ -1064,6 +1064,7 @@
       "too_long": "「{{field}}」太長（最多 {{max}} 個字元）。"
     },
     "service": {
+      "managed_use_uninstall": "「{{name}}」由託管伺服器「{{process_name}}」執行，請改到「市集」解除安裝；這會先停止它，再一併移除服務。",
       "not_found": "找不到服務",
       "duplicate": "已存在同名稱與 host:port 的服務。",
       "no_host_port": "服務未設定 host 或 port",

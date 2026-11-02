@@ -145,6 +145,29 @@ class ServiceAdapter(ServiceCRUD):
         return desc
 
     @classmethod
+    def delete_unmanaged(cls, db, service_id) -> str:
+        """Delete a service from the Services page; returns its name (#22).
+
+        A service that a managed instance (Marketplace / BYO) still points at is refused with 409
+        `service.managed_use_uninstall`: deleting only the row would leave the container or process running,
+        unregistered and without OAuth in front of it. Uninstall stops it first and removes the service too.
+        """
+        from src.adapters.managed_adapter import ManagedMcpProcessAdapter
+
+        service = cls.get_existing(db, service_id)
+        owner = next((p for p in ManagedMcpProcessAdapter.list_all(db) if p.service_id == service.id), None)
+        if owner is not None:
+            raise ConflictError(
+                code="service.managed_use_uninstall",
+                params={"name": service.name, "process_id": str(owner.id), "process_name": owner.name},
+                fallback=(f"'{service.name}' is run by the managed instance '{owner.name}'. "
+                          "Uninstall it from the Marketplace instead; that stops it and removes the service."),
+            )
+        name = service.name
+        cls.delete(db, service_id)
+        return name
+
+    @classmethod
     def register_discovered(cls, db, *, tools: list, response_time_ms=None, **fields):
         """Register one scanned server with its tools and an `online` health stamp, all or nothing (#20).
 

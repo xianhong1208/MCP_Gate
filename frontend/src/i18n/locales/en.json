@@ -1064,6 +1064,7 @@
       "too_long": "\"{{field}}\" is too long (maximum {{max}} characters)."
     },
     "service": {
+      "managed_use_uninstall": "\"{{name}}\" is run by the managed instance \"{{process_name}}\". Uninstall it from the Marketplace instead; that stops it and removes the service.",
       "not_found": "Service not found",
       "duplicate": "A service with the same name and host:port already exists.",
       "no_host_port": "Service has no host or port configured",

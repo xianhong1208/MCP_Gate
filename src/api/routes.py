@@ -164,13 +164,12 @@ async def update_service(service_id: str, request: ServiceUpdateRequest, http_re
 @router.delete("/api/services/{service_id}", tags=["Services"])
 async def delete_service(service_id: str, http_request: Request, db: Session = Depends(get_db),
                          user: AdminUser = Depends(get_current_user)):
-    """Delete an MCP server and its tool list and token events."""
+    """Delete an MCP server and its tool list and token events. A server run by a managed instance answers 409
+    `service.managed_use_uninstall`: uninstall it from the Marketplace instead, which also stops it."""
     try:
-        service = ServiceAdapter.get_existing(db, service_id)
+        name = ServiceAdapter.delete_unmanaged(db, service_id)
     except AdapterError as e:
         raise _adapter_exc(e)
-    name = service.name
-    ServiceAdapter.delete(db, service_id)
     _audit(db, http_request, user, AuditAction.DELETE_SERVICE, ResourceType.SERVICE, service_id, {"name": name})
     return {"message": f"Service '{name}' deleted"}
 
