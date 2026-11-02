@@ -251,6 +251,11 @@ class OAuthClient(Base):
     is_approved = Column(Boolean, default=True, nullable=False, index=True)
     is_active = Column(Boolean, default=True, nullable=False, index=True)
     owner_id = Column(Uuid, ForeignKey("admin_users.id", ondelete="SET NULL"), nullable=True)
+    # Resource-server binding (console-registered confidential clients only): the audience of the MCP server this
+    # client speaks for. Only a bound client may read the revocation feed, introspect other clients' tokens or
+    # report usage, and it only ever sees tokens carrying this audience. Stored as the audience (not a service
+    # id) so deleting or editing the service can never widen what the client sees. Never set through DCR.
+    resource_audience = Column(String(256), nullable=True)
     created_at = Column(DateTime, default=local_now, nullable=False)
     updated_at = Column(DateTime, default=local_now, onupdate=local_now, nullable=False)
     last_used_at = Column(DateTime, nullable=True)
@@ -281,6 +286,7 @@ class OAuthClient(Base):
             "created_via": self.created_via,
             "is_approved": self.is_approved,
             "is_active": self.is_active,
+            "resource_audience": self.resource_audience,
             "owner_id": str(self.owner_id) if self.owner_id else None,
             "created_at": format_datetime(self.created_at),
             "updated_at": format_datetime(self.updated_at),

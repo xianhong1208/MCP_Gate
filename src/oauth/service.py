@@ -179,6 +179,11 @@ def register_client(
     if default_resource:
         default_resource, _ = resolve_resource(db, default_resource)  # must be a registered server
 
+    # Resource-server binding: console only (a DCR request carrying the field has it ignored, RFC 7591 §2)
+    resource_audience = None
+    if created_via == "manual" and metadata.get("resource_service_id"):
+        resource_audience = resource_server_audience_for(db, metadata["resource_service_id"], auth_method)
+
     plaintext_secret = None
     secret_hash = None
     if auth_method in ("client_secret_basic", "client_secret_post"):
@@ -202,6 +207,7 @@ def register_client(
         jwks_uri=jwks_uri,
         require_pkce=require_pkce,
         default_resource=default_resource,
+        resource_audience=resource_audience,
         created_via=created_via,
         is_approved=is_approved,
         owner_id=owner_id,
@@ -252,10 +258,31 @@ def registration_response(client: OAuthClient, secret: Optional[str]) -> dict:
     return body
 
 
+def resource_server_audience_for(db: Session, service_id, auth_method: str) -> str:
+    """Validate a resource-server binding request and return the audience to store."""
+    if auth_method == "none":
+        raise OAuthError("invalid_client_metadata", "only a confidential client can act as a resource server")
+    service = ServiceAdapter.get_by_id(db, str(service_id))
+    audience = normalize_audience(service.effective_audience) if service else None
+    if not audience:
+        raise OAuthError("invalid_client_metadata", "resource_service_id must name a server with an audience")
+    return audience
+
+
+def resource_server_audience(client: OAuthClient) -> Optional[str]:
+    """The audience a client may act for as a resource server (revocation feed, introspecting other clients'
+    tokens, usage reports), or None when it is not one.
+
+    Only a confidential client the owner registered in the console and bound to one server qualifies; it then
+    only ever sees tokens whose audience is that server. Dynamically registered clients never qualify:
+    registration is anonymous, so choosing a secret-based auth method must not buy any trust."""
+    if client.created_via != "manual" or client.token_endpoint_auth_method == "none":
+        return None
+    return client.resource_audience or None
+
+
 def is_resource_server(client: OAuthClient) -> bool:
-    """A confidential client (secret or private key) is trusted as a resource server: it may introspect any
-    token, read the revocation feed and report usage. Public clients may only act on their own tokens."""
-    return client.token_endpoint_auth_method != "none"
+    return resource_server_audience(client) is not None
 
 
 def verify_client_secret(client: OAuthClient, secret: Optional[str]) -> bool:
@@ -765,9 +792,10 @@ def revoke_token(db: Session, *, client: OAuthClient, token: str, ip: Optional[s
 def introspect_token(db: Session, token: str, *, caller: OAuthClient, ip: Optional[str] = None) -> dict:
     """RFC 7662. Revoked / expired / signature failure all yield active=false.
 
-    Who may look: the client that owns the token, or a confidential client (secret or private key; treated as a
-    resource server -- FastMCP's IntrospectionTokenVerifier is exactly this). A public client can only introspect its own
-    tokens, so nobody can register a throwaway client via DCR and read another token's sub / email / scope.
+    Who may look: the client that owns the token (any of its tokens), or a resource server (a console-registered
+    confidential client bound to a server -- FastMCP's IntrospectionTokenVerifier is exactly this), which only
+    sees access tokens whose audience is its own server. Anyone else gets active=false, so nobody can register a
+    throwaway client via DCR and read another token's sub / email / scope.
     """
     inactive = {"active": False}
     try:
@@ -775,8 +803,13 @@ def introspect_token(db: Session, token: str, *, caller: OAuthClient, ip: Option
     except OAuthError:
         return inactive
     is_owner = claims.get("client_id") == caller.client_id
-    if not is_owner and not is_resource_server(caller):
-        return inactive
+    if not is_owner:
+        rs_audience = resource_server_audience(caller)
+        if rs_audience is None or claims.get("token_use") != "access":
+            return inactive
+        aud = claims.get("aud")
+        if not isinstance(aud, str) or normalize_audience(aud) != rs_audience:
+            return inactive
     rec = OAuthTokenAdapter.get(db, claims.get("jti", ""))
     if rec is not None:
         if rec.is_revoked or rec.is_expired:
@@ -806,9 +839,13 @@ def introspect_token(db: Session, token: str, *, caller: OAuthClient, ip: Option
 # ---------------------------------------------------------------------------
 def revoked_feed(db: Session, *, caller: OAuthClient, since: Optional[float] = None) -> dict:
     """Tokens revoked but not yet expired, for MCP servers that verify JWTs offline and want revocation to take
-    effect before expiry. Bounded by the access-token lifetime. Resource servers only."""
-    if not is_resource_server(caller):
-        raise OAuthError("unauthorized_client", "only confidential clients may read the revocation feed", 403)
+    effect before expiry. Bounded by the access-token lifetime. Resource servers only, and only the tokens of
+    the caller's own server."""
+    audience = resource_server_audience(caller)
+    if audience is None:
+        raise OAuthError("unauthorized_client",
+                         "only a client registered in the console as a server's resource server may read the "
+                         "revocation feed", 403)
     since_dt = None
     if since is not None:
         try:
@@ -816,7 +853,7 @@ def revoked_feed(db: Session, *, caller: OAuthClient, since: Optional[float] = N
         except (TypeError, ValueError, OverflowError):
             raise OAuthError("invalid_request", "since must be a unix timestamp")
     now = local_now()
-    rows = OAuthTokenAdapter.list_revoked_unexpired(db, since=since_dt)
+    rows = OAuthTokenAdapter.list_revoked_unexpired(db, since=since_dt, audience=audience)
     return {
         "revoked": [{"jti": t.jti, "revoked_at": int(t.revoked_at.timestamp()),
                      "exp": int(t.expires_at.timestamp())} for t in rows],
@@ -825,35 +862,60 @@ def revoked_feed(db: Session, *, caller: OAuthClient, since: Optional[float] = N
 
 
 MAX_USAGE_EVENTS = 1000
+MAX_USAGE_COUNT = 1_000_000          # verifications of one token in one report
+USAGE_CLOCK_SKEW = timedelta(minutes=5)
+
+
+def _usage_count(raw) -> int:
+    if isinstance(raw, bool):
+        raise OAuthError("invalid_request", "count must be an integer")
+    try:
+        count = int(raw)
+    except (TypeError, ValueError, OverflowError):
+        raise OAuthError("invalid_request", "count must be an integer")
+    if count != raw and not isinstance(raw, str):
+        raise OAuthError("invalid_request", "count must be an integer")
+    if not 1 <= count <= MAX_USAGE_COUNT:
+        raise OAuthError("invalid_request", f"count must be between 1 and {MAX_USAGE_COUNT}")
+    return count
+
+
+def _usage_last_seen(raw) -> Optional[datetime]:
+    if raw is None:
+        return None
+    try:
+        last_seen = datetime.fromtimestamp(float(raw))  # local naive, like every stored timestamp
+    except (TypeError, ValueError, OverflowError, OSError):
+        raise OAuthError("invalid_request", "last_seen must be a unix timestamp")
+    now = local_now()
+    if last_seen > now + USAGE_CLOCK_SKEW:
+        raise OAuthError("invalid_request", "last_seen is in the future")
+    return min(last_seen, now)
 
 
 def report_usage(db: Session, *, caller: OAuthClient, events, ip: Optional[str] = None) -> dict:
     """Fold verifications an offline MCP server batched up into the token counters and the usage statistics.
-    ``events`` is a list of {jti, count, last_seen (unix)}. Unknown jtis are returned, not stored. Resource
-    servers only."""
-    if not is_resource_server(caller):
-        raise OAuthError("unauthorized_client", "only confidential clients may report usage", 403)
+    ``events`` is a list of {jti, count (1..MAX_USAGE_COUNT), last_seen (unix)}. Resource servers only; a jti
+    that is unknown or belongs to another server's audience is returned as unknown, not stored."""
+    audience = resource_server_audience(caller)
+    if audience is None:
+        raise OAuthError("unauthorized_client",
+                         "only a client registered in the console as a server's resource server may report usage",
+                         403)
     if not isinstance(events, list):
         raise OAuthError("invalid_request", "events must be an array")
     if len(events) > MAX_USAGE_EVENTS:
         raise OAuthError("invalid_request", f"at most {MAX_USAGE_EVENTS} events per report")
-    accepted, unknown = 0, []
-    for ev in events:
-        if not isinstance(ev, dict) or not isinstance(ev.get("jti"), str):
+    parsed = []
+    for ev in events:  # validate the whole batch before writing anything
+        if not isinstance(ev, dict) or not isinstance(ev.get("jti"), str) or len(ev["jti"]) > 64:
             raise OAuthError("invalid_request", "each event needs a jti")
-        try:
-            count = max(1, int(ev.get("count", 1)))
-        except (TypeError, ValueError):
-            raise OAuthError("invalid_request", "count must be an integer")
-        last_seen = None
-        if ev.get("last_seen") is not None:
-            try:
-                last_seen = datetime.fromtimestamp(float(ev["last_seen"]))  # naive local, like local_now()
-            except (TypeError, ValueError, OverflowError):
-                raise OAuthError("invalid_request", "last_seen must be a unix timestamp")
-        rec = OAuthTokenAdapter.get(db, ev["jti"])
-        if rec is None:
-            unknown.append(ev["jti"])
+        parsed.append((ev["jti"], _usage_count(ev.get("count", 1)), _usage_last_seen(ev.get("last_seen"))))
+    accepted, unknown = 0, []
+    for jti, count, last_seen in parsed:
+        rec = OAuthTokenAdapter.get(db, jti)
+        if rec is None or rec.kind not in ("access", "pat") or rec.audience != audience:
+            unknown.append(jti)
             continue
         OAuthTokenAdapter.apply_usage(db, rec, count=count, last_seen=last_seen)
         TokenUsageAdapter.record(

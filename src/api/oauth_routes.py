@@ -231,7 +231,8 @@ async def revoke(request: Request, db: Session = Depends(get_db)):
 @router.post("/oauth/revoked")
 async def revoked_tokens(request: Request, db: Session = Depends(get_db)):
     """Revocation feed for MCP servers that verify JWTs offline: tokens revoked but not yet expired, optionally
-    only those revoked since a unix timestamp (`since`). Requires confidential-client authentication."""
+    only those revoked since a unix timestamp (`since`). Requires a resource server: a console-registered
+    confidential client bound to an MCP server; only that server's tokens are listed."""
     try:
         form = await _form(request)
         caller = await _authenticate_client(request, db, form)
@@ -243,8 +244,8 @@ async def revoked_tokens(request: Request, db: Session = Depends(get_db)):
 @router.post("/oauth/usage")
 async def usage_report(request: Request, db: Session = Depends(get_db)):
     """Usage report from an MCP server that verifies JWTs offline: `events` is a JSON array of
-    {jti, count, last_seen}. Feeds the token counters and the dashboard. Requires confidential-client
-    authentication."""
+    {jti, count (1..1,000,000), last_seen}. Feeds the token counters and the dashboard. Requires a resource server
+    (a console-registered confidential client bound to an MCP server); other servers' jtis are returned as unknown."""
     try:
         form = await _form(request)
         caller = await _authenticate_client(request, db, form)
@@ -261,8 +262,8 @@ async def usage_report(request: Request, db: Session = Depends(get_db)):
 
 @router.post("/oauth/introspect")
 async def introspect(request: Request, db: Session = Depends(get_db)):
-    """Requires client authentication. A public client can only introspect its own tokens; a confidential client
-    (resource server) can introspect any token."""
+    """Requires client authentication. A client can introspect its own tokens; a resource server (a
+    console-registered confidential client bound to an MCP server) can introspect access tokens for that server."""
     try:
         form = await _form(request)
         caller = await _authenticate_client(request, db, form)

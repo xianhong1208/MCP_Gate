@@ -21,8 +21,8 @@ def test_public_client_cannot_introspect_others_tokens(owner_client, service):
     peek = owner_client.post("/oauth/introspect", data={"token": tokens["access_token"], "client_id": other["client_id"]}).json()
     assert peek == {"active": False}
 
-    # Confidential client (= resource server, e.g. FastMCP IntrospectionTokenVerifier) -> allowed
-    rs = _register_console(owner_client, client_name="Resource server")
+    # The server's resource-server client (e.g. FastMCP IntrospectionTokenVerifier) -> allowed
+    rs = _register_console(owner_client, client_name="Resource server", resource_service_id=service["id"])
     seen = owner_client.post("/oauth/introspect", data={"token": tokens["access_token"]},
                              auth=(rs["client_id"], rs["client_secret"])).json()
     assert seen["active"] is True and seen["client_id"] == reg["client_id"]

@@ -750,12 +750,15 @@ class OAuthTokenCRUD:
 
     @staticmethod
     def list_revoked_unexpired(db: Session, *, since: Optional[datetime] = None,
-                               kinds: tuple = ("access", "pat")) -> List[OAuthToken]:
+                               kinds: tuple = ("access", "pat"), audience: Optional[str] = None) -> List[OAuthToken]:
         """Revoked tokens an offline verifier would otherwise still accept: revoked, not yet expired.
-        Bounded by the access-token lifetime, so the feed never grows without limit."""
+        Bounded by the access-token lifetime, so the feed never grows without limit. ``audience`` limits it to
+        the tokens of one server."""
         q = db.query(OAuthToken).filter(
             OAuthToken.revoked_at.isnot(None), OAuthToken.expires_at >= local_now(), OAuthToken.kind.in_(kinds),
         )
+        if audience is not None:
+            q = q.filter(OAuthToken.audience == audience)
         if since is not None:
             q = q.filter(OAuthToken.revoked_at >= since)
         return q.order_by(OAuthToken.revoked_at.asc()).all()

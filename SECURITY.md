@@ -24,6 +24,7 @@ Only the latest release on the `main` branch receives fixes.
 
 ## Known limitations
 
+- **Resource servers are explicit.** Only a confidential client registered in the console *and bound to one MCP server* may read the revocation feed, introspect other clients' tokens or report usage, and it only sees tokens whose audience is that server. Any other client can introspect only its own tokens.
 - **Access tokens verified offline are revoked with a delay.** A server that uses a plain `JWTVerifier` keeps accepting a revoked access token until it expires (60 minutes by default). Use `MCPGateVerifier` from `examples/mcp_gate_hooks.py`, which polls `POST /oauth/revoked` (default every 15 s) and also reports usage, so the window shrinks to the poll interval; use FastMCP's `IntrospectionTokenVerifier` where it must be instant.
 - **Single tenant.** Anyone who can sign in to the console is an administrator. Protect the console URL accordingly.
 - **Single process.** The rate limiter counts requests in memory and the scheduler (expiry purges, audit retention, health checks) runs inside the server process. Run exactly one MCP Gate process: with several workers or replicas each one keeps its own counters, so the effective limit multiplies, and every scheduled job runs once per process. MCP Gate logs a warning at startup when `WEB_CONCURRENCY` or `UVICORN_WORKERS` is greater than 1.

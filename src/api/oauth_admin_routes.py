@@ -62,6 +62,13 @@ class ClientCreateRequest(BaseModel):
     # private_key_jwt: exactly one of these
     jwks_uri: Optional[str] = None
     jwks: Optional[dict] = None
+    # Resource-server binding: the MCP server this confidential client speaks for (revocation feed,
+    # introspection, usage reports). Without it the client is not a resource server.
+    resource_service_id: Optional[str] = None
+
+
+class ResourceServerBindingRequest(BaseModel):
+    service_id: Optional[str] = None
 
 
 @router.get("/clients")
@@ -129,6 +136,33 @@ async def revoke_client(client_id: str, request: Request, db: Session = Depends(
     _audit(db, request, user, AuditAction.OAUTH_CLIENT_REVOKE, ResourceType.OAUTH_CLIENT, client_id,
            {"tokens_revoked": revoked})
     return {**client.to_dict(), "tokens_revoked": revoked}
+
+
+@router.put("/clients/{client_id}/resource-server")
+async def bind_resource_server(client_id: str, body: ResourceServerBindingRequest, request: Request,
+                               db: Session = Depends(get_db), user: AdminUser = Depends(get_current_user)):
+    """Bind a console-registered confidential client to the MCP server it speaks for (or unbind with
+    `service_id: null`). Only a bound client may read the revocation feed, introspect other clients' tokens and
+    report usage, and it only ever sees tokens whose audience is that server."""
+    try:
+        client = OAuthClientAdapter.get_existing(db, client_id)
+    except AdapterError as e:
+        raise _adapter_exc(e)
+    if client.created_via != "manual":
+        raise HTTPException(status_code=400, detail={
+            "error": "oauth.invalid_client_metadata",
+            "fallback": "Only clients registered in the console can act as a resource server"})
+    audience = None
+    if body.service_id:
+        try:
+            audience = oauth.resource_server_audience_for(db, body.service_id, client.token_endpoint_auth_method)
+        except OAuthError as e:
+            raise _oauth_exc(e)
+    client.resource_audience = audience
+    OAuthClientAdapter.save(db, client)
+    _audit(db, request, user, AuditAction.OAUTH_CLIENT_BIND, ResourceType.OAUTH_CLIENT, client_id,
+           {"resource_audience": audience})
+    return client.to_dict()
 
 
 @router.delete("/clients/{client_id}")
@@ -438,7 +472,9 @@ if __name__ == "__main__":
     fastmcp_hooks = f'''# Same server, but revocations take effect within seconds and usage shows up in the console.
 # Copy examples/mcp_gate_hooks.py from the MCP Gate repository next to this file, and register a
 # confidential client in the console (OAuth Clients -> Register trusted client, client secret or
-# private_key_jwt) whose credentials this server uses to talk back to MCP Gate.
+# private_key_jwt) bound to this server as its resource server
+# (PUT /api/oauth/clients/<CLIENT_ID>/resource-server {{"service_id": "{service.id}"}});
+# this server uses its credentials to talk back to MCP Gate.
 from fastmcp import FastMCP
 from fastmcp.server.auth import RemoteAuthProvider
 from mcp_gate_hooks import MCPGateVerifier

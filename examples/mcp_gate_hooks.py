@@ -10,7 +10,9 @@ verifier closes both without introspecting every request:
   ``POST <issuer>/oauth/usage``, which feeds the token's "last used" and the dashboard statistics.
 
 Both endpoints require a *confidential* client registered in the MCP Gate console (OAuth Clients ->
-Register trusted client). Give the verifier either that client's secret or, for ``private_key_jwt``
+Register trusted client) and bound to this server as its resource server (``resource_service_id`` when
+registering it, or ``PUT /api/oauth/clients/{client_id}/resource-server``); the feed and usage reports then
+cover only tokens whose audience is this server. Give the verifier either that client's secret or, for ``private_key_jwt``
 clients, the private key PEM and its kid.
 
 Usage::
