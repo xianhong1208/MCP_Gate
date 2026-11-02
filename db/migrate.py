@@ -83,7 +83,9 @@ class DatabaseMigrator:
         # No alembic.ini -- all settings are injected via the pure Python API. The alembic CLI is no longer supported.
         self.alembic_cfg = AlembicConfig()
         self.alembic_cfg.set_main_option("script_location", str(self.alembic_dir))
-        self.alembic_cfg.set_main_option("sqlalchemy.url", self.db_url)
+        # Alembic options go through ConfigParser interpolation, so a percent-encoded password (%40 for "@")
+        # must be escaped or set_main_option raises "invalid interpolation syntax"
+        self.alembic_cfg.set_main_option("sqlalchemy.url", self.db_url.replace("%", "%%"))
         logger.debug(f"Alembic dir resolved to: {self.alembic_dir}")
 
     # ---- Internal helpers ----

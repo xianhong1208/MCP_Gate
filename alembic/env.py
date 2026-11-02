@@ -39,13 +39,14 @@ config = context.config
 # Get database URL from our config
 try:
     db_config = Config.get_database_config()
-    config.set_main_option("sqlalchemy.url", db_config.url)
+    # Escape "%" for ConfigParser interpolation (percent-encoded credentials such as %40)
+    config.set_main_option("sqlalchemy.url", db_config.url.replace("%", "%%"))
 except Exception:
     # Fallback to environment variable
     database_url = os.environ.get("DATABASE_URL", "")
     if not database_url:
         raise RuntimeError("DATABASE_URL environment variable is required")
-    config.set_main_option("sqlalchemy.url", database_url)
+    config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
 
 # Alembic logging is left to the host app's logger (loguru) — we don't load
 # alembic.ini's [loggers] section because alembic.ini was removed.
