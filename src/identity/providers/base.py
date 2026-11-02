@@ -19,7 +19,11 @@ class ExternalIdentity:
     sub: str
     email: Optional[str]
     name: Optional[str]
-    email_verified: bool = True
+    # Only True when the provider positively says the email is verified: an unverified email must never be used
+    # to find (and take over) an existing account
+    email_verified: bool = False
+    # Set by login_external when this sign-in linked the provider account to an existing console account
+    linked: bool = False
 
 
 class OAuthLoginProvider:

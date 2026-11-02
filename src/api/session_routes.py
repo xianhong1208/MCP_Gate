@@ -177,6 +177,18 @@ def _safe_next(raw: Optional[str]) -> str:
     return raw
 
 
+# Ours are secrets.token_urlsafe(24) (32 characters); anything far longer is not one of ours
+_MAX_STATE_LENGTH = 128
+
+
+def _state_matches(state: Optional[str], expected: str) -> bool:
+    """Constant-time comparison of the callback ``state`` with the cookie's. compare_digest raises TypeError on a
+    non-ASCII str (that was a 500), so both sides are compared as UTF-8 bytes, and over-long input is refused."""
+    if not state or not expected or len(state) > _MAX_STATE_LENGTH:
+        return False
+    return secrets.compare_digest(state.encode("utf-8"), expected.encode("utf-8"))
+
+
 @router.get("/oauth/{provider}/start")
 async def oauth_login_start(provider: str, next: Optional[str] = None):
     """Begin GitHub / Google sign-in: redirects to the provider with a CSRF state cookie."""
@@ -211,12 +223,18 @@ async def oauth_login_callback(provider: str, request: Request, db: Session = De
     def fail(code_: str) -> RedirectResponse:
         return RedirectResponse(url=f"/login?{urlencode({'error': code_})}", status_code=302)
 
-    if error or not code or not state or not expected_state or not secrets.compare_digest(state, expected_state):
+    if error or not code or not _state_matches(state, expected_state):
         return fail("auth.external_login_failed")
     try:
+        identity = None
         identity = await providers[provider].exchange(code=code, redirect_uri=_callback_url(provider))
         user = identity_service.login_external(db, identity)
     except IdentityError as e:
+        AuditService.log_from_request(
+            db=db, request=request, action=AuditAction.ADMIN_LOGIN, resource_type=ResourceType.ADMIN,
+            status=AuditStatus.FAILURE, actor_type=ActorType.ADMIN, actor_name=identity.email if identity else None,
+            error_message=str(e), details={"provider": provider, "error": e.code},
+        )
         return fail(e.code)
     except Exception as e:
         logger.warning(f"{provider} login failed: {e}")
@@ -225,7 +243,8 @@ async def oauth_login_callback(provider: str, request: Request, db: Session = De
     AuditService.log_from_request(
         db=db, request=request, action=AuditAction.ADMIN_LOGIN, resource_type=ResourceType.ADMIN,
         status=AuditStatus.SUCCESS, actor_type=ActorType.ADMIN, actor_id=str(user.id),
-        actor_name=user.audit_name, details={"provider": provider},
+        actor_name=user.audit_name,
+        details={"provider": provider, **({"linked_provider_account": identity.sub} if identity.linked else {})},
     )
     issued = session_manager.issue(db, user)
     # No response body to carry the session binding here: it rides in the fragment, which the browser keeps on the

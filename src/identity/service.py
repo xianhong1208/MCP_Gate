@@ -68,12 +68,20 @@ def login_external(db: Session, identity: ExternalIdentity) -> AdminUser:
 
     Order: (1) existing account with the same provider+sub, (2) existing account with the same email (auto-linked),
     (3) email on the allowed_emails allowlist -> auto-create; otherwise reject.
+
+    Steps (2) and (3) trust the email, so they require the provider to have verified it: anyone can put any
+    address on a GitHub profile or an unverified Google account, and linking on that would hand them the
+    matching console account (the owner's). An unverified match is refused, not silently treated as "new".
     """
     user = AdminUserAdapter.get_by_provider(db, identity.provider, identity.sub)
     if user is None and identity.email:
         user = AdminUserAdapter.get_by_email(db, identity.email)
         if user is not None:
+            if not identity.email_verified:
+                raise IdentityError("auth.external_email_unverified",
+                                    "The provider has not verified this email address", 403)
             AdminUserAdapter.link_provider(db, user, identity.provider, identity.sub)
+            identity.linked = True
     if user is None:
         allowed = {e.strip().lower() for e in Config.get_identity_config().allowed_emails if e.strip()}
         if not identity.email or identity.email not in allowed or not identity.email_verified:

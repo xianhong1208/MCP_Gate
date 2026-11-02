@@ -1005,6 +1005,7 @@
       "local_login_disabled": "此伺服器已停用密碼登入。",
       "external_login_failed": "第三方登入失敗,請再試一次。",
       "external_not_allowed": "此帳號不允許在這裡登入。",
+      "external_email_unverified": "此登入服務尚未驗證你的電子郵件，無法用它登入既有帳號。請先在該服務完成驗證，或改用密碼登入。",
       "provider_not_enabled": "此登入方式未啟用。",
       "setup_already_done": "初始設定已完成,請直接登入。",
       "invalid_current_password": "目前的密碼錯誤",

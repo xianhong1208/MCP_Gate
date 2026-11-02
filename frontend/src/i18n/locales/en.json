@@ -1005,6 +1005,7 @@
       "local_login_disabled": "Password sign-in is disabled on this server.",
       "external_login_failed": "Sign-in with the external provider failed. Please try again.",
       "external_not_allowed": "This account is not allowed to sign in here.",
+      "external_email_unverified": "Your email address is not verified with this provider, so it cannot be used to sign in to an existing account. Verify it with the provider, or sign in with your password.",
       "provider_not_enabled": "This sign-in provider is not enabled.",
       "setup_already_done": "Setup has already been completed. Please sign in.",
       "invalid_current_password": "Current password is incorrect",

@@ -21,6 +21,7 @@ Only the latest release on the `main` branch receives fixes.
 | Authorization codes | Stored as SHA-256 hashes, single use, 120-second lifetime, bound to client, redirect URI, PKCE challenge and resource. Reuse revokes every token derived from the code; a redemption that fails a check (PKCE verifier, client, redirect URI, resource) burns the code. |
 | Refresh tokens | Rotated on every use; presenting a rotated token revokes the whole family. Their audience is MCP Gate's own token endpoint, so a resource server that checks `aud` (every `JWTVerifier` configured with its audience) refuses them as Bearer tokens; `MCPGateVerifier` also requires `token_use: access`. |
 | Client secrets | Stored as SHA-256 hashes, compared in constant time, returned once at registration. |
+| GitHub / Google sign-in | An existing account is matched by provider account id, or by email only when the provider reports that email as verified (Google `email_verified`; GitHub primary entry of `/user/emails`); the same applies to auto-creating accounts from `identity.allowed_emails`. |
 | Redirect URIs | Exact-match against the registered list, except that a loopback IP literal (`http://127.0.0.1/…`, `http://[::1]/…`) matches on any port (RFC 8252 §7.3); `localhost` must match exactly. `http` is allowed only for loopback hosts. |
 
 ## Known limitations
