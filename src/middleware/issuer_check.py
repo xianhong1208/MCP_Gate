@@ -56,7 +56,8 @@ def issuer_base_url(issuer: str) -> str:
 def external_base_url(scope: dict, trusted_proxies: Iterable[str]) -> str:
     """The base URL the client used, seen from outside a trusted reverse proxy."""
     headers = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope.get("headers", [])}
-    scheme = scope.get("scheme", "http")
+    # A WebSocket scope carries ws / wss; its origin is the http(s) page that opened it.
+    scheme = {"ws": "http", "wss": "https"}.get(scope.get("scheme", "http"), scope.get("scheme", "http"))
     host = headers.get("host", "")
     client = scope.get("client")
     peer = client[0] if client else ""

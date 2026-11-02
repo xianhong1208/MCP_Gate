@@ -78,6 +78,10 @@ server {
 }
 ```
 
+Keep `Host` and `X-Forwarded-Proto` as shown: the console's WebSocket only accepts handshakes whose
+`Origin` is the address the browser used (or `OAUTH_ISSUER`, or an entry in `cors.allowed_origins`), and
+it reads that address from these headers when the proxy is listed in `security.trusted_proxies`.
+
 ## 4. Run as a service
 
 `/etc/systemd/system/mcp-gate.service`:
