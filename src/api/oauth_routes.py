@@ -31,6 +31,7 @@ from src.logging import get_logger
 from src.oauth import service as oauth
 from src.oauth.errors import OAuthError
 from src.oauth.signing_keys import get_jwks
+from src.utils.client_ip import resolve_client_ip
 
 logger = get_logger("oauth")
 router = APIRouter(tags=["OAuth 2.1"])
@@ -46,7 +47,8 @@ def _error_json(err: OAuthError) -> JSONResponse:
 
 
 def _client_ip(request: Request) -> Optional[str]:
-    return request.client.host if request.client else None
+    """Client address, honouring X-Forwarded-For only from security.trusted_proxies."""
+    return resolve_client_ip(request)
 
 
 async def _form(request: Request) -> dict:

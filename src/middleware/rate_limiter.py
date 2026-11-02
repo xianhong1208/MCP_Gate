@@ -6,51 +6,16 @@ Implemented with a sliding-window algorithm.
 
 import asyncio
 import time
-import ipaddress
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
+from src.utils.client_ip import is_ip_in_whitelist, resolve_client_ip
 
-def is_ip_in_whitelist(client_ip: str, whitelist: List[str]) -> bool:
-    """Check whether an IP is in the whitelist (CIDR notation supported).
-
-    Args:
-        client_ip: Client IP address
-        whitelist: Whitelist entries; may contain single IPs or CIDR ranges
-
-    Returns:
-        True if the IP is in the whitelist
-    """
-    # Direct match
-    if client_ip in whitelist:
-        return True
-
-    try:
-        ip = ipaddress.ip_address(client_ip)
-        for entry in whitelist:
-            # Skip entries that are not IP formatted (e.g. "localhost")
-            if entry in ("localhost", "::1"):
-                continue
-            try:
-                # Try to parse as a network range
-                if "/" in entry:
-                    network = ipaddress.ip_network(entry, strict=False)
-                    if ip in network:
-                        return True
-                else:
-                    # Parse as a single IP
-                    if ip == ipaddress.ip_address(entry):
-                        return True
-            except ValueError:
-                continue
-    except ValueError:
-        pass
-
-    return False
+__all__ = ["is_ip_in_whitelist", "RateLimitConfig", "RateLimiter", "RateLimitMiddleware"]
 
 
 @dataclass
@@ -236,25 +201,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     def _get_client_ip(self, request: Request) -> str:
         """Get the client's real IP.
 
-        Security consideration: X-Forwarded-For / X-Real-IP headers are only parsed when the directly
-        connected IP belongs to a trusted proxy.
-        This prevents attackers from bypassing rate limiting by forging those headers.
+        Forwarded headers are only honoured when the direct peer is a trusted proxy, and X-Forwarded-For is
+        read right to left (see src.utils.client_ip), so a forged header can neither dodge the limit nor
+        frame another address.
         """
-        # Get the directly connected IP
-        direct_ip = request.client.host if request.client else "unknown"
-
-        # Only parse forwarded headers for requests from trusted proxies
-        if is_ip_in_whitelist(direct_ip, self.config.trusted_proxies):
-            # Prefer X-Forwarded-For
-            forwarded = request.headers.get("X-Forwarded-For")
-            if forwarded:
-                # Take the first IP (the original client IP)
-                return forwarded.split(",")[0].strip()
-
-            # Fall back to X-Real-IP
-            real_ip = request.headers.get("X-Real-IP")
-            if real_ip:
-                return real_ip
-
-        # Untrusted proxy or no forwarded header: use the directly connected IP
-        return direct_ip
+        return resolve_client_ip(request, self.config.trusted_proxies) or "unknown"

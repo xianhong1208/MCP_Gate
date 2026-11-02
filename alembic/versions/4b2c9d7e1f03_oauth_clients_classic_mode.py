@@ -33,6 +33,12 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     """Downgrade schema."""
+    # Classic (PKCE-optional) clients leave code_challenge / code_challenge_method NULL. The old schema requires
+    # PKCE on every flow, so pending authorization requests and unredeemed codes without a challenge cannot be
+    # kept: delete them before re-adding NOT NULL. Both are short-lived (minutes); the client simply restarts
+    # the authorization flow.
+    for table in ('oauth_authorization_codes', 'oauth_authorization_requests'):
+        op.execute(sa.text(f"DELETE FROM {table} WHERE code_challenge IS NULL OR code_challenge_method IS NULL"))
     for table in ('oauth_authorization_requests', 'oauth_authorization_codes'):
         with op.batch_alter_table(table, schema=None, naming_convention=NAMING_CONVENTION) as batch_op:
             batch_op.alter_column('code_challenge_method', existing_type=sa.VARCHAR(length=16), nullable=False)

@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse
 
 from src.exceptions.base import MCPGateError
 from src.logging import get_logger
+from src.middleware.security_headers import internal_error_handler
 
 logger = get_logger("exceptions")
 
@@ -39,3 +40,5 @@ def register_exception_handlers(app):
         register_exception_handlers(app)
     """
     app.add_exception_handler(MCPGateError, mcp_gate_exception_handler)
+    # Unhandled exceptions: Starlette's default 500, but with the security headers (see security_headers.py)
+    app.add_exception_handler(Exception, internal_error_handler)

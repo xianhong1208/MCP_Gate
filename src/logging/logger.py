@@ -6,6 +6,7 @@ Includes request context tracking via context variables.
 
 import sys
 import json
+import logging
 import uuid
 from typing import Optional
 from contextvars import ContextVar
@@ -149,6 +150,72 @@ def _make_module_filter(predicate):
     return filter_fn
 
 
+class InterceptHandler(logging.Handler):
+    """Stdlib ``logging`` handler that forwards every record to loguru.
+
+    Installed on the root logger, so uvicorn, APScheduler, SQLAlchemy and the modules here that still use
+    ``logging.getLogger(__name__)`` end up in the same console + category files as everything else.
+    The stdlib logger name becomes ``extra['module']`` (``src.`` prefix dropped; SQLAlchemy is filed
+    under ``db.`` so it lands in the db category).
+    """
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            level = logger.level(record.levelname).name
+        except ValueError:
+            level = record.levelno
+
+        # Walk back to the frame that called the stdlib logger, so {function}/{line} point at real code
+        frame, depth = sys._getframe(0), 0
+        while frame and (depth == 0 or frame.f_code.co_filename == logging.__file__):
+            frame = frame.f_back
+            depth += 1
+
+        logger.bind(module=_stdlib_module_name(record.name)).opt(depth=depth, exception=record.exc_info).log(
+            level, record.getMessage()
+        )
+
+
+def _stdlib_module_name(name: str) -> str:
+    if name.startswith("src."):
+        return name[len("src."):]
+    if name == "sqlalchemy" or name.startswith("sqlalchemy."):
+        return "db." + name
+    return name
+
+
+# Third-party loggers routed into loguru, with a floor level for the chatty ones.
+#   uvicorn.access: RequestLoggingMiddleware already writes one line per request (with request id and timing),
+#                   so uvicorn's own access line would only duplicate it.
+#   sqlalchemy:     INFO on sqlalchemy.engine means "echo every SQL statement" -- never implicitly.
+#   apscheduler:    INFO is a line per job run (health checks run every few seconds).
+#   httpx/httpcore: INFO is a line per outgoing request (health probes, scans).
+_ROUTED_LOGGERS = {
+    "uvicorn": None,
+    "uvicorn.error": None,
+    "uvicorn.asgi": None,
+    "uvicorn.access": logging.WARNING,
+    "apscheduler": logging.WARNING,
+    "sqlalchemy": logging.WARNING,
+    "alembic": None,
+    "httpx": logging.WARNING,
+    "httpcore": logging.WARNING,
+}
+
+
+def intercept_stdlib_logging(level: str = "INFO") -> None:
+    """Route stdlib ``logging`` (root logger and the known third-party loggers) into loguru."""
+    root = logging.getLogger()
+    root.handlers = [InterceptHandler()]
+    root.setLevel(level.upper() if isinstance(level, str) else level)
+
+    for name, floor in _ROUTED_LOGGERS.items():
+        lib_logger = logging.getLogger(name)
+        lib_logger.handlers = []
+        lib_logger.propagate = True
+        lib_logger.setLevel(floor if floor is not None else logging.NOTSET)
+
+
 def setup_logging(
     level: str = "INFO",
     format_type: str = "colorized",
@@ -238,6 +305,9 @@ def setup_logging(
         backtrace=True,
         diagnose=True,  # ERRORs include variable values, which makes debugging much faster
     )
+
+    # ---- Stdlib logging (uvicorn, APScheduler, SQLAlchemy, ...) -> loguru ----
+    intercept_stdlib_logging(level)
 
     logger.bind(module="logger").info(
         f"Logging configured: level={level}, format={format_type}, "

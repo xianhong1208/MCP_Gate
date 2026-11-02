@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 import db.database as database
 from db.models import local_now
+from src.audit import record_scheduled_purge
 from src.adapters import (
     AuditLogAdapter, OAuthAuthRequestAdapter, OAuthCodeAdapter, OAuthTokenAdapter, ServiceAdapter,
     TokenUsageAdapter,
@@ -94,6 +95,7 @@ class CleanupScheduler:
             n += OAuthTokenAdapter.delete_expired(db)
             if n:
                 logger.info(f"Cleaned up {n} expired OAuth records")
+            record_scheduled_purge(db, "expired_oauth", n)
             return n
         except Exception as e:
             db.rollback()
@@ -108,6 +110,7 @@ class CleanupScheduler:
             deleted = TokenUsageAdapter.delete_older_than(db, local_now() - timedelta(days=self.usage_retention_days))
             if deleted:
                 logger.info(f"Cleaned up {deleted} old token events")
+            record_scheduled_purge(db, "old_usage", deleted, {"retention_days": self.usage_retention_days})
             return deleted
         except Exception as e:
             db.rollback()
@@ -122,6 +125,7 @@ class CleanupScheduler:
             deleted = AuditLogAdapter.delete_older_than(db, local_now() - timedelta(days=self.audit_retention_days))
             if deleted:
                 logger.info(f"Cleaned up {deleted} old audit logs")
+            record_scheduled_purge(db, "old_audit_logs", deleted, {"retention_days": self.audit_retention_days})
             return deleted
         except Exception as e:
             db.rollback()

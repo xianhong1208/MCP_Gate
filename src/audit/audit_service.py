@@ -13,6 +13,11 @@ from sqlalchemy import desc
 from fastapi import Request
 
 from db.models import AuditLog, local_now
+from src.logging import get_logger
+from src.utils.client_ip import resolve_client_ip
+
+
+logger = get_logger("audit")
 
 
 class AuditAction(str, Enum):
@@ -131,17 +136,9 @@ class AuditService:
         details: Optional[Dict[str, Any]] = None,
     ) -> AuditLog:
         """Record an audit log entry from a Request object"""
-        # Get the client IP
-        ip_address = None
-        forwarded = request.headers.get("X-Forwarded-For")
-        if forwarded:
-            ip_address = forwarded.split(",")[0].strip()
-        else:
-            real_ip = request.headers.get("X-Real-IP")
-            if real_ip:
-                ip_address = real_ip
-            elif request.client:
-                ip_address = request.client.host
+        # Forwarded headers count only when the direct peer is a trusted proxy (src.utils.client_ip):
+        # otherwise anyone could write an arbitrary address into the audit trail.
+        ip_address = resolve_client_ip(request)
 
         return AuditService.log(
             db=db,
@@ -261,3 +258,22 @@ class AuditService:
         deleted = db.query(AuditLog).filter(AuditLog.created_at < cutoff_date).delete()
         db.commit()
         return deleted
+
+
+def record_scheduled_purge(db: Session, target: str, deleted: int, details: Optional[Dict[str, Any]] = None) -> None:
+    """Audit one scheduled purge run (system actor). No-op when nothing was deleted.
+
+    Never raises: the purge itself has already been committed, and a failure to audit it must not make the
+    scheduler report the run as failed.
+    """
+    if not deleted:
+        return
+    try:
+        AuditService.log(
+            db=db, action=AuditAction.CLEANUP_EXPIRED, resource_type=ResourceType.SYSTEM,
+            status=AuditStatus.SUCCESS, resource_id=target, actor_type=ActorType.SYSTEM, actor_name="scheduler",
+            details={"target": target, "deleted": deleted, **(details or {})},
+        )
+    except Exception as e:  # pragma: no cover - defensive
+        db.rollback()
+        logger.error(f"Failed to audit scheduled purge of {target}: {e}")

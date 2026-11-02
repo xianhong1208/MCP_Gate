@@ -7,6 +7,7 @@ from typing import Optional
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -73,8 +74,9 @@ async def session_status(db: Session = Depends(get_db)):
 async def setup(request: SetupRequest, http_request: Request, db: Session = Depends(get_db)):
     """First boot: create the owner account and log in directly. Afterwards this endpoint always returns 409."""
     try:
-        user = identity_service.setup_owner(db, email=request.email, password=request.password,
-                                            username=request.username or "")
+        # bcrypt (rounds=12) takes ~0.25 s of CPU: keep it off the event loop
+        user = await run_in_threadpool(identity_service.setup_owner, db, email=request.email,
+                                       password=request.password, username=request.username or "")
     except IdentityError as e:
         return _identity_error(e)
     AuditService.log_from_request(
@@ -89,7 +91,9 @@ async def setup(request: SetupRequest, http_request: Request, db: Session = Depe
 async def login(request: LoginRequest, http_request: Request, db: Session = Depends(get_db)):
     """Sign in with email and password; sets the `mcp_session` cookie."""
     try:
-        user = identity_service.authenticate_local(db, email=request.email, password=request.password)
+        # bcrypt verification is deliberately slow; on the event loop a login burst would stall every request
+        user = await run_in_threadpool(identity_service.authenticate_local, db, email=request.email,
+                                       password=request.password)
     except IdentityError as e:
         AuditService.log_from_request(
             db=db, request=http_request, action=AuditAction.ADMIN_LOGIN, resource_type=ResourceType.ADMIN,
@@ -135,8 +139,8 @@ async def change_password(request: ChangePasswordRequest, http_request: Request,
                           current_user: AdminUser = Depends(get_current_user)):
     """After a password change every old session is invalidated; the response also sets a new session cookie."""
     try:
-        identity_service.change_password(db, current_user, current_password=request.current_password,
-                                         new_password=request.new_password)
+        await run_in_threadpool(identity_service.change_password, db, current_user,
+                                current_password=request.current_password, new_password=request.new_password)
     except IdentityError as e:
         return _identity_error(e)
     AuditService.log_from_request(

@@ -102,6 +102,8 @@ WantedBy=multi-user.target
 sudo systemctl enable --now mcp-gate
 ```
 
+Run **one process only** — do not add uvicorn/gunicorn workers or scale out replicas. The rate limiter keeps its counters in memory and the scheduler (token purges, audit retention, health checks) runs inside the process, so several processes would each enforce their own limit and run every job once per process. MCP Gate warns at startup when `WEB_CONCURRENCY` or `UVICORN_WORKERS` is greater than 1.
+
 `data/` holds the SQLite database and `data/secrets.json`; back both up together. Losing `secrets.json` makes the encrypted private keys unreadable, which invalidates all tokens.
 
 ## 5. Optional: PostgreSQL
