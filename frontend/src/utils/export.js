@@ -2,23 +2,31 @@
  * CSV Export Utilities
  */
 
+// A cell starting with one of these is evaluated as a formula by Excel, LibreOffice and Google Sheets
+// (OWASP "CSV injection"). Exported values include attacker-controlled text -- a failed login records
+// the email that was typed -- so such cells get a leading apostrophe, which spreadsheets display as text.
+const FORMULA_TRIGGERS = ['=', '+', '-', '@', '\t', '\r']
+
+/**
+ * One CSV cell: formula triggers neutralised, then quoted with embedded quotes doubled.
+ * Numbers are written as-is (a number cannot carry a formula, and -1 should stay numeric).
+ */
+export function csvCell(value) {
+  if (value === null || value === undefined) value = ''
+  let text = String(value)
+  if (typeof value !== 'number' && FORMULA_TRIGGERS.includes(text.charAt(0))) text = `'${text}`
+  return `"${text.replace(/"/g, '""')}"`
+}
+
 /**
  * Convert array of objects to CSV string
  */
 export function toCSV(data, columns) {
   if (!data || data.length === 0) return ''
 
-  const headers = columns.map(col => `"${col.label}"`)
-  const rows = [headers.join(',')]
-
-  data.forEach(item => {
-    const row = columns.map(col => {
-      let value = col.accessor(item)
-      if (value === null || value === undefined) value = ''
-      value = String(value).replace(/"/g, '""')
-      return `"${value}"`
-    })
-    rows.push(row.join(','))
+  const rows = [columns.map((col) => csvCell(col.label)).join(',')]
+  data.forEach((item) => {
+    rows.push(columns.map((col) => csvCell(col.accessor(item))).join(','))
   })
 
   return rows.join('\n')
