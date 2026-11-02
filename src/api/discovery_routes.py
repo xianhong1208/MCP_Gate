@@ -18,6 +18,7 @@ from src.oauth import service as oauth_service
 from src.discovery.websocket_manager import get_ws_manager
 from src.identity import get_current_user
 from src.identity.session import SESSION_COOKIE, resolve_user_from_token
+from src.utils.mcp_target import InvalidTargetError, build_mcp_url, validate_host
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,11 @@ def _scan_ports(request: ScanRequest) -> list:
     """
     if not request.hosts or any(not h or not h.strip() for h in request.hosts):
         raise _scan_error("no_hosts", "At least one host is required.")
+    for host in request.hosts:
+        try:
+            validate_host(host.strip())
+        except InvalidTargetError:
+            raise _scan_error("invalid_host", f"'{host}' is not a bare host name or IP address.", host=host)
     for port in request.ports:
         if not _MIN_PORT <= port <= _MAX_PORT:
             raise _scan_error("invalid_port", f"Port {port} is out of range (1-65535).", port=port)
@@ -166,6 +172,10 @@ async def scan_services(request: ScanRequest, http_request: Request, db: Session
 async def verify_service(request: VerifyRequest, db: Session = Depends(get_db),
                          _: AdminUser = Depends(get_current_user)):
     """Check whether host:port serves MCP and return its server info."""
+    try:
+        build_mcp_url(request.protocol, request.host, request.port, request.mcp_path)
+    except InvalidTargetError as e:
+        raise HTTPException(status_code=400, detail={"error": e.code, "fallback": e.fallback})
     try:
         result = await get_scanner().verify_mcp_service(
             host=request.host, port=request.port, path=request.mcp_path, protocol=request.protocol,

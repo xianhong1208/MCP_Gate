@@ -3,7 +3,8 @@
 from typing import Optional
 
 from db.crud import ServiceCRUD, normalize_service_host
-from src.adapters.exceptions import ConflictError, NotFoundError
+from src.adapters.exceptions import ConflictError, NotFoundError, ValidationFailedError
+from src.utils.mcp_target import InvalidTargetError, validate_host, validate_mcp_path, validate_port, validate_protocol
 
 
 def fallback_service_name(host: str, port: int) -> str:
@@ -34,6 +35,29 @@ def describe_server(server_name: Optional[str], server_version: Optional[str] = 
 # Prefix the scheduled health check used to stamp on every service description (#34). Such a
 # description was written by MCP Gate, not the operator, so it may still be replaced.
 _LEGACY_HEALTH_DESCRIPTION_PREFIX = "MCP service: "
+
+
+def _validated_target(fields: dict) -> dict:
+    """Check the URL components among `fields` (only those present and not None) before they are stored.
+
+    The scanner builds outbound URLs from these values, so an '@' in the path or a URL in the protocol
+    would redirect health checks and tool fetches to an arbitrary host. Raises ValidationFailedError with
+    a `service.invalid_*` code; returns the fields with the protocol normalised to lower case.
+    """
+    out = dict(fields)
+    try:
+        if out.get("protocol") is not None:
+            out["protocol"] = validate_protocol(out["protocol"])
+        if out.get("mcp_path") is not None:
+            validate_mcp_path(out["mcp_path"])
+        if out.get("host"):
+            validate_host(out["host"].strip())
+            out["host"] = out["host"].strip()
+        if out.get("port") is not None:
+            validate_port(out["port"])
+    except InvalidTargetError as e:
+        raise ValidationFailedError(code=e.code, fallback=e.fallback)
+    return out
 
 
 class ServiceAdapter(ServiceCRUD):
@@ -80,7 +104,11 @@ class ServiceAdapter(ServiceCRUD):
 
     @classmethod
     def create_checked(cls, db, **kwargs):
-        """Create a service; same name + host:port already exists -> 409 service.duplicate."""
+        """Create a service; same name + host:port already exists -> 409 service.duplicate.
+
+        An invalid protocol / host / port / MCP path -> 400 service.invalid_*.
+        """
+        kwargs = _validated_target(kwargs)
         name, host, port = kwargs.get("name"), kwargs.get("host"), kwargs.get("port")
         if name and host and port and cls.get_by_name_and_host_port(db, name, host, port):
             raise ConflictError(
@@ -98,6 +126,7 @@ class ServiceAdapter(ServiceCRUD):
 
     @classmethod
     def update_existing(cls, db, service_id, **kwargs):
+        kwargs = _validated_target(kwargs)
         service = cls.update(db=db, service_id=service_id, **kwargs)
         if not service:
             raise NotFoundError(code="service.not_found", fallback="Service not found")

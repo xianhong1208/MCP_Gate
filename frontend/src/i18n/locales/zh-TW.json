@@ -1035,7 +1035,11 @@
       "duplicate": "已存在同名稱與 host:port 的服務。",
       "no_host_port": "服務未設定 host 或 port",
       "remote_permission_denied": "遠端 MCP server 拒絕授權。",
-      "remote_unreachable": "無法連線到 MCP server。"
+      "remote_unreachable": "無法連線到 MCP server。",
+      "invalid_protocol": "通訊協定只能是 http 或 https。",
+      "invalid_mcp_path": "MCP 路徑必須以單一個「/」開頭，且不能包含 @、?、#、\\ 或空白。",
+      "invalid_host": "主機只能填主機名稱或 IP 位址（不含通訊協定、連接埠、路徑或 @）。",
+      "invalid_port": "連接埠必須介於 1 到 65535 之間。"
     },
     "discovery": {
       "scan_failed": "掃描失敗",
@@ -1044,7 +1048,8 @@
       "no_ports": "至少需要一個連接埠。",
       "invalid_port": "連接埠 {{port}} 超出範圍（1-65535）。",
       "invalid_port_range": "連接埠範圍須符合 1 ≤ 起始 ≤ 結束 ≤ 65535。",
-      "too_many_probes": "掃描範圍過大：{{hosts}} 個主機 × {{ports}} 個連接埠，超過 {{limit}} 次探測的上限。"
+      "too_many_probes": "掃描範圍過大：{{hosts}} 個主機 × {{ports}} 個連接埠，超過 {{limit}} 次探測的上限。",
+      "invalid_host": "「{{host}}」不是有效的主機名稱或 IP 位址。"
     },
     "managed": {
       "env_vars_unknown": "{{catalog_id}} 含有未知的環境變數:{{extras}}",
