@@ -216,7 +216,9 @@ def verify_client_assertion(client, assertion: str, *, token_endpoint: str, issu
     """Verify a private_key_jwt assertion for ``client``; return its claims or raise invalid_client.
 
     May fetch the client's jwks_uri synchronously, so async callers run it off the event loop."""
-    allow_loopback = issuer.startswith("http://")  # a plain-http issuer means a development deployment
+    # A plain-http issuer means a development deployment; even there only an owner-registered client may point
+    # the fetch at loopback (an anonymous DCR client must not aim it at local services)
+    allow_loopback = issuer.startswith("http://") and getattr(client, "created_via", None) != "dcr"
     try:
         header = jwt.get_unverified_header(assertion)
     except jwt.InvalidTokenError as e:

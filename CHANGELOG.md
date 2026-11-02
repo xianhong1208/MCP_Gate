@@ -44,6 +44,7 @@ All notable changes to MCP Gate (formerly MCP Center) are documented here. The f
 - **One slow start no longer blocks every managed server.** Locking is per process (plus a short global lock for shared state and port allocation). Updating env vars stops, writes and restarts as one locked operation, marks a failed restart `failed` and audits it, and now works for bring-your-own servers too. (#36)
 - **Docker unavailable returns 503 `managed.runtime_unavailable`** instead of a generic 500 from start, stop, env-var updates and uninstall. (#36)
 - **Catalog entries must declare `transport: http`.** Any other value is rejected when the catalog is loaded (the file is skipped with the reason logged) rather than failing at start time. (#36)
+- **Dynamically registered clients can no longer use `client_credentials`.** Anonymous registration used to accept the grant, which gave anyone who could reach MCP Gate a consent-free token for every registered server. `POST /oauth/register` now rejects it (whatever `OAUTH_DCR_AUTO_APPROVE` says) and the token endpoint refuses it for any client not registered in the console, including DCR clients stored by earlier releases. A DCR client also may not point a `private_key_jwt` `jwks_uri` at loopback, even on a plain-http development issuer.
 
 ## [1.1.0] — 2026-09-18
 

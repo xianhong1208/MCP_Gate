@@ -114,6 +114,12 @@ def register_client(
         raise OAuthError("invalid_client_metadata", f"unsupported token_endpoint_auth_method: {auth_method}")
     if "client_credentials" in grant_types and auth_method == "none":
         raise OAuthError("invalid_client_metadata", "client_credentials requires a confidential client")
+    if "client_credentials" in grant_types and created_via == "dcr":
+        # client_credentials issues a token with no human consent. Registration is anonymous, so a
+        # self-registered client must never hold that grant (whatever dcr_auto_approve says); only a
+        # client the owner registered in the console may.
+        raise OAuthError("invalid_client_metadata",
+                         "client_credentials is only available to clients registered in the console")
 
     # private_key_jwt: the client registers its public keys, inline or by reference (RFC 7591 jwks / jwks_uri)
     jwks_doc = metadata.get("jwks")
@@ -129,8 +135,10 @@ def register_client(
                     raise OAuthError("invalid_client_metadata", "jwks must be a JSON object")
             client_assertion.validate_jwks_document(jwks_doc)
         else:
-            # MCP Gate fetches this URL itself: public https only (loopback allowed on http-issuer dev setups)
-            client_assertion.validate_jwks_uri(jwks_uri, allow_loopback=issuer().startswith("http://"))
+            # MCP Gate fetches this URL itself: public https only (loopback allowed on http-issuer dev setups, and
+            # only for clients the owner registered: an anonymous client must not aim our fetcher at localhost)
+            client_assertion.validate_jwks_uri(
+                jwks_uri, allow_loopback=issuer().startswith("http://") and created_via != "dcr")
     else:
         jwks_doc, jwks_uri = None, None
 
@@ -717,6 +725,10 @@ def refresh_token_grant(db: Session, *, client: OAuthClient, refresh_token: str,
 
 def client_credentials_grant(db: Session, *, client: OAuthClient, scope: Optional[str],
                              resource: Optional[str], ip: Optional[str] = None) -> dict:
+    if client.created_via != "manual" or client.token_endpoint_auth_method == "none":
+        # Defence in depth for records stored before registration refused it: a token without consent is only
+        # for confidential clients the owner registered in the console.
+        raise OAuthError("unauthorized_client", "client may not use grant_type=client_credentials")
     audience, service = resolve_resource(db, resource)
     resolved = resolve_scope(db, scope, client, service)
     access, expires_in, rec = issue_access_token(
