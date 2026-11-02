@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket
 from sqlalchemy.orm import Session
 
 from db import get_db
-from db.models import AdminUser
+from db.models import AdminUser, Service
 from src.adapters import (
     MCPToolAdapter, ServiceAdapter, describe_server, fallback_service_description, fallback_service_name,
     sanitize_server_name,
@@ -19,6 +19,7 @@ from src.discovery.websocket_manager import get_ws_manager
 from src.identity import get_current_user
 from src.identity.session import SESSION_COOKIE, resolve_user_from_token
 from src.middleware.origin_check import request_origin_allowed
+from src.utils.field_limits import FieldTooLongError, check_max_length, column_limit
 from src.utils.mcp_target import InvalidTargetError, build_mcp_url, validate_host
 
 logger = logging.getLogger(__name__)
@@ -69,6 +70,13 @@ def _scan_ports(request: ScanRequest) -> list:
             validate_host(host.strip())
         except InvalidTargetError:
             raise _scan_error("invalid_host", f"'{host}' is not a bare host name or IP address.", host=host)
+    # Found servers are registered under these values: they have to fit the service columns
+    try:
+        for host in request.hosts:
+            check_max_length("hosts", host.strip(), column_limit(Service.host))
+        check_max_length("service_name", request.service_name, column_limit(Service.name))
+    except FieldTooLongError as e:
+        raise HTTPException(status_code=422, detail=e.to_detail())
     for port in request.ports:
         if not _MIN_PORT <= port <= _MAX_PORT:
             raise _scan_error("invalid_port", f"Port {port} is out of range (1-65535).", port=port)

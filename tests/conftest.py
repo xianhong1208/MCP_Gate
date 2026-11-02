@@ -1,4 +1,11 @@
-"""Test foundation: each test gets its own temporary SQLite file; zero external dependencies."""
+"""Test foundation.
+
+By default each test gets its own temporary SQLite file, so the suite has zero external dependencies.
+
+Set ``TEST_DATABASE_URL=postgresql://user:pass@host:port/dbname`` to run the same suite against PostgreSQL instead.
+That database is **wiped**: the schema is dropped and recreated once per session, and every table is truncated
+before each test. Point it at a throwaway database, never at a real one.
+"""
 
 import base64
 import hashlib
@@ -17,6 +24,9 @@ sys.path.insert(0, str(project_root))
 os.environ.setdefault("ENCRYPTION_KEY", "test-encryption-key-not-for-production")
 os.environ.setdefault("SESSION_SECRET_KEY", "test-session-secret-key-not-for-production")
 os.environ["MCP_GATE_SECRETS_FILE"] = os.path.join(tempfile.gettempdir(), "mcp-gate-test-secrets.json")
+
+# Empty means SQLite (the default); otherwise a PostgreSQL URL the suite may wipe at will
+TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL", "").strip()
 
 OWNER_EMAIL = "owner@example.com"
 OWNER_PASSWORD = "owner-password-123"
@@ -37,15 +47,66 @@ def _base_config():
     yield
 
 
+def using_postgres() -> bool:
+    return bool(TEST_DATABASE_URL)
+
+
+def _terminate_other_connections(conn) -> None:
+    """Kill connections a previous test leaked (an open transaction would block TRUNCATE / DROP forever)."""
+    from sqlalchemy import text
+
+    conn.execute(text(
+        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+        "WHERE datname = current_database() AND pid <> pg_backend_pid()"
+    ))
+
+
+@pytest.fixture(scope="session")
+def _pg_schema():
+    """PostgreSQL only: rebuild the public schema from the models once per session."""
+    if not using_postgres():
+        yield None
+        return
+    from sqlalchemy import create_engine, text
+
+    from db import models  # noqa: F401
+    from db.database import Base
+
+    eng = create_engine(TEST_DATABASE_URL, isolation_level="AUTOCOMMIT")
+    try:
+        with eng.connect() as conn:
+            _terminate_other_connections(conn)
+            conn.execute(text("DROP SCHEMA IF EXISTS public CASCADE"))
+            conn.execute(text("CREATE SCHEMA public"))
+        Base.metadata.create_all(bind=eng)
+        yield eng
+    finally:
+        eng.dispose()
+
+
+def _truncate_all(pg_engine) -> None:
+    from sqlalchemy import text
+
+    from db.database import Base
+
+    tables = ", ".join(f'"{t.name}"' for t in Base.metadata.sorted_tables)
+    with pg_engine.connect() as conn:
+        _terminate_other_connections(conn)
+        conn.execute(text(f"TRUNCATE {tables} RESTART IDENTITY CASCADE"))
+
+
 @pytest.fixture
-def db_url(tmp_path):
+def db_url(tmp_path, _pg_schema):
+    if _pg_schema is not None:
+        _truncate_all(_pg_schema)
+        return TEST_DATABASE_URL
     return f"sqlite:///{tmp_path / 'test.db'}"
 
 
 @pytest.fixture
 def engine(db_url):
-    """A separate SQLite file per test; the schema comes straight from create_all (migrations have their own
-    tests)."""
+    """A separate SQLite file per test (or a truncated PostgreSQL schema); the schema comes straight from
+    create_all (tests/test_schema_drift.py checks that the migrations produce the same schema)."""
     from db.database import reset_engine, get_engine, Base
     from src.config import Config
     from src.utils.crypto import reset_crypto
@@ -55,7 +116,8 @@ def engine(db_url):
     reset_crypto()
     eng = get_engine()
     from db import models  # noqa: F401
-    Base.metadata.create_all(bind=eng)
+    if not using_postgres():
+        Base.metadata.create_all(bind=eng)
     yield eng
     reset_engine()
 

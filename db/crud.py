@@ -16,6 +16,7 @@ from db.models import (
     OAuthAuthorizationRequest, OAuthClient, OAuthConsent, OAuthScope, OAuthSigningKey,
     OAuthToken, Service, ServiceScope, TokenUsage, UserMcpDefinition, local_now,
 )
+from src.utils.field_limits import clip, column_limit
 
 # Loopback aliases -> always stored / looked up as 127.0.0.1
 _LOOPBACK_ALIASES = {"localhost", "0.0.0.0", "127.0.0.1", "::1", "[::1]"}
@@ -205,7 +206,8 @@ class ServiceCRUD:
         service.health_status = status
         service.health_last_checked = local_now()
         service.health_response_time_ms = response_time_ms
-        service.health_error_message = error_message
+        # The message is relayed from the remote server (e.g. a JSON-RPC error) and has no length bound
+        service.health_error_message = clip(error_message, column_limit(Service.health_error_message))
         if reset_fail_count:
             service.health_fail_count = 0
         elif increment_fail_count:

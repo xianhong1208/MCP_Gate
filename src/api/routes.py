@@ -25,6 +25,7 @@ from src.identity import get_current_user
 from src.logging import get_logger
 from src.scheduler import get_scheduler
 from src.utils.crypto import encrypt_token
+from src.utils.field_limits import FieldTooLongError, check_max_length
 from src.utils.mcp_target import InvalidTargetError
 from src.version import __build_commit__, __build_time__, __version__
 
@@ -34,6 +35,19 @@ router = APIRouter()
 
 def _adapter_exc(e: AdapterError) -> HTTPException:
     return HTTPException(status_code=e.status_code, detail=e.to_detail())
+
+
+# A static bearer token for a server MCP Gate does not protect: long enough for any realistic JWT, short enough to
+# stop absurd payloads (it is stored encrypted, in a TEXT column)
+MAX_STATIC_TOKEN_LENGTH = 8192
+
+
+def _encrypt_static_token(token: str) -> str:
+    try:
+        check_max_length("auth_token", token, MAX_STATIC_TOKEN_LENGTH)
+    except FieldTooLongError as e:
+        raise HTTPException(status_code=400, detail=e.to_detail())
+    return encrypt_token(token)
 
 
 def _tool_info(t) -> MCPToolInfo:
@@ -102,7 +116,7 @@ async def create_service(request: ServiceCreateRequest, http_request: Request, d
         service = ServiceAdapter.create_checked(
             db, name=request.name, description=request.description, host=request.host, port=request.port,
             protocol=request.protocol, mcp_path=request.mcp_path,
-            auth_token_encrypted=encrypt_token(request.auth_token) if request.auth_token else None,
+            auth_token_encrypted=_encrypt_static_token(request.auth_token) if request.auth_token else None,
             tags=request.tags, source="manual", requires_auth=request.requires_auth,
             oauth_audience=request.oauth_audience, oauth_scopes=request.oauth_scopes,
         )
@@ -130,7 +144,7 @@ async def update_service(service_id: str, request: ServiceUpdateRequest, http_re
     """Update an MCP server. Send `auth_token` as an empty string to clear a stored static bearer token."""
     auth_token_encrypted = None
     if request.auth_token is not None:
-        auth_token_encrypted = encrypt_token(request.auth_token) if request.auth_token else ""
+        auth_token_encrypted = _encrypt_static_token(request.auth_token) if request.auth_token else ""
     try:
         service = ServiceAdapter.update_existing(
             db, service_id, name=request.name, description=request.description, is_active=request.is_active,

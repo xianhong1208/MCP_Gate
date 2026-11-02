@@ -13,13 +13,22 @@ from src.identity.passwords import (
     hash_password, password_error_message, validate_password_strength, verify_password,
 )
 from src.identity.providers.base import ExternalIdentity
+from src.utils.field_limits import FieldTooLongError, check_max_length, clip, column_limit
 
 
 class IdentityError(Exception):
-    def __init__(self, code: str, message: str, status_code: int = 400):
+    def __init__(self, code: str, message: str, status_code: int = 400, params: Optional[dict] = None):
         super().__init__(message)
         self.code = code
         self.status_code = status_code
+        self.params = params or {}
+
+
+def _check_length(field: str, value: Optional[str], column) -> Optional[str]:
+    try:
+        return check_max_length(field, value, column_limit(column))
+    except FieldTooLongError as e:
+        raise IdentityError(e.code, e.fallback, params=e.params)
 
 
 def needs_setup(db: Session) -> bool:
@@ -31,11 +40,13 @@ def setup_owner(db: Session, *, email: str, password: str, username: str = "owne
     if not needs_setup(db):
         raise IdentityError("auth.setup_already_done", "Setup already completed", 409)
     email = _normalize_email(email)
+    username = (username or "").strip()
+    _check_length("username", username, AdminUser.username)
     err = validate_password_strength(password)
     if err:
         raise IdentityError(err, password_error_message(err))
     return AdminUserAdapter.create(
-        db, email=email, username=username or email.split("@")[0],
+        db, email=email, username=username or _default_username(email),
         password_hash=hash_password(password), auth_provider="local",
     )
 
@@ -68,8 +79,10 @@ def login_external(db: Session, identity: ExternalIdentity) -> AdminUser:
         if not identity.email or identity.email not in allowed or not identity.email_verified:
             raise IdentityError("auth.external_not_allowed",
                                 "This account is not allowed to sign in", 403)
+        # The display name comes from the provider profile: shorten it rather than refuse the sign-in
         user = AdminUserAdapter.create(
-            db, email=identity.email, username=identity.name or identity.email.split("@")[0],
+            db, email=identity.email,
+            username=clip(identity.name, column_limit(AdminUser.username)) or _default_username(identity.email),
             password_hash=None, auth_provider=identity.provider, provider_sub=identity.sub,
         )
     if not user.is_active:
@@ -91,14 +104,19 @@ def update_profile(db: Session, user: AdminUser, *, username: str) -> AdminUser:
     username = (username or "").strip()
     if not username:
         raise IdentityError("auth.validation_username_required", "Username is required")
+    _check_length("username", username, AdminUser.username)
     return AdminUserAdapter.update_profile(db, user, username=username)
+
+
+def _default_username(email: str) -> str:
+    return email.split("@")[0][:column_limit(AdminUser.username)]
 
 
 def _normalize_email(email: str) -> str:
     value = (email or "").strip().lower()
     if "@" not in value or "." not in value.split("@")[-1]:
         raise IdentityError("auth.validation_email_invalid", "A valid email address is required")
-    return value
+    return _check_length("email", value, AdminUser.email)
 
 
 def session_idle_timeout_minutes() -> int:

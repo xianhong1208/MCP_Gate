@@ -77,6 +77,50 @@ def test_feed_omits_expired_tokens(owner_client, service, db_session):
     assert owner_client.post("/oauth/revoked", data=rs).json()["revoked"] == []
 
 
+@pytest.fixture
+def utc_plus_8():
+    """Run with the process in UTC+8: stored times are naive local time, so unix timestamps derived from them
+    are only right if they are read as local time (CI and most containers run in UTC, which hides the bug)."""
+    import os
+
+    saved = os.environ.get("TZ")
+    os.environ["TZ"] = "TPE-8"  # POSIX: UTC+8, no tzdata needed
+    time.tzset()
+    try:
+        yield
+    finally:
+        if saved is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = saved
+        time.tzset()
+
+
+def test_feed_timestamps_are_unix_time_outside_utc(utc_plus_8, owner_client, service):
+    rs = _resource_server(owner_client)
+    pat = _issue_pat(owner_client, service)
+    assert owner_client.post(f"/api/oauth/tokens/{pat['jti']}/revoke").status_code == 200
+    feed = owner_client.post("/oauth/revoked", data=rs).json()
+    now = time.time()
+    assert abs(feed["now"] - now) < 5
+    assert abs(feed["revoked"][0]["revoked_at"] - now) < 5
+    assert abs(feed["revoked"][0]["exp"] - (now + 86400)) < 5
+    # a cursor taken from `now` just before the revocation still lists it
+    assert len(owner_client.post("/oauth/revoked", data={**rs, "since": str(feed["now"] - 2)}).json()["revoked"]) == 1
+
+
+def test_usage_last_seen_is_unix_time_outside_utc(utc_plus_8, owner_client, service):
+    from datetime import datetime
+
+    rs = _resource_server(owner_client)
+    pat = _issue_pat(owner_client, service)
+    seen = int(time.time()) - 30
+    r = owner_client.post("/oauth/usage", data={**rs, "events": json.dumps([{"jti": pat["jti"], "last_seen": seen}])})
+    assert r.status_code == 200, r.text
+    last_used = owner_client.get(f"/api/oauth/tokens/{pat['jti']}").json()["last_used_at"]
+    assert abs(datetime.fromisoformat(last_used).timestamp() - seen) < 2
+
+
 # ---------------------------------------------------------------------------
 # /oauth/usage
 # ---------------------------------------------------------------------------

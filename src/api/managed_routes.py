@@ -33,7 +33,7 @@ from sqlalchemy.orm import Session
 from db import get_db
 from src.adapters import BYODefinitionAdapter, ManagedMcpProcessAdapter
 from src.adapters.exceptions import AdapterError
-from db.models import AdminUser
+from db.models import AdminUser, ManagedMcpProcess
 from src.api.schemas import (
     ByoCreateRequest,
     ByoDefinitionInfo,
@@ -66,10 +66,19 @@ from src.marketplace.schema import CatalogEntry
 from src.orchestrator.launch_spec import MCP_RUNTIME_IMAGE, is_user_source, user_source_id
 from src.orchestrator.manager import OrchestratorError, RuntimeUnavailable, error_text, get_orchestrator
 from src.orchestrator.progress import catalog_key, get_progress_registry
+from src.utils.field_limits import FieldTooLongError, check_max_length, column_limit
 
 logger = get_logger("api.managed")
 
 router = APIRouter()
+
+
+def _checked_process_name(name: str) -> str:
+    """The instance name is also the name of the service registered for it; both columns hold 64 characters."""
+    try:
+        return check_max_length("name", name, column_limit(ManagedMcpProcess.name))
+    except FieldTooLongError as e:
+        raise HTTPException(status_code=400, detail=e.to_detail())
 
 
 def _adapter_http_exc(e: AdapterError) -> HTTPException:
@@ -544,7 +553,7 @@ async def deploy_byo_definition(
             },
         )
 
-    name = request.name or definition.name
+    name = _checked_process_name(request.name or definition.name)
     # Create the managed process: image=controlled base, catalog_id=user:<id> (the orchestrator resolves the
     # inner command from it)
     process = ManagedMcpProcessAdapter.create(
@@ -686,7 +695,7 @@ async def install_managed(
     _validate_env_vars(catalog, request.env_vars)
 
     # Create the DB row (port=None -> auto_port=True, port=int -> auto_port=False)
-    name = request.name or catalog.id
+    name = _checked_process_name(request.name or catalog.id)
     process = ManagedMcpProcessAdapter.create(
         db=db,
         name=name,

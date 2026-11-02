@@ -108,7 +108,7 @@ class Service(Base):
     port = Column(Integer, nullable=True)
     protocol = Column(String(16), default="http")
     mcp_path = Column(String(128), default="/mcp")
-    auth_token_encrypted = Column(String(1024), nullable=True)
+    auth_token_encrypted = Column(Text, nullable=True)  # encrypted + base64: a JWT bearer outgrows 1024
     requires_auth = Column(Boolean, default=True, nullable=False)
     tags = Column(String(512), nullable=True)
     source = Column(String(32), default="manual")  # manual / auto_discovered / managed
