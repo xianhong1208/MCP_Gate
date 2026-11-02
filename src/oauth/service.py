@@ -646,6 +646,16 @@ def verify_jwt(db: Session, token: str, *, expect_use: Optional[str] = None) -> 
     return claims
 
 
+def _active_service_for(db: Session, audience: Optional[str]) -> Optional[Service]:
+    """The active server a grant's audience names; a disabled or removed server gets no new tokens."""
+    if not audience:
+        return None
+    service = ServiceAdapter.get_by_audience(db, audience)  # active services only
+    if service is None:
+        raise OAuthError("invalid_grant", "the server this grant was issued for is disabled or no longer registered")
+    return service
+
+
 def _token_response(access_token: str, expires_in: int, scope: str, refresh_token: Optional[str] = None) -> dict:
     body = {"access_token": access_token, "token_type": "Bearer", "expires_in": expires_in, "scope": scope}
     if refresh_token:
@@ -696,7 +706,9 @@ def authorization_code_grant(
     OAuthCodeAdapter.mark_used(db, rec)
 
     user = rec.user
-    service = ServiceAdapter.get_by_audience(db, rec.resource) if rec.resource else None
+    if user is None or not user.is_active:
+        raise OAuthError("invalid_grant", "the user who granted this code is no longer active")
+    service = _active_service_for(db, rec.resource)
     scope = rec.scope or ""
     access, expires_in, access_rec = issue_access_token(
         db, sub=str(user.id), client_id=client.client_id, scope=scope, audience=rec.resource,
@@ -738,9 +750,11 @@ def refresh_token_grant(db: Session, *, client: OAuthClient, refresh_token: str,
             raise OAuthError("invalid_scope", "requested scope exceeds the original grant")
         scope = " ".join(sorted(wanted))
 
-    OAuthTokenAdapter.revoke(db, rec, reason="rotated")
     user = rec.user
-    service = rec.service or (ServiceAdapter.get_by_audience(db, rec.audience) if rec.audience else None)
+    if user is None or not user.is_active:
+        raise OAuthError("invalid_grant", "the user who granted this token is no longer active")
+    service = _active_service_for(db, rec.audience)  # before rotating: a refused refresh keeps the token usable
+    OAuthTokenAdapter.revoke(db, rec, reason="rotated")
     family = rec.parent_jti or rec.jti
     access, expires_in, access_rec = issue_access_token(
         db, sub=rec.sub, client_id=client.client_id, scope=scope, audience=rec.audience,
@@ -945,6 +959,8 @@ def mint_personal_token(db: Session, *, user: AdminUser, service: Service, scope
     """Admin console issues a Personal Access Token (long-lived access token, aud = that service)."""
     cfg = Config.get_oauth_config()
     days = max(1, min(int(days), cfg.pat_max_days))
+    if not service.is_active:
+        raise OAuthError("invalid_target", "the server is disabled")
     audience = normalize_audience(service.effective_audience)
     if not audience:
         raise OAuthError("invalid_target", "service has no host/port or audience configured")

@@ -168,15 +168,18 @@ async def bind_resource_server(client_id: str, body: ResourceServerBindingReques
 @router.delete("/clients/{client_id}")
 async def delete_client(client_id: str, request: Request, db: Session = Depends(get_db),
                         user: AdminUser = Depends(get_current_user)):
-    """Delete a client. Its token history is kept with the client name snapshotted; its remembered consents are removed."""
+    """Delete a client. Its tokens are revoked first (as Revoke does), then kept as history with the client name
+    snapshotted; its remembered consents are removed."""
     try:
         client = OAuthClientAdapter.get_existing(db, client_id)
     except AdapterError as e:
         raise _adapter_exc(e)
     if client.created_via == "system":
         raise HTTPException(status_code=400, detail={"error": "oauth.system_client", "fallback": "Built-in client"})
+    revoked = OAuthTokenAdapter.revoke_by_client(db, client_id, reason="client_deleted")
     OAuthClientAdapter.delete(db, client_id)
-    _audit(db, request, user, AuditAction.OAUTH_CLIENT_DELETE, ResourceType.OAUTH_CLIENT, client_id)
+    _audit(db, request, user, AuditAction.OAUTH_CLIENT_DELETE, ResourceType.OAUTH_CLIENT, client_id,
+           {"tokens_revoked": revoked})
     return {"message": "Client deleted"}
 
 
