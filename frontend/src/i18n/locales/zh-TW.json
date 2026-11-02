@@ -1037,7 +1037,12 @@
     },
     "discovery": {
       "scan_failed": "掃描失敗",
-      "verify_failed": "驗證失敗"
+      "verify_failed": "驗證失敗",
+      "no_hosts": "至少需要一個主機。",
+      "no_ports": "至少需要一個連接埠。",
+      "invalid_port": "連接埠 {{port}} 超出範圍（1-65535）。",
+      "invalid_port_range": "連接埠範圍須符合 1 ≤ 起始 ≤ 結束 ≤ 65535。",
+      "too_many_probes": "掃描範圍過大：{{hosts}} 個主機 × {{ports}} 個連接埠，超過 {{limit}} 次探測的上限。"
     },
     "managed": {
       "env_vars_unknown": "{{catalog_id}} 含有未知的環境變數:{{extras}}",

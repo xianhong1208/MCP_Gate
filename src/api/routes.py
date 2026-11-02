@@ -268,13 +268,10 @@ async def check_service_health(service_id: str, db: Session = Depends(get_db), _
         # A generated placeholder name (from a scan that could not read the server) is replaced by the
         # real name; a name the operator chose is never touched.
         adopted = ServiceAdapter.adopt_server_name(db, service, result.server_name)
-        # Refresh the description only for auto-discovered services (or when it is empty); a description
-        # the operator wrote is theirs.
-        if result.server_name and result.server_name != "(requires auth)" \
-                and (not service.description or service.source == "auto_discovered"):
-            desc = result.server_description or f"{result.server_name}" + (
-                f" v{result.server_version}" if result.server_version else "")
-            ServiceAdapter.update(db, service_id, description=desc)
+        # Likewise the description is filled from serverInfo only while it is empty or generated; a
+        # description the operator wrote is theirs.
+        ServiceAdapter.adopt_server_description(db, service, result.server_name, result.server_version,
+                                                result.server_description)
         ServiceAdapter.update_health(db, service_id, status=new_status, response_time_ms=result.response_time_ms,
                                      error_message=None, reset_fail_count=True)
     else:

@@ -103,3 +103,23 @@ def test_personal_token_label_is_required(owner_client, service):
         assert r.status_code == 422, r.text
     r = owner_client.post("/api/oauth/tokens/personal", json={"service_id": service["id"], "expires_days": 1, "label": " ci "})
     assert r.status_code == 201 and r.json()["label"] == "ci"
+
+
+def test_failed_refresh_keeps_the_stored_tools(owner_client, service, monkeypatch, captured):
+    """A failed tools/list answers 502 and leaves the stored tools alone (#34)."""
+    from src.discovery.scanner import ToolsListError
+
+    assert owner_client.post(f"/api/services/{service['id']}/refresh-tools").status_code == 200
+    monkeypatch.setattr(scanner_mod.get_scanner(), "get_tools_list",
+                        AsyncMock(side_effect=ToolsListError("tools/list failed: HTTP 500")))
+    r = owner_client.post(f"/api/services/{service['id']}/refresh-tools")
+    assert r.status_code == 502 and r.json()["detail"]["error"] == "service.remote_unreachable"
+    tools = owner_client.get(f"/api/services/{service['id']}/tools").json()
+    assert [t["name"] for t in tools["tools"]] == ["search"]
+
+
+def test_refresh_with_a_valid_empty_list_clears_the_tools(owner_client, service, monkeypatch, captured):
+    assert owner_client.post(f"/api/services/{service['id']}/refresh-tools").status_code == 200
+    monkeypatch.setattr(scanner_mod.get_scanner(), "get_tools_list", AsyncMock(return_value=[]))
+    r = owner_client.post(f"/api/services/{service['id']}/refresh-tools")
+    assert r.status_code == 200 and r.json()["tools_count"] == 0

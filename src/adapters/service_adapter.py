@@ -16,6 +16,26 @@ def sanitize_server_name(server_name: str) -> str:
     return server_name.replace(" ", "-").replace("/", "-")
 
 
+def fallback_service_description(host: str, port: int) -> str:
+    """Description given to a scanned server whose serverInfo could not be read."""
+    return f"MCP service at {host}:{port}"
+
+
+def describe_server(server_name: Optional[str], server_version: Optional[str] = None,
+                    server_description: Optional[str] = None) -> Optional[str]:
+    """Service description derived from MCP serverInfo / instructions; None when there is nothing to say."""
+    if server_description:
+        return server_description
+    if server_name and server_name != "(requires auth)":
+        return f"{server_name}{' v' + server_version if server_version else ''}"
+    return None
+
+
+# Prefix the scheduled health check used to stamp on every service description (#34). Such a
+# description was written by MCP Gate, not the operator, so it may still be replaced.
+_LEGACY_HEALTH_DESCRIPTION_PREFIX = "MCP service: "
+
+
 class ServiceAdapter(ServiceCRUD):
 
     @classmethod
@@ -35,6 +55,28 @@ class ServiceAdapter(ServiceCRUD):
             return None
         cls.update(db, str(service.id), name=candidate)
         return candidate
+
+    @classmethod
+    def adopt_server_description(cls, db, service, server_name: Optional[str], server_version: Optional[str] = None,
+                                 server_description: Optional[str] = None) -> Optional[str]:
+        """Fill the description from the server's serverInfo while it is still empty or generated.
+
+        Generated means the scan placeholder (`MCP service at <host>:<port>`) or the text the health
+        check used to stamp on every service; anything else was written by the operator and is never
+        touched. Returns the new description when it changed.
+        """
+        if not server_name or server_name == "(requires auth)":
+            return None
+        current = (service.description or "").strip()
+        generated = (not current or current == fallback_service_description(service.host, service.port)
+                     or current.startswith(_LEGACY_HEALTH_DESCRIPTION_PREFIX))
+        if not generated:
+            return None
+        desc = describe_server(server_name, server_version, server_description)
+        if not desc or desc == current:
+            return None
+        cls.update(db, str(service.id), description=desc)
+        return desc
 
     @classmethod
     def create_checked(cls, db, **kwargs):

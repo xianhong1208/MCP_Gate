@@ -11,7 +11,13 @@ import pytest
 from aiohttp import web
 
 from src.discovery import scanner as scanner_mod
-from src.discovery.scanner import MCPScanner, ScannerResolveError, ScannerSSRFError, _resolve_validated_ip
+from src.discovery.scanner import (
+    MCPScanner,
+    ScannerResolveError,
+    ScannerSSRFError,
+    ToolsListError,
+    _resolve_validated_ip,
+)
 
 
 def _fake_getaddrinfo(*addresses):
@@ -55,7 +61,8 @@ async def test_verify_does_not_follow_redirects(redirecting_peer):
 
 async def test_tools_list_does_not_follow_redirects(redirecting_peer):
     port, hits = redirecting_peer
-    assert await MCPScanner().get_tools_list("127.0.0.1", port) == []
+    with pytest.raises(ToolsListError, match="HTTP 307"):
+        await MCPScanner().get_tools_list("127.0.0.1", port)
     assert hits["trap"] == 0
 
 

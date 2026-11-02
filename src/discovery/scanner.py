@@ -61,8 +61,9 @@ class DiscoveredService:
     def requires_auth(self) -> bool:
         """Determine whether the service requires authentication.
 
-        If the verification result shows "(requires auth)" or a 401 error, authentication is required.
-        If tools were fetched successfully (without an auth_token), authentication is not required.
+        Decided by the verification result alone: a 401 / Bearer challenge (or the "(requires auth)"
+        placeholder) means auth is required; a successful initialize without one means it is not -- even
+        when the server exposes no tools.
         """
         if self.verify_result:
             if self.verify_result.requires_auth:
@@ -70,10 +71,10 @@ class DiscoveredService:
             # server_name == "(requires auth)" means the service returned 401
             if self.verify_result.server_name == "(requires auth)":
                 return True
-            # Tools were fetched successfully without an auth_token, so no authentication is needed
-            if self.tools:
+            # initialize succeeded without a challenge, so no authentication is needed
+            if self.verify_result.success:
                 return False
-        # Default to requiring authentication (the safer assumption)
+        # Nothing verified: default to requiring authentication (the safer assumption)
         return True
 
 
@@ -90,6 +91,21 @@ class ScannerResolveError(ScannerSSRFError):
 # unique-local range (fd00::/8, otherwise allowed as an intranet address) and Alibaba Cloud's sits in the
 # carrier-grade NAT range 100.64.0.0/10. 169.254.169.254 is already covered by the link-local check.
 _BLOCKED_METADATA_ADDRESSES = {"fd00:ec2::254", "100.100.100.200"}
+
+
+class ToolsListError(Exception):
+    """tools/list could not be completed (HTTP error, transport failure or malformed reply).
+
+    Raised instead of returning an empty list so callers never mistake a failed fetch for a server
+    that has no tools (which would wipe the stored tool list).
+    """
+
+
+def _jsonrpc_error_text(data: Any) -> str:
+    """Short reason for a JSON-RPC reply that carries no usable result."""
+    if isinstance(data, dict) and isinstance(data.get("error"), dict):
+        return str(data["error"].get("message") or data["error"])
+    return "empty response" if not data else "malformed response"
 
 
 # audience (the peer's MCP URL) -> short-lived bearer token, or None when MCP Gate cannot mint one
@@ -498,7 +514,11 @@ class MCPScanner:
         protocol: str = "http",
         auth_token: Optional[str] = None
     ) -> List[MCPToolInfo]:
-        """Get the tool list of an MCP service (three-step flow: initialize -> initialized -> tools/list)."""
+        """Get the tool list of an MCP service (three-step flow: initialize -> initialized -> tools/list).
+
+        Returns [] only when the server answered a valid tools/list with an empty `tools` array.
+        Raises PermissionError on 401 and ToolsListError on any other failure.
+        """
         # SSRF protection (AUDIT-1): resolve and validate once, pin the connection to that IP (prevents
         # DNS rebinding), and keep the original Host header so vhost routing is unaffected. ScannerSSRFError
         # (blocked address or unresolvable host) propagates so the caller can say why.
@@ -536,14 +556,16 @@ class MCPScanner:
                     if init_response.status == 401:
                         raise PermissionError("Service requires authentication. Please configure auth_token for this service.")
                     if init_response.status != 200:
-                        return []
+                        raise ToolsListError(f"initialize failed: HTTP {init_response.status}")
 
                     # Get the session ID (Streamable HTTP carries the session in this header)
                     session_id = init_response.headers.get("mcp-session-id")
 
                     # Read the initialize response. SSE must be read incrementally: a plain read() waits
                     # for the stream to end and hangs forever (see the notes on _read_sse_message).
-                    await self._read_jsonrpc(init_response)
+                    init_data = await self._read_jsonrpc(init_response)
+                    if not isinstance(init_data, dict) or "result" not in init_data:
+                        raise ToolsListError(f"initialize failed: {_jsonrpc_error_text(init_data)}")
 
                 # Step 2: Send the initialized notification
                 initialized_notification = {
@@ -582,25 +604,29 @@ class MCPScanner:
                     if response.status == 401:
                         raise PermissionError("Service requires authentication. Please configure auth_token for this service.")
 
-                    if response.status == 200:
-                        data = await self._read_jsonrpc(response)
+                    if response.status != 200:
+                        raise ToolsListError(f"tools/list failed: HTTP {response.status}")
 
-                        if data and "result" in data and "tools" in data["result"]:
-                            return [
-                                MCPToolInfo(
-                                    name=t.get("name", ""),
-                                    description=t.get("description"),
-                                    input_schema=t.get("inputSchema")
-                                )
-                                for t in data["result"]["tools"]
-                            ]
+                    data = await self._read_jsonrpc(response)
+                    result = data.get("result") if isinstance(data, dict) else None
+                    tools = result.get("tools") if isinstance(result, dict) else None
+                    if not isinstance(tools, list) or not all(isinstance(t, dict) for t in tools):
+                        raise ToolsListError(f"tools/list failed: {_jsonrpc_error_text(data)}")
+                    return [
+                        MCPToolInfo(
+                            name=t.get("name", ""),
+                            description=t.get("description"),
+                            input_schema=t.get("inputSchema")
+                        )
+                        for t in tools
+                    ]
 
-        except PermissionError:
+        except (PermissionError, ToolsListError):
             raise
+        except asyncio.TimeoutError as e:
+            raise ToolsListError("tools/list failed: connection timeout") from e
         except Exception as e:
-            logger.error(f"Get tools list error: {e}")
-
-        return []
+            raise ToolsListError(f"tools/list failed: {e}") from e
 
     async def discover_services(
         self,
@@ -665,6 +691,9 @@ class MCPScanner:
                         except PermissionError:
                             # Service requires authentication; skip fetching tools
                             pass
+                        except ToolsListError as e:
+                            # Verified but tools/list failed: keep the service, without tools
+                            logger.warning(f"Tools not fetched from {host}:{port}: {e}")
 
                 # Only add services that verified successfully, or all services when not verifying
                 if not verify or (service.verify_result and service.verify_result.success):

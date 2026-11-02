@@ -7,7 +7,10 @@ from sqlalchemy.orm import Session
 
 from db import get_db
 from db.models import AdminUser
-from src.adapters import MCPToolAdapter, ServiceAdapter, fallback_service_name, sanitize_server_name
+from src.adapters import (
+    MCPToolAdapter, ServiceAdapter, describe_server, fallback_service_description, fallback_service_name,
+    sanitize_server_name,
+)
 from src.api.schemas import DiscoveredServiceInfo, ScanRequest, ScanResponse, VerifyRequest, VerifyResponse
 from src.audit import ActorType, AuditService, AuditStatus, ResourceType
 from src.discovery.scanner import get_scanner
@@ -39,17 +42,54 @@ def _scanner_token_factory(db: Session):
     return mint
 
 
+# Upper bound on hosts x ports per scan request: one full port range on one host. Each probe is a TCP
+# connect, so an unbounded request (e.g. port_range_end=10**9) would build a huge list and tie the
+# server up for hours.
+MAX_SCAN_PROBES = 65536
+_MIN_PORT, _MAX_PORT = 1, 65535
+
+
+def _scan_error(code: str, fallback: str, **params) -> HTTPException:
+    return HTTPException(status_code=422, detail={"error": f"discovery.{code}", "params": params,
+                                                  "fallback": fallback})
+
+
+def _scan_ports(request: ScanRequest) -> list:
+    """Validate the scan request and return the sorted, de-duplicated ports to probe.
+
+    Checked here rather than with pydantic constraints so the console gets the usual
+    `{error, params, fallback}` envelope (a pydantic 422 is a bare list it cannot show).
+    """
+    if not request.hosts or any(not h or not h.strip() for h in request.hosts):
+        raise _scan_error("no_hosts", "At least one host is required.")
+    for port in request.ports:
+        if not _MIN_PORT <= port <= _MAX_PORT:
+            raise _scan_error("invalid_port", f"Port {port} is out of range (1-65535).", port=port)
+    start, end = request.port_range_start, request.port_range_end
+    ports = set(request.ports)
+    if start is not None or end is not None:
+        if start is None or end is None or not _MIN_PORT <= start <= end <= _MAX_PORT:
+            raise _scan_error("invalid_port_range",
+                              "Port range must have 1 <= start <= end <= 65535.", start=start, end=end)
+        ports.update(range(start, end + 1))
+    if not ports:
+        raise _scan_error("no_ports", "At least one port is required.")
+    probes = len(request.hosts) * len(ports)
+    if probes > MAX_SCAN_PROBES:
+        raise _scan_error("too_many_probes",
+                          f"Scan too large: {len(request.hosts)} hosts x {len(ports)} ports exceeds "
+                          f"the limit of {MAX_SCAN_PROBES} probes.",
+                          hosts=len(request.hosts), ports=len(ports), limit=MAX_SCAN_PROBES)
+    return sorted(ports)
+
+
 @router.post("/scan", response_model=ScanResponse)
 async def scan_services(request: ScanRequest, http_request: Request, db: Session = Depends(get_db),
                         current_user: AdminUser = Depends(get_current_user)):
     """Scan hosts / ports to find MCP servers, optionally registering them automatically."""
+    ports = _scan_ports(request)  # validated outside the try: its 422s must not become a 500
     try:
         scanner = get_scanner()
-        ports = list(request.ports)
-        if request.port_range_start and request.port_range_end:
-            ports.extend(range(request.port_range_start, request.port_range_end + 1))
-        ports = sorted(set(ports))
-
         discovered = await scanner.discover_services(
             hosts=request.hosts, ports=ports, verify=True, get_tools=True, auth_token=request.auth_token,
             token_factory=_scanner_token_factory(db),
@@ -80,12 +120,8 @@ async def scan_services(request: ScanRequest, http_request: Request, db: Session
                     info.service_name = existing.name
                     info.service_id = str(existing.id)
                 else:
-                    if vr and vr.server_description:
-                        description = vr.server_description
-                    elif vr and vr.server_name:
-                        description = f"{vr.server_name}{' v' + vr.server_version if vr.server_version else ''}"
-                    else:
-                        description = f"MCP service at {svc.host}:{svc.port}"
+                    description = (describe_server(vr.server_name, vr.server_version, vr.server_description)
+                                   if vr else None) or fallback_service_description(svc.host, svc.port)
                     new_service = ServiceAdapter.create(
                         db=db, name=service_name, description=description, host=svc.host, port=svc.port,
                         protocol=svc.protocol, mcp_path=svc.mcp_path, source="auto_discovered",

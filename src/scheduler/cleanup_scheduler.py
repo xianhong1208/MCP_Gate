@@ -151,14 +151,11 @@ class CleanupScheduler:
                     if verify_result.success:
                         new_status, error_msg, reset_fail, increment_fail = "online", None, True, False
                         results["online"] += 1
-                        if verify_result.server_name and verify_result.server_name != "(requires auth)":
-                            new_desc = f"MCP service: {verify_result.server_name}"
-                            if verify_result.server_version:
-                                new_desc += f" v{verify_result.server_version}"
-                            if verify_result.server_description:
-                                new_desc += f"\n\n{verify_result.server_description}"
-                            # Sync only the description; never overwrite the name the user chose
-                            ServiceAdapter.update(db=db, service_id=str(service.id), description=new_desc)
+                        # Fill the description from serverInfo only while it is empty or generated;
+                        # never overwrite what the operator wrote (nor the name they chose)
+                        if ServiceAdapter.adopt_server_description(
+                                db, service, verify_result.server_name, verify_result.server_version,
+                                verify_result.server_description):
                             db.refresh(service)
                     else:
                         error_msg, reset_fail, increment_fail = verify_result.error, False, True
