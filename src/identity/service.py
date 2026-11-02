@@ -7,7 +7,7 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from db.models import AdminUser
-from src.adapters import AdminUserAdapter
+from src.adapters import AdminSessionAdapter, AdminUserAdapter
 from src.config import Config
 from src.identity.passwords import (
     hash_password, password_error_message, validate_password_strength, verify_password,
@@ -98,6 +98,8 @@ def change_password(db: Session, user: AdminUser, *, current_password: Optional[
     if err:
         raise IdentityError(err, password_error_message(err))
     AdminUserAdapter.set_password(db, user, hash_password(new_password))
+    # Every existing session of this account ends now; the caller issues a fresh one for the current browser
+    AdminSessionAdapter.delete_for_user(db, user.id)
 
 
 def update_profile(db: Session, user: AdminUser, *, username: str) -> AdminUser:

@@ -12,9 +12,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from db.models import (
-    AdminUser, AuditLog, ManagedMcpProcess, MCPTool, OAuthAuthorizationCode,
+    AdminSession, AdminUser, AuditLog, ManagedMcpProcess, MCPTool, OAuthAuthorizationCode,
     OAuthAuthorizationRequest, OAuthClient, OAuthConsent, OAuthScope, OAuthSigningKey,
-    OAuthToken, Service, ServiceScope, TokenUsage, UserMcpDefinition, local_now,
+    OAuthToken, Service, ServiceScope, TokenUsage, UserMcpDefinition, local_now, utc_now,
 )
 from src.utils.field_limits import clip, column_limit
 
@@ -389,6 +389,41 @@ class TokenUsageCRUD:
 
 
 # ==================== Console users ====================
+
+class AdminSessionCRUD:
+
+    @staticmethod
+    def create(db: Session, *, session_id: str, user_id, created_at: datetime, expires_at: datetime) -> AdminSession:
+        row = AdminSession(id=session_id, user_id=_uuid(user_id), created_at=created_at, expires_at=expires_at)
+        db.add(row)
+        db.commit()
+        return row
+
+    @staticmethod
+    def get(db: Session, session_id: str) -> Optional[AdminSession]:
+        if not session_id:
+            return None
+        return db.query(AdminSession).filter(AdminSession.id == session_id).first()
+
+    @staticmethod
+    def delete(db: Session, session_id: str) -> int:
+        n = db.query(AdminSession).filter(AdminSession.id == session_id).delete(synchronize_session=False)
+        db.commit()
+        return n
+
+    @staticmethod
+    def delete_for_user(db: Session, user_id) -> int:
+        n = db.query(AdminSession).filter(AdminSession.user_id == _uuid(user_id)).delete(
+            synchronize_session=False)
+        db.commit()
+        return n
+
+    @staticmethod
+    def delete_expired(db: Session) -> int:
+        n = db.query(AdminSession).filter(AdminSession.expires_at < utc_now()).delete(synchronize_session=False)
+        db.commit()
+        return n
+
 
 class AdminUserCRUD:
 

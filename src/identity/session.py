@@ -1,14 +1,20 @@
-"""Admin-console session: an HS256 JWT inside an httpOnly cookie.
+"""Admin-console session: an HS256 JWT inside an httpOnly cookie, backed by a server-side record.
 
 This is the short-lived session for a human logging in to the admin console, fully separate from OAuth access tokens
 (RS256, verified by MCP servers): different keys, different typ, neither can impersonate the other.
+
+The JWT's ``jti`` names a row in ``admin_sessions``. A session is valid only while that row exists and has not
+expired, so logout (deletes the row) and a password change (deletes every row of the user) take effect at once,
+instead of a copied cookie staying usable until its ``exp``. Revocation is by deleting records, never by comparing
+wall-clock times: the old "issued before password_changed_at" check missed sessions from the same second and,
+because both sides were naive local time, locked everyone out after a restart with a TZ further west.
 """
 
 from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import jwt
@@ -17,7 +23,7 @@ from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from db.database import get_db
-from db.models import AdminUser, local_now
+from db.models import AdminUser, local_now, utc_now
 from src.config import Config
 
 SESSION_COOKIE = "mcp_session"
@@ -65,19 +71,40 @@ class SessionManager:
     def reset(self) -> None:
         self._secret = None
 
-    def issue(self, user: AdminUser) -> tuple[str, datetime]:
+    def issue(self, db: Session, user: AdminUser) -> tuple[str, datetime]:
+        """Create the server-side session record and return the signed cookie value with its expiry."""
+        from src.adapters import AdminSessionAdapter
+
         cfg = Config.get_session_config()
-        now = local_now()
-        expires_at = now + timedelta(hours=cfg.expire_hours)
+        now = datetime.now(timezone.utc)
+        lifetime = timedelta(hours=cfg.expire_hours)
+        jti = str(uuid.uuid4())
+        # The record is kept in naive UTC so a change of the host's TZ cannot shift expiry (see AdminSession)
+        AdminSessionAdapter.create(db, session_id=jti, user_id=user.id, created_at=now.replace(tzinfo=None),
+                                   expires_at=(now + lifetime).replace(tzinfo=None))
         payload = {
             "typ": SESSION_TYP,
             "sub": str(user.id),
             "email": user.email,
-            "jti": str(uuid.uuid4()),
+            "jti": jti,
             "iat": int(now.timestamp()),
-            "exp": int(expires_at.timestamp()),
+            "exp": int((now + lifetime).timestamp()),
         }
-        return jwt.encode(payload, self.secret, algorithm="HS256"), expires_at
+        return jwt.encode(payload, self.secret, algorithm="HS256"), local_now() + lifetime
+
+    @staticmethod
+    def revoke(db: Session, token: Optional[str]) -> Optional[SessionPayload]:
+        """Delete the server-side record of this session (logout). Returns its payload if the token was valid."""
+        from src.adapters import AdminSessionAdapter
+
+        if not token:
+            return None
+        try:
+            payload = session_manager.verify(token)
+        except SessionError:
+            return None
+        AdminSessionAdapter.delete(db, payload.jti)
+        return payload
 
     def verify(self, token: str) -> SessionPayload:
         try:
@@ -92,13 +119,6 @@ class SessionManager:
             user_id=payload["sub"], email=payload.get("email", ""),
             jti=payload["jti"], iat=payload["iat"], exp=payload["exp"],
         )
-
-    @staticmethod
-    def is_stale(payload: SessionPayload, user: AdminUser) -> bool:
-        """Sessions issued before a password change count as revoked (iat < password_changed_at)."""
-        if user.password_changed_at is None:
-            return False
-        return payload.iat < int(user.password_changed_at.timestamp())
 
     # ---- cookie ----
     @staticmethod
@@ -124,9 +144,12 @@ class SessionManager:
 
     @staticmethod
     def clear_cookie(response: Response) -> Response:
+        """Delete the cookie with the same attributes it was set with: browsers ignore a deletion whose
+        ``Secure`` / ``SameSite`` / path differ (``SameSite=None`` without ``Secure`` is rejected outright)."""
         sec = Config.get_security_config()
         samesite = sec.cookie_samesite if sec.cookie_samesite in ("lax", "strict", "none") else "lax"
-        response.delete_cookie(key=SESSION_COOKIE, httponly=True, samesite=samesite, path="/")
+        response.delete_cookie(key=SESSION_COOKIE, httponly=True, samesite=samesite, secure=sec.secure_cookie,
+                               path="/")
         return response
 
 
@@ -134,14 +157,15 @@ session_manager = SessionManager()
 
 
 def _resolve_user(db: Session, token: str) -> AdminUser:
-    from src.adapters import AdminUserAdapter
+    from src.adapters import AdminSessionAdapter, AdminUserAdapter
 
     payload = session_manager.verify(token)
+    record = AdminSessionAdapter.get(db, payload.jti)
+    if record is None or str(record.user_id) != payload.user_id or record.expires_at <= utc_now():
+        raise SessionError("auth.session_revoked", "Session revoked or unknown")
     user = AdminUserAdapter.get_by_id(db, payload.user_id)
     if not user or not user.is_active:
         raise SessionError("auth.user_invalid", "User not found or inactive")
-    if session_manager.is_stale(payload, user):
-        raise SessionError("auth.session_revoked", "Session revoked (password changed)")
     return user
 
 

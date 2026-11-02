@@ -6,7 +6,7 @@ CHAR(32), and the code is identical on both.
 
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import (
     Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, Uuid, true as sa_true,
@@ -19,6 +19,11 @@ from db.database import Base
 def local_now() -> datetime:
     """Current local time (naive)."""
     return datetime.now()
+
+
+def utc_now() -> datetime:
+    """Current UTC time (naive), for columns that must not move when the host's TZ changes."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def format_datetime(dt: datetime) -> str | None:
@@ -82,6 +87,22 @@ class AdminUser(Base):
             "created_at": format_datetime(self.created_at),
             "last_login": format_datetime(self.last_login),
         }
+
+
+class AdminSession(Base):
+    """Server-side record of a console session (the cookie JWT's ``jti``).
+
+    A session cookie is accepted only while its row exists and has not expired: logout deletes the row,
+    a password change deletes every row of that user. Expired rows are purged by the cleanup job.
+    Unlike most tables, the timestamps are naive **UTC** (``utc_now``), so restarting under another TZ cannot
+    make live sessions look expired or expired ones live.
+    """
+    __tablename__ = "admin_sessions"
+
+    id = Column(String(64), primary_key=True)  # = the session JWT's jti
+    user_id = Column(Uuid, ForeignKey("admin_users.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at = Column(DateTime, default=utc_now, nullable=False)
+    expires_at = Column(DateTime, nullable=False, index=True)
 
 
 # ==================== MCP services ====================

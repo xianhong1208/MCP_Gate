@@ -52,8 +52,8 @@ def _identity_error(e: IdentityError) -> JSONResponse:
     return JSONResponse(status_code=e.status_code, content={"error": e.code, "params": e.params, "message": str(e)})
 
 
-def _login_response(user: AdminUser, extra: Optional[dict] = None) -> JSONResponse:
-    token, expires_at = session_manager.issue(user)
+def _login_response(db: Session, user: AdminUser, extra: Optional[dict] = None) -> JSONResponse:
+    token, expires_at = session_manager.issue(db, user)
     body = {"user": user.to_dict(), "idle_timeout_minutes": identity_service.session_idle_timeout_minutes()}
     if extra:
         body.update(extra)
@@ -84,7 +84,7 @@ async def setup(request: SetupRequest, http_request: Request, db: Session = Depe
         status=AuditStatus.SUCCESS, actor_type=ActorType.ADMIN, actor_id=str(user.id),
         actor_name=user.audit_name,
     )
-    return _login_response(user)
+    return _login_response(db, user)
 
 
 @router.post("/login")
@@ -105,12 +105,19 @@ async def login(request: LoginRequest, http_request: Request, db: Session = Depe
         db=db, request=http_request, action=AuditAction.ADMIN_LOGIN, resource_type=ResourceType.ADMIN,
         status=AuditStatus.SUCCESS, actor_type=ActorType.ADMIN, actor_id=str(user.id), actor_name=user.audit_name,
     )
-    return _login_response(user)
+    return _login_response(db, user)
 
 
 @router.post("/logout")
-async def logout():
-    """Clear the session cookie."""
+async def logout(http_request: Request, db: Session = Depends(get_db)):
+    """End the session server-side (a copied cookie stops working too) and clear the cookie."""
+    payload = session_manager.revoke(db, session_manager.token_from_request(http_request))
+    if payload is not None:
+        AuditService.log_from_request(
+            db=db, request=http_request, action=AuditAction.ADMIN_LOGOUT, resource_type=ResourceType.ADMIN,
+            status=AuditStatus.SUCCESS, actor_type=ActorType.ADMIN, actor_id=payload.user_id,
+            actor_name=payload.email,
+        )
     return session_manager.clear_cookie(JSONResponse(content={"message": "Logged out"}))
 
 
@@ -148,7 +155,8 @@ async def change_password(request: ChangePasswordRequest, http_request: Request,
         status=AuditStatus.SUCCESS, actor_type=ActorType.ADMIN, actor_id=str(current_user.id),
         actor_name=current_user.audit_name, details={"action": "change_password"},
     )
-    return _login_response(current_user, {"message": "Password changed"})
+    # change_password deleted every session of this account (including any issued earlier within the same second)
+    return _login_response(db, current_user, {"message": "Password changed"})
 
 
 # ---------------------------------------------------------------------------
@@ -214,7 +222,7 @@ async def oauth_login_callback(provider: str, request: Request, db: Session = De
         status=AuditStatus.SUCCESS, actor_type=ActorType.ADMIN, actor_id=str(user.id),
         actor_name=user.audit_name, details={"provider": provider},
     )
-    token, expires_at = session_manager.issue(user)
+    token, expires_at = session_manager.issue(db, user)
     response = RedirectResponse(url=next_path, status_code=302)
     response.delete_cookie(OAUTH_STATE_COOKIE, path="/api/session/oauth")
     return session_manager.set_cookie(response, token, expires_at)
