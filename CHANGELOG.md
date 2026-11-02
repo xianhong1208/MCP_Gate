@@ -10,6 +10,7 @@ All notable changes to MCP Gate (formerly MCP Center) are documented here. The f
 
 ### Security
 - **Dependencies with known advisories upgraded** (`pip-audit` / `npm audit --omit=dev` now clean): pyjwt 2.15, cryptography 50, starlette 1.10 / fastapi 0.162, aiohttp 3.14, urllib3 2.8, anyio, multidict, idna, certifi, python-dotenv, mako, pygments, dnspython; dev-only fastmcp 3.4.10 / mcp 1.30 / authlib / joserfc. The console moves to react-router 7, which fixes open-redirect advisories in v6. Minimum versions of pyjwt, cryptography and aiohttp are raised in `pyproject.toml`. (#32)
+- **Outbound fetches can no longer be steered at internal addresses.** The discovery scanner, health checks and tools refresh never follow HTTP redirects, and a host that does not resolve is refused instead of being handed to the HTTP client by name; the cloud metadata addresses `fd00:ec2::254` and `100.100.100.200` are blocked too (loopback and private ranges stay scannable). The `jwks_uri` fetch connects to the exact address that passed the check (Host header, TLS SNI and certificate verification keep the hostname), accepts only globally routable addresses, ignores proxy environment variables, and refetches for an unknown `kid` at most once a minute per `jwks_uri`. Client authentication on the token, revocation, introspection and feed endpoints runs off the event loop. (#33)
 
 ## [1.1.0] — 2026-09-18
 
