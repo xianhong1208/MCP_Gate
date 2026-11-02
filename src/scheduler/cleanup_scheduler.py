@@ -148,7 +148,9 @@ class CleanupScheduler:
         try:
             services = ServiceAdapter.get_services_for_health_check(db)
             scanner = get_scanner()
-            for service in services:
+            # Plain values captured up front: after a failed flush the ORM objects cannot be read until rollback
+            targets = [(service, service.name) for service in services]
+            for service, service_name in targets:
                 try:
                     auth_token = resolve_service_auth_token(db, service)
                     verify_result = await scanner.verify_mcp_service(
@@ -159,7 +161,6 @@ class CleanupScheduler:
                     results["checked"] += 1
                     if verify_result.success:
                         new_status, error_msg, reset_fail, increment_fail = "online", None, True, False
-                        results["online"] += 1
                         # Fill the description from serverInfo only while it is empty or generated;
                         # never overwrite what the operator wrote (nor the name they chose)
                         if ServiceAdapter.adopt_server_description(
@@ -169,17 +170,13 @@ class CleanupScheduler:
                     else:
                         error_msg, reset_fail, increment_fail = verify_result.error, False, True
                         fail_count = (service.health_fail_count or 0) + 1
-                        if fail_count >= 3:
-                            new_status = "offline"
-                            results["offline"] += 1
-                        else:
-                            new_status = "error"
-                            results["error"] += 1
+                        new_status = "offline" if fail_count >= 3 else "error"
                     ServiceAdapter.update_health(
                         db=db, service_id=str(service.id), status=new_status,
                         response_time_ms=verify_result.response_time_ms, error_message=error_msg,
                         reset_fail_count=reset_fail, increment_fail_count=increment_fail,
                     )
+                    results[new_status] += 1  # counted once stored, so a failed write is not also "online"
                     if new_status != previous_status and self._ws_manager:
                         try:
                             await self._ws_manager.broadcast_health_update(
@@ -191,7 +188,10 @@ class CleanupScheduler:
                         except Exception as e:
                             logger.warning(f"Failed to broadcast health update: {e}")
                 except Exception as e:
-                    logger.error(f"Health check error for {service.name}: {e}")
+                    # Roll back so one failed write (e.g. a DataError on PostgreSQL) does not poison the session
+                    # for every service after it in this round.
+                    db.rollback()
+                    logger.error(f"Health check error for {service_name}: {e}")
                     results["error"] += 1
             return results
         except Exception as e:
