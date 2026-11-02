@@ -890,7 +890,9 @@
       "registering_service": "註冊服務",
       "stopping_container": "停止容器",
       "loading_image": "載入 image(docker load)",
-      "verifying_image": "驗證 image"
+      "verifying_image": "驗證 image",
+      "waiting_ready": "等待 MCP 伺服器回應",
+      "starting_process": "啟動程序"
     }
   },
   "audit": {
@@ -1058,7 +1060,9 @@
       "image_load_failed": "載入 image 失敗:{{reason}}",
       "image_not_installed": "image「{{image}}」尚未安裝,請先在市集按「安裝」",
       "image_tar_mismatch": "安裝檔內容不符:期望 {{expected}},實際載入 {{loaded}}。請確認 tar 內容或 catalog 的 image/tag 設定",
-      "image_tar_not_found": "找不到安裝檔:{{path}}。請將 image tar 放至該路徑後重試"
+      "image_tar_not_found": "找不到安裝檔:{{path}}。請將 image tar 放至該路徑後重試",
+      "runtime_unavailable": "受管服務的執行環境無法使用(Docker daemon 是否在執行?):{{reason}}",
+      "uninstall_stop_failed": "已中止解除安裝:無法停止執行個體,它可能仍在執行:{{reason}}"
     },
     "byo": {
       "invalid_command": "啟動指令不符合安全政策:{{reason}}",

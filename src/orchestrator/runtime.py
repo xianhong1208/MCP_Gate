@@ -21,6 +21,13 @@ SUPERGATEWAY_BIN = os.environ.get("MCP_SUPERGATEWAY_BIN", "supergateway")
 ProgressFn = Callable[[str, Optional[str]], None]
 
 
+class RuntimeUnavailableError(Exception):
+    """The runtime itself cannot be reached or used right now (Docker daemon down, supergateway missing).
+
+    Distinct from "this instance failed": callers turn it into 503 rather than 500, and nothing about the
+    instance's state can be concluded from it."""
+
+
 @dataclass
 class LaunchRequest:
     """Everything a runtime needs to start one managed server. All argv fields have already passed the
@@ -75,11 +82,13 @@ class Runtime(ABC):
 
     @abstractmethod
     def stop(self, name: str) -> None:
-        """Stop the instance gracefully; missing instances are ignored."""
+        """Stop the instance gracefully. A missing / already stopped instance is success; any other failure
+        raises, because the instance may still be running."""
 
     @abstractmethod
     def remove(self, name: str) -> None:
-        """Remove whatever is left of the instance (container, pid file); missing is ignored."""
+        """Remove whatever is left of the instance (container, pid file). Missing is success; any other failure
+        raises."""
 
     @abstractmethod
     def instance_id(self, name: str, running_only: bool = False) -> Optional[str]:

@@ -11,15 +11,29 @@ import logging
 from typing import List, Optional
 
 import docker
+import requests
 from docker import errors as docker_errors
 
-from src.orchestrator.runtime import LaunchRequest, ProgressFn, Runtime, bridge_argv
+from src.orchestrator.runtime import LaunchRequest, ProgressFn, Runtime, RuntimeUnavailableError, bridge_argv
 
 logger = logging.getLogger(__name__)
 
 
 class DockerRuntimeError(Exception):
     """Raised for daemon / image / container failures; the Orchestrator wraps it."""
+
+
+class DockerUnavailableError(DockerRuntimeError, RuntimeUnavailableError):
+    """The Docker daemon cannot be reached (socket missing, daemon stopped, connection refused)."""
+
+
+def _unavailable(e: Exception) -> DockerUnavailableError:
+    return DockerUnavailableError(f"Cannot connect to Docker daemon: {e}")
+
+
+def _already_gone(e: docker_errors.APIError) -> bool:
+    """A remove racing another remove (409 "removal ... already in progress") leaves nothing behind either."""
+    return getattr(e, "status_code", None) == 409 and "already in progress" in str(e).lower()
 
 
 def _flags_to_kwargs(flags):
@@ -77,7 +91,7 @@ class DockerRuntime(Runtime):
             try:
                 self._docker = docker.from_env()
             except docker_errors.DockerException as e:
-                raise DockerRuntimeError(f"Cannot connect to Docker daemon: {e}") from e
+                raise _unavailable(e) from e
         return self._docker
 
     # ------------------------------------------------------------------ Runtime
@@ -85,7 +99,7 @@ class DockerRuntime(Runtime):
         try:
             self._client().ping()
             return True, "Docker daemon reachable"
-        except (DockerRuntimeError, docker_errors.DockerException) as e:
+        except (DockerRuntimeError, docker_errors.DockerException, requests.exceptions.ConnectionError) as e:
             return False, str(e)
 
     def image_exists(self, image_ref: str) -> bool:
@@ -151,22 +165,33 @@ class DockerRuntime(Runtime):
             raise DockerRuntimeError(f"docker image not found: {request.image_ref}") from e
         except docker_errors.APIError as e:
             raise DockerRuntimeError(f"docker run failed: {getattr(e, 'explanation', None) or e}") from e
+        except requests.exceptions.ConnectionError as e:
+            raise _unavailable(e) from e
 
     def stop(self, name: str) -> None:
+        """A missing container is success; anything else (daemon down, API error) raises: the container may
+        still be running, and the caller must not record it as stopped."""
         try:
             self._client().containers.get(name).stop(timeout=10)
         except docker_errors.NotFound:
             pass
-        except (DockerRuntimeError, docker_errors.DockerException) as e:
-            logger.debug(f"stop container {name} ignored: {e}")
+        except requests.exceptions.ConnectionError as e:
+            raise _unavailable(e) from e
+        except docker_errors.DockerException as e:
+            raise DockerRuntimeError(f"docker stop {name} failed: {getattr(e, 'explanation', None) or e}") from e
 
     def remove(self, name: str) -> None:
         try:
             self._client().containers.get(name).remove(force=True)
         except docker_errors.NotFound:
             pass
-        except (DockerRuntimeError, docker_errors.DockerException) as e:
-            logger.debug(f"remove container {name} ignored: {e}")
+        except docker_errors.APIError as e:
+            if not _already_gone(e):
+                raise DockerRuntimeError(f"docker rm {name} failed: {getattr(e, 'explanation', None) or e}") from e
+        except requests.exceptions.ConnectionError as e:
+            raise _unavailable(e) from e
+        except docker_errors.DockerException as e:
+            raise DockerRuntimeError(f"docker rm {name} failed: {e}") from e
 
     def instance_id(self, name: str, running_only: bool = False) -> Optional[str]:
         """running_only=True: exited/created count as absent. The name filter is a substring match; names
@@ -174,7 +199,7 @@ class DockerRuntime(Runtime):
         try:
             matches = self._client().containers.list(all=not running_only, filters={"name": name})
             return matches[0].id if matches else None
-        except (DockerRuntimeError, docker_errors.DockerException):
+        except (DockerRuntimeError, docker_errors.DockerException, requests.exceptions.ConnectionError):
             return None
 
     def logs(self, name: str, tail: int = 200) -> str:
@@ -184,12 +209,12 @@ class DockerRuntime(Runtime):
             container = self._client().containers.get(name)
         except docker_errors.NotFound:
             return f"(container '{name}' does not exist -- it may have been removed or never created)"
-        except (DockerRuntimeError, docker_errors.DockerException) as e:
+        except (DockerRuntimeError, docker_errors.DockerException, requests.exceptions.ConnectionError) as e:
             return f"(cannot connect to Docker: {e})"
         try:
             raw = container.logs(tail=tail, timestamps=True)
             status = container.status
-        except docker_errors.DockerException as e:
+        except (docker_errors.DockerException, requests.exceptions.ConnectionError) as e:
             return f"(failed to read logs: {e})"
         text = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
         return f"[container status: {status}]\n{text}"

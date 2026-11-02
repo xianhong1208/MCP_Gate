@@ -7,10 +7,14 @@ Endpoints:
   GET  /api/managed                       List installed Managed MCPs
   GET  /api/managed/progress              Current stage of in-flight long operations (for frontend polling)
   GET  /api/managed/{id}                  Details of a single Managed MCP
-  PUT  /api/managed/{id}/env-vars         Update env vars (auto-restarts while running)
+  PUT  /api/managed/{id}/env-vars         Update env vars (auto-restarts while running; catalog and BYO)
   POST /api/managed/{id}/start            Start
   POST /api/managed/{id}/stop             Stop
-  DELETE /api/managed/{id}                Uninstall (stop + delete row + delete Service)
+  DELETE /api/managed/{id}                Uninstall (stop + delete row + delete Service; refused while the
+                                          instance cannot be stopped)
+
+Runtime failures: when the runtime itself is unreachable (Docker daemon down, supergateway missing) the
+routes answer 503 managed.runtime_unavailable instead of a generic 500.
 
 All endpoints require login (session).
 
@@ -59,8 +63,8 @@ from src.identity import get_current_user
 from src.logging import get_logger
 from src.marketplace.loader import get_catalog_loader
 from src.marketplace.schema import CatalogEntry
-from src.orchestrator.launch_spec import MCP_RUNTIME_IMAGE, user_source_id
-from src.orchestrator.manager import OrchestratorError, get_orchestrator
+from src.orchestrator.launch_spec import MCP_RUNTIME_IMAGE, is_user_source, user_source_id
+from src.orchestrator.manager import OrchestratorError, RuntimeUnavailable, error_text, get_orchestrator
 from src.orchestrator.progress import catalog_key, get_progress_registry
 
 logger = get_logger("api.managed")
@@ -73,6 +77,24 @@ def _adapter_http_exc(e: AdapterError) -> HTTPException:
     return HTTPException(
         status_code=e.status_code,
         detail={"error": e.code, "params": e.params, "fallback": e.fallback},
+    )
+
+
+def _orchestrator_http_exc(e: OrchestratorError, code: str, fallback_prefix: str) -> HTTPException:
+    """OrchestratorError -> HTTPException: 503 managed.runtime_unavailable when the runtime cannot be reached,
+    otherwise 500 with the operation's own error code."""
+    if isinstance(e, RuntimeUnavailable):
+        return HTTPException(
+            status_code=503,
+            detail={
+                "error": "managed.runtime_unavailable",
+                "params": {"reason": str(e)},
+                "fallback": f"The managed-server runtime is unavailable: {e}",
+            },
+        )
+    return HTTPException(
+        status_code=500,
+        detail={"error": code, "params": {"reason": str(e)}, "fallback": f"{fallback_prefix}: {e}"},
     )
 
 
@@ -551,7 +573,7 @@ async def deploy_byo_definition(
             err_msg = str(e)
             logger.error(f"BYO deploy: process created but start failed: {e}")
             ManagedMcpProcessAdapter.update_state(
-                db, str(process.id), actual_state="failed", last_error=err_msg,
+                db, str(process.id), actual_state="failed", last_error=error_text(e),
             )
             process = ManagedMcpProcessAdapter.get_by_id(db, str(process.id))
 
@@ -691,7 +713,7 @@ async def install_managed(
             ManagedMcpProcessAdapter.update_state(
                 db, str(process.id),
                 actual_state="failed",
-                last_error=err_msg,
+                last_error=error_text(e),
             )
             process = ManagedMcpProcessAdapter.get_by_id(db, str(process.id))
 
@@ -742,16 +764,9 @@ async def start_managed(
         p = await asyncio.to_thread(get_orchestrator().start, db, process_id)
     except OrchestratorError as e:
         ManagedMcpProcessAdapter.update_state(
-            db, process_id, actual_state="failed", last_error=str(e),
+            db, process_id, actual_state="failed", last_error=error_text(e),
         )
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": "managed.start_failed",
-                "params": {"reason": str(e)},
-                "fallback": f"Start failed: {e}",
-            },
-        )
+        raise _orchestrator_http_exc(e, "managed.start_failed", "Start failed")
 
     AuditService.log_from_request(
         db=db, request=http_request,
@@ -791,14 +806,8 @@ async def stop_managed(
         ManagedMcpProcessAdapter.set_desired_state(db, process_id, "stopped")
         p = await asyncio.to_thread(get_orchestrator().stop, db, process_id)
     except OrchestratorError as e:
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": "managed.stop_failed",
-                "params": {"reason": str(e)},
-                "fallback": f"Stop failed: {e}",
-            },
-        )
+        # the orchestrator already left actual_state=stop_failed + last_error on the process
+        raise _orchestrator_http_exc(e, "managed.stop_failed", "Stop failed")
 
     AuditService.log_from_request(
         db=db, request=http_request,
@@ -836,38 +845,64 @@ async def update_env_vars(
     except AdapterError as e:
         raise _adapter_http_exc(e)
 
-    catalog = get_catalog_loader().get(p.catalog_id)
-    if not catalog:
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "error": "managed.catalog_removed_from_image",
-                "params": {"catalog_id": p.catalog_id},
-                "fallback": f"Catalog '{p.catalog_id}' not found (removed from the image?)",
-            },
-        )
-    _validate_env_vars(catalog, request.env_vars)
-
-    was_running = (p.actual_state == "running")
-    if was_running:
-        await asyncio.to_thread(get_orchestrator().stop, db, process_id)
-
-    ManagedMcpProcessAdapter.update_env_vars(db, process_id, request.env_vars)
-
-    if was_running:
-        try:
-            p = await asyncio.to_thread(get_orchestrator().start, db, process_id)
-        except OrchestratorError as e:
+    if is_user_source(p.catalog_id):
+        # BYO: the definition's env schema plays the catalog's role (same rule as deploy: no undeclared keys)
+        definition = BYODefinitionAdapter.get_by_id(db, p.catalog_id.split(":", 1)[1])
+        if not definition:
             raise HTTPException(
-                status_code=500,
+                status_code=404,
                 detail={
-                    "error": "managed.env_updated_restart_failed",
-                    "params": {"reason": str(e)},
-                    "fallback": f"Env updated but restart failed: {e}",
+                    "error": "byo.definition_not_found",
+                    "params": {"definition_id": p.catalog_id},
+                    "fallback": f"BYO definition '{p.catalog_id}' not found",
+                },
+            )
+        declared = {e["name"] for e in definition.get_env_schema()}
+        extras = set(request.env_vars) - declared
+        if extras:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "byo.unknown_env_vars",
+                    "params": {"extras": sorted(extras)},
+                    "fallback": f"Unknown env vars: {sorted(extras)}",
                 },
             )
     else:
-        p = ManagedMcpProcessAdapter.get_by_id(db, process_id)
+        catalog = get_catalog_loader().get(p.catalog_id)
+        if not catalog:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "managed.catalog_removed_from_image",
+                    "params": {"catalog_id": p.catalog_id},
+                    "fallback": f"Catalog '{p.catalog_id}' not found (removed from the image?)",
+                },
+            )
+        _validate_env_vars(catalog, request.env_vars)
+
+    # stop -> write -> start as one operation under the process's lock (no start/stop can interleave)
+    try:
+        p, was_running = await asyncio.to_thread(
+            get_orchestrator().update_env_and_restart, db, process_id, request.env_vars,
+        )
+    except OrchestratorError as e:
+        AuditService.log_from_request(
+            db=db, request=http_request,
+            action=AuditAction.UPDATE_SERVICE,
+            resource_type=ResourceType.SERVICE,
+            status=AuditStatus.FAILURE,
+            resource_id=process_id,
+            actor_type=ActorType.ADMIN,
+            actor_id=str(current_user.id),
+            actor_name=current_user.audit_name,
+            details={"action": "update_env_vars", "keys": list(request.env_vars.keys()), "error": str(e)},
+        )
+        current = ManagedMcpProcessAdapter.get_by_id(db, process_id)
+        if current is not None and current.actual_state == "stop_failed":
+            # the stop failed first: nothing was written
+            raise _orchestrator_http_exc(e, "managed.stop_failed", "Env vars not updated, stop failed")
+        raise _orchestrator_http_exc(e, "managed.env_updated_restart_failed", "Env updated but restart failed")
 
     AuditService.log_from_request(
         db=db, request=http_request,
@@ -909,11 +944,33 @@ async def uninstall_managed(
     name = p.name
     catalog_id = p.catalog_id
 
-    # 1. Stop (ignore already-stopped errors; the orchestrator is an external process, coordinated by the route)
+    # 1. Stop. A missing / already stopped instance is success; any other failure aborts the uninstall -- the
+    #    instance may still be running, and deleting its record would orphan it (nothing could stop it later).
     try:
         await asyncio.to_thread(get_orchestrator().stop, db, process_id)
-    except Exception as e:
-        logger.warning(f"Stop during uninstall failed (continuing): {e}")
+    except OrchestratorError as e:
+        logger.error(f"Uninstall of {name} aborted: stop failed: {e}")
+        AuditService.log_from_request(
+            db=db, request=http_request,
+            action=AuditAction.DELETE_SERVICE,
+            resource_type=ResourceType.SERVICE,
+            status=AuditStatus.FAILURE,
+            resource_id=process_id,
+            actor_type=ActorType.ADMIN,
+            actor_id=str(current_user.id),
+            actor_name=current_user.audit_name,
+            details={"catalog_id": catalog_id, "name": name, "error": str(e)},
+        )
+        if isinstance(e, RuntimeUnavailable):
+            raise _orchestrator_http_exc(e, "managed.uninstall_stop_failed", "Uninstall aborted")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "managed.uninstall_stop_failed",
+                "params": {"reason": str(e)},
+                "fallback": f"Uninstall aborted: the instance could not be stopped and may still be running: {e}",
+            },
+        )
 
     # 2+3. Clean up Service-related data + delete the process row (logic lives in the adapter)
     ManagedMcpProcessAdapter.purge_with_service(db, p, logger)
