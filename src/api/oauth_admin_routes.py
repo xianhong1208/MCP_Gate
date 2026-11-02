@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from db import get_db
-from db.models import AdminUser
+from db.models import AdminUser, OAuthScope
 from src.adapters import (
     OAuthClientAdapter, OAuthConsentAdapter, OAuthKeyAdapter, OAuthScopeAdapter, OAuthTokenAdapter,
     ServiceAdapter, ServiceScopeAdapter, TokenUsageAdapter,
@@ -25,6 +25,7 @@ from src.middleware.issuer_check import observed_mismatches
 from src.oauth import service as oauth
 from src.oauth import signing_keys
 from src.oauth.errors import OAuthError
+from src.utils.field_limits import FieldTooLongError, check_max_length, column_limit
 
 router = APIRouter(prefix="/api/oauth", tags=["OAuth Admin"])
 
@@ -164,7 +165,16 @@ def _scope_name(name: str) -> str:
     name = name.strip()
     if not name or " " in name:
         raise HTTPException(status_code=400, detail={"error": "oauth.invalid_scope_name", "fallback": "Invalid scope name"})
-    return name
+    return _checked_length("name", name, column_limit(OAuthScope.name))
+
+
+def _checked_length(field: str, value: Optional[str], limit: int) -> Optional[str]:
+    """400 validation.too_long instead of a database error (PostgreSQL enforces String(n), SQLite does not).
+    Global and per-server scopes share the same column sizes."""
+    try:
+        return check_max_length(field, value, limit)
+    except FieldTooLongError as e:
+        raise HTTPException(status_code=400, detail=e.to_detail())
 
 
 @router.put("/scopes/{name}")
@@ -173,6 +183,7 @@ async def upsert_scope(name: str, body: ScopeUpsertRequest, request: Request, db
     """Create or update a global scope and whether it is granted by default. A name some server already declares
     as its own scope is refused, so global and per-server names stay disjoint."""
     name = _scope_name(name)
+    _checked_length("description", body.description, column_limit(OAuthScope.description))
     if OAuthScopeAdapter.get(db, name) is None and ServiceScopeAdapter.names_in_use(db, name):
         raise HTTPException(status_code=409, detail={"error": "oauth.scope_owned_by_service",
                                                      "fallback": "A server already declares a scope with this name"})
@@ -214,6 +225,7 @@ async def upsert_service_scope(service_id: str, name: str, body: ScopeUpsertRequ
     except AdapterError as e:
         raise _adapter_exc(e)
     name = _scope_name(name)
+    _checked_length("description", body.description, column_limit(OAuthScope.description))
     if OAuthScopeAdapter.get(db, name) is not None:
         raise HTTPException(status_code=409, detail={"error": "oauth.scope_is_global",
                                                      "fallback": "This name is a global scope; edit it in the registry"})

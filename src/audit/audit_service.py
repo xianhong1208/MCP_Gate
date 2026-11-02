@@ -15,6 +15,7 @@ from fastapi import Request
 from db.models import AuditLog, local_now
 from src.logging import get_logger
 from src.utils.client_ip import resolve_client_ip
+from src.utils.field_limits import clip
 
 
 logger = get_logger("audit")
@@ -98,8 +99,12 @@ class AuditService:
         error_message: Optional[str] = None,
         details: Optional[Dict[str, Any]] = None,
     ) -> AuditLog:
-        """Record an audit log entry"""
-        audit_log = AuditLog(
+        """Record an audit log entry.
+
+        Several fields carry what a caller sent (the email of a failed login, a User-Agent, a path), so every
+        bounded column is clipped to fit: an audit write must never fail the request it records.
+        """
+        fields = dict(
             action=action,
             resource_type=resource_type,
             resource_id=resource_id,
@@ -113,8 +118,12 @@ class AuditService:
             status=status,
             status_code=status_code,
             error_message=error_message,
-            details=json.dumps(details) if details else None,
         )
+        for name, value in fields.items():
+            limit = getattr(AuditLog.__table__.c[name].type, "length", None)
+            if limit and isinstance(value, str):
+                fields[name] = clip(value, limit)
+        audit_log = AuditLog(**fields, details=json.dumps(details) if details else None)
         db.add(audit_log)
         db.commit()
         db.refresh(audit_log)

@@ -1031,6 +1031,9 @@
       "unsupported_grant_type": "不支援的 grant type",
       "server_error": "授權伺服器錯誤"
     },
+    "validation": {
+      "too_long": "「{{field}}」太長（最多 {{max}} 個字元）。"
+    },
     "service": {
       "not_found": "找不到服務",
       "duplicate": "已存在同名稱與 host:port 的服務。",

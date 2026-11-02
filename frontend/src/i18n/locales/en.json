@@ -1031,6 +1031,9 @@
       "unsupported_grant_type": "Unsupported grant type",
       "server_error": "Authorization server error"
     },
+    "validation": {
+      "too_long": "\"{{field}}\" is too long (maximum {{max}} characters)."
+    },
     "service": {
       "not_found": "Service not found",
       "duplicate": "A service with the same name and host:port already exists.",

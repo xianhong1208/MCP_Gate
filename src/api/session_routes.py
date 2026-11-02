@@ -49,7 +49,7 @@ class UpdateProfileRequest(BaseModel):
 
 
 def _identity_error(e: IdentityError) -> JSONResponse:
-    return JSONResponse(status_code=e.status_code, content={"error": e.code, "params": {}, "message": str(e)})
+    return JSONResponse(status_code=e.status_code, content={"error": e.code, "params": e.params, "message": str(e)})
 
 
 def _login_response(user: AdminUser, extra: Optional[dict] = None) -> JSONResponse:

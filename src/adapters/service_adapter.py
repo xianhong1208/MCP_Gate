@@ -2,8 +2,10 @@
 
 from typing import Optional
 
-from db.crud import ServiceCRUD, normalize_service_host
+from db.crud import ServiceCRUD, normalize_audience, normalize_service_host
+from db.models import Service
 from src.adapters.exceptions import ConflictError, NotFoundError, ValidationFailedError
+from src.utils.field_limits import FieldTooLongError, check_max_length, column_limit
 from src.utils.mcp_target import InvalidTargetError, validate_host, validate_mcp_path, validate_port, validate_protocol
 
 
@@ -13,8 +15,8 @@ def fallback_service_name(host: str, port: int) -> str:
 
 
 def sanitize_server_name(server_name: str) -> str:
-    """Turn an MCP serverInfo.name into a service name (no spaces or slashes)."""
-    return server_name.replace(" ", "-").replace("/", "-")
+    """Turn an MCP serverInfo.name into a service name (no spaces or slashes, cut to fit the column)."""
+    return server_name.replace(" ", "-").replace("/", "-")[:column_limit(Service.name)]
 
 
 def fallback_service_description(host: str, port: int) -> str:
@@ -38,11 +40,13 @@ _LEGACY_HEALTH_DESCRIPTION_PREFIX = "MCP service: "
 
 
 def _validated_target(fields: dict) -> dict:
-    """Check the URL components among `fields` (only those present and not None) before they are stored.
+    """Check the operator-supplied fields among `fields` (only those present and not None) before they are stored.
 
-    The scanner builds outbound URLs from these values, so an '@' in the path or a URL in the protocol
-    would redirect health checks and tool fetches to an arbitrary host. Raises ValidationFailedError with
-    a `service.invalid_*` code; returns the fields with the protocol normalised to lower case.
+    The scanner builds outbound URLs from protocol / host / port / path, so an '@' in the path or a URL in the
+    protocol would redirect health checks and tool fetches to an arbitrary host: those raise
+    ValidationFailedError with a `service.invalid_*` code. Text longer than its column raises
+    `validation.too_long` (PostgreSQL would otherwise refuse the row with a 500). Returns the fields with the
+    protocol normalised to lower case.
     """
     out = dict(fields)
     try:
@@ -51,13 +55,31 @@ def _validated_target(fields: dict) -> dict:
         if out.get("mcp_path") is not None:
             validate_mcp_path(out["mcp_path"])
         if out.get("host"):
-            validate_host(out["host"].strip())
             out["host"] = out["host"].strip()
+            check_max_length("host", out["host"], column_limit(Service.host))
+            validate_host(out["host"])
         if out.get("port") is not None:
             validate_port(out["port"])
+        _check_lengths(out)
     except InvalidTargetError as e:
         raise ValidationFailedError(code=e.code, fallback=e.fallback)
+    except FieldTooLongError as e:
+        raise ValidationFailedError(code=e.code, fallback=e.fallback, params=e.params)
     return out
+
+
+def _check_lengths(fields: dict) -> None:
+    """Raise FieldTooLongError for a value that would not fit its column once stored the way ServiceCRUD
+    stores it (lists comma- / space-joined, the audience normalised)."""
+    if fields.get("name") is not None:
+        check_max_length("name", fields["name"], column_limit(Service.name))
+    if fields.get("tags"):
+        check_max_length("tags", ",".join(fields["tags"]), column_limit(Service.tags))
+    if fields.get("oauth_audience"):
+        check_max_length("oauth_audience", normalize_audience(fields["oauth_audience"]),
+                         column_limit(Service.oauth_audience))
+    if fields.get("oauth_scopes"):
+        check_max_length("oauth_scopes", " ".join(fields["oauth_scopes"]), column_limit(Service.oauth_scopes))
 
 
 class ServiceAdapter(ServiceCRUD):

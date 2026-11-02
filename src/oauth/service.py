@@ -36,6 +36,7 @@ from src.oauth.consent_policy import should_skip_consent
 from src.oauth.errors import OAuthError
 from src.oauth.jwt_utils import JWTVerifyError, decode_rs256, sign_rs256, unverified_header
 from src.utils.crypto import hash_token
+from src.utils.field_limits import column_limit
 
 SERVER_GRANT_TYPES = ["authorization_code", "refresh_token", "client_credentials"]
 SERVER_AUTH_METHODS = ["client_secret_basic", "client_secret_post", "private_key_jwt", "none"]
@@ -139,9 +140,13 @@ def register_client(
     if "authorization_code" in grant_types:
         if not redirect_uris:
             raise OAuthError("invalid_redirect_uri", "authorization_code requires at least one redirect_uri")
+        redirect_limit = column_limit(OAuthAuthorizationRequest.redirect_uri)
         for uri in redirect_uris:
             if not isinstance(uri, str) or not _valid_redirect_uri(uri):
                 raise OAuthError("invalid_redirect_uri", f"invalid redirect_uri: {uri}")
+            if len(uri) > redirect_limit:
+                # every authorization request stores the redirect_uri it was given
+                raise OAuthError("invalid_redirect_uri", f"redirect_uri is too long (maximum {redirect_limit} characters)")
 
     scope = metadata.get("scope")
     if scope:
@@ -150,6 +155,8 @@ def register_client(
         unknown = set(str(scope).split()) - set(supported_scope_names(db))
         if unknown:
             raise OAuthError("invalid_client_metadata", f"unknown scope: {' '.join(sorted(unknown))}")
+
+    _check_metadata_lengths(metadata, jwks_uri)
 
     if is_approved is None:
         is_approved = True if created_via != "dcr" else Config.get_oauth_config().dcr_auto_approve
@@ -192,6 +199,27 @@ def register_client(
         owner_id=owner_id,
     )
     return client, plaintext_secret
+
+
+def _check_metadata_lengths(metadata: dict, jwks_uri: Optional[str]) -> None:
+    """RFC 7591 metadata values longer than the columns storing them -> invalid_client_metadata (a public endpoint:
+    on PostgreSQL an over-long value would otherwise end in a 500). client_name is shortened instead, as before."""
+    values = {
+        "client_uri": (metadata.get("client_uri"), OAuthClient.client_uri),
+        "logo_uri": (metadata.get("logo_uri"), OAuthClient.logo_uri),
+        "software_id": (metadata.get("software_id"), OAuthClient.software_id),
+        "scope": (metadata.get("scope"), OAuthClient.scope),
+        "default_resource": (metadata.get("default_resource"), OAuthClient.default_resource),
+        "jwks_uri": (jwks_uri, OAuthClient.jwks_uri),
+    }
+    for field, (value, column) in values.items():
+        if value is None:
+            continue
+        if not isinstance(value, str):
+            raise OAuthError("invalid_client_metadata", f"{field} must be a string")
+        limit = column_limit(column)
+        if len(value) > limit:
+            raise OAuthError("invalid_client_metadata", f"{field} is too long (maximum {limit} characters)")
 
 
 def registration_response(client: OAuthClient, secret: Optional[str]) -> dict:
@@ -381,9 +409,17 @@ def begin_authorization(
         raise OAuthError("unsupported_response_type", "only response_type=code is supported", redirectable=True)
     if "authorization_code" not in client.grant_type_list():
         raise OAuthError("unauthorized_client", "client may not use authorization_code", redirectable=True)
+    if len(redirect_uri) > column_limit(OAuthAuthorizationRequest.redirect_uri):
+        # registered before registration checked the length: such a client cannot complete a flow
+        raise OAuthError("invalid_request", "redirect_uri is too long")
+    if state is not None and len(state) > column_limit(OAuthAuthorizationRequest.state):
+        raise OAuthError("invalid_request", "state is too long", redirectable=True)
     if code_challenge:
         if code_challenge_method != "S256":
             raise OAuthError("invalid_request", "only code_challenge_method=S256 is supported", redirectable=True)
+        if len(code_challenge) > column_limit(OAuthAuthorizationRequest.code_challenge):
+            # RFC 7636: a code challenge is at most 128 characters (an S256 challenge is exactly 43)
+            raise OAuthError("invalid_request", "code_challenge is too long", redirectable=True)
     elif client.require_pkce or not client.client_secret_hash:
         raise OAuthError("invalid_request", "PKCE code_challenge (S256) is required", redirectable=True)
     else:
@@ -391,6 +427,8 @@ def begin_authorization(
 
     audience, service = resolve_resource(db, resource or client.default_resource)
     granted_scope = resolve_scope(db, scope, client, service)
+    if granted_scope and len(granted_scope) > column_limit(OAuthAuthorizationRequest.scope):
+        raise OAuthError("invalid_scope", "too many scopes requested", redirectable=True)
 
     return OAuthAuthRequestAdapter.create(
         db,
