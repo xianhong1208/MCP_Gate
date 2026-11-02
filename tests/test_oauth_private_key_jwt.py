@@ -145,11 +145,11 @@ def test_assertion_via_jwks_uri_with_cache_and_rotation(owner_client, service, m
         def json(self):
             return self._doc
 
-    def fake_get(url, **kwargs):
+    def fake_get(url, address):
         served["fetches"] += 1
         return FakeResponse(served["doc"])
 
-    monkeypatch.setattr(client_assertion.httpx, "get", fake_get)
+    monkeypatch.setattr(client_assertion, "_get_pinned", fake_get)
     monkeypatch.setattr(client_assertion, "_resolve_host", lambda host: ["93.184.216.34"])
     reg = _register_pkjwt(owner_client, jwks_uri="https://client.example/jwks.json")
 
@@ -266,8 +266,154 @@ def test_jwks_uri_rechecked_before_each_fetch(owner_client, service, monkeypatch
     reg = _register_pkjwt(owner_client, jwks_uri="https://client.example/jwks.json")
     monkeypatch.setattr(client_assertion, "_resolve_host", lambda host: ["10.0.0.5"])  # DNS rebinding
     called = {"n": 0}
-    monkeypatch.setattr(client_assertion.httpx, "get", lambda *a, **k: called.__setitem__("n", called["n"] + 1))
+    monkeypatch.setattr(client_assertion, "_get_pinned", lambda *a, **k: called.__setitem__("n", called["n"] + 1))
     code, verifier = _authorize_and_consent(owner_client, reg["client_id"])
     r = _exchange_with_assertion(owner_client, reg["client_id"], code, verifier,
                                  make_assertion(reg["client_id"], pem, alg, "k1"))
     assert r.status_code == 401 and called["n"] == 0
+
+
+# ---------------------------------------------------------------------------
+# jwks_uri fetch hardening (#33)
+# ---------------------------------------------------------------------------
+class _JwksClient:
+    """The two attributes _client_keys reads from an OAuthClient."""
+    jwks = None
+    jwks_uri = "https://client.example/jwks.json"
+
+
+def test_unknown_kid_refetch_is_throttled(monkeypatch):
+    """An unknown kid forces one refetch; more unknown kids inside the interval are answered from cache."""
+    _, jwk, _ = rsa_keypair("k1")
+    fetches = []
+    clock = {"now": 1000.0}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"keys": [jwk]}
+
+    monkeypatch.setattr(client_assertion, "_resolve_host", lambda host: ["93.184.216.34"])
+    monkeypatch.setattr(client_assertion, "_get_pinned", lambda url, address: fetches.append(url) or FakeResponse())
+    monkeypatch.setattr(client_assertion, "time", type("T", (), {"monotonic": staticmethod(lambda: clock["now"]),
+                                                                  "time": staticmethod(time.time)}))
+    client = _JwksClient()
+    assert client_assertion._client_keys(client, "k1", "RS256", allow_loopback=False)["kid"] == "k1"
+    assert len(fetches) == 1
+    for _ in range(5):  # a flood of assertions with a kid the client never published
+        with pytest.raises(client_assertion.OAuthError):
+            client_assertion._client_keys(client, "nope", "RS256", allow_loopback=False)
+    assert len(fetches) == 2  # one forced refetch, not five
+    clock["now"] += client_assertion.JWKS_FORCED_REFETCH_INTERVAL + 1
+    with pytest.raises(client_assertion.OAuthError):
+        client_assertion._client_keys(client, "nope", "RS256", allow_loopback=False)
+    assert len(fetches) == 3
+
+
+def test_jwks_fetch_connects_to_the_validated_address(monkeypatch):
+    """The fetch dials the address that passed the check, never re-resolving the name; Host and SNI keep the
+    hostname so virtual hosting and certificate verification are unaffected."""
+    import httpx
+    _, jwk, _ = rsa_keypair("k1")
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(200, json={"keys": [jwk]})
+
+    real_client = httpx.Client
+    monkeypatch.setattr(client_assertion.httpx, "Client",
+                        lambda **kw: real_client(**kw, transport=httpx.MockTransport(handler)))
+    monkeypatch.setattr(client_assertion, "_resolve_host", lambda host: ["93.184.216.34"])
+    doc = client_assertion.fetch_jwks("https://client.example:8443/jwks.json")
+    assert doc["keys"][0]["kid"] == "k1"
+    (req,) = seen
+    assert req.url.host == "93.184.216.34" and req.url.port == 8443 and req.url.path == "/jwks.json"
+    assert req.headers["Host"] == "client.example:8443"
+    assert req.extensions["sni_hostname"] == "client.example"
+
+
+@pytest.mark.parametrize("address", ["100.100.100.200", "100.64.0.1", "fd00:ec2::254", "::ffff:10.0.0.5",
+                                     "192.0.2.10"])
+def test_jwks_uri_must_resolve_to_a_global_address(monkeypatch, address):
+    monkeypatch.setattr(client_assertion, "_resolve_host", lambda host: [address])
+    with pytest.raises(client_assertion.OAuthError, match="non-public"):
+        client_assertion.validate_jwks_uri("https://client.example/jwks", allow_loopback=False)
+
+
+def test_loopback_jwks_uri_must_resolve_to_loopback(monkeypatch):
+    """The development allowance covers this machine only, even for a *.localhost name."""
+    monkeypatch.setattr(client_assertion, "_resolve_host", lambda host: ["10.0.0.5"])
+    with pytest.raises(client_assertion.OAuthError, match="this machine"):
+        client_assertion.validate_jwks_uri("http://keys.localhost/jwks", allow_loopback=True)
+
+
+def _tls_server(tmp_path, cert_hostname, body):
+    """A one-shot HTTPS server on 127.0.0.1 with a self-signed certificate for ``cert_hostname``."""
+    import datetime
+    import http.server
+    import ssl
+    import threading
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.x509.oid import NameOID
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, cert_hostname)])
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cert = (x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(key.public_key())
+            .serial_number(x509.random_serial_number()).not_valid_before(now - datetime.timedelta(minutes=5))
+            .not_valid_after(now + datetime.timedelta(hours=1))
+            .add_extension(x509.SubjectAlternativeName([x509.DNSName(cert_hostname)]), critical=False)
+            .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+            .sign(key, hashes.SHA256()))
+    cert_file, key_file = tmp_path / "cert.pem", tmp_path / "key.pem"
+    cert_file.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    key_file.write_text(_pem(key))
+    received = {}
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            received["host"] = self.headers.get("Host")
+            data = json.dumps(body).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, *args):
+            pass
+
+    server_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    server_ctx.load_cert_chain(cert_file, key_file)
+    server_ctx.sni_callback = lambda sock, sni, ctx: received.__setitem__("sni", sni)
+    httpd = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    httpd.socket = server_ctx.wrap_socket(httpd.socket, server_side=True)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd, ssl.create_default_context(cafile=str(cert_file)), received
+
+
+@pytest.mark.parametrize("cert_hostname, ok", [("keys.example", True), ("other.example", False)])
+def test_pinned_fetch_over_real_tls_verifies_the_hostname(tmp_path, monkeypatch, cert_hostname, ok):
+    """Against a real TLS server: connecting to the pinned IP still sends the hostname as SNI and Host, and the
+    certificate is verified against the hostname (a certificate for another name is refused)."""
+    import httpx
+    httpd, client_ctx, received = _tls_server(tmp_path, cert_hostname, {"keys": []})
+    real_client = httpx.Client
+    # the only test-side change: trust the self-signed certificate instead of the system store
+    monkeypatch.setattr(client_assertion.httpx, "Client", lambda **kw: real_client(**{**kw, "verify": client_ctx}))
+    url = f"https://keys.example:{httpd.server_address[1]}/jwks.json"
+    try:
+        if ok:
+            r = client_assertion._get_pinned(url, "127.0.0.1")
+            assert r.status_code == 200 and r.json() == {"keys": []}
+            assert received == {"sni": "keys.example", "host": f"keys.example:{httpd.server_address[1]}"}
+        else:
+            with pytest.raises(httpx.ConnectError, match="(?i)certificate|hostname"):
+                client_assertion._get_pinned(url, "127.0.0.1")
+    finally:
+        httpd.shutdown()

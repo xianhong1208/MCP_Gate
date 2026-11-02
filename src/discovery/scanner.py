@@ -81,6 +81,17 @@ class ScannerSSRFError(Exception):
     """Connection target address rejected by SSRF protection"""
 
 
+class ScannerResolveError(ScannerSSRFError):
+    """The target host did not resolve to any usable address. The scanner refuses it rather than letting the
+    HTTP client resolve the name again at connect time, which would bypass the address check."""
+
+
+# Cloud metadata endpoints the generic range checks below do not catch: AWS IMDS over IPv6 sits in the
+# unique-local range (fd00::/8, otherwise allowed as an intranet address) and Alibaba Cloud's sits in the
+# carrier-grade NAT range 100.64.0.0/10. 169.254.169.254 is already covered by the link-local check.
+_BLOCKED_METADATA_ADDRESSES = {"fd00:ec2::254", "100.100.100.200"}
+
+
 # audience (the peer's MCP URL) -> short-lived bearer token, or None when MCP Gate cannot mint one
 TokenFactory = Callable[[str], Optional[str]]
 
@@ -125,26 +136,27 @@ def _is_bearer_challenge(www_authenticate: Optional[str]) -> bool:
     return bool(www_authenticate) and www_authenticate.strip().lower().startswith("bearer")
 
 
-def _resolve_validated_ip(host: str) -> Optional[str]:
+def _resolve_validated_ip(host: str) -> str:
     """SSRF protection: resolve the host, validate every IP, and return a single IP that is safe to connect to.
 
     Rejects link-local (including the cloud metadata address 169.254.169.254), multicast, reserved and
-    unspecified (0.0.0.0) addresses; allows loopback / private addresses (scanning local managed services
-    and intranet MCP services is a legitimate use case).
+    unspecified (0.0.0.0) addresses plus the metadata addresses in _BLOCKED_METADATA_ADDRESSES; allows
+    loopback / private addresses (scanning local managed services and intranet MCP services is a legitimate
+    use case).
 
     Key point: the *validated* IP is returned so the caller can pin the connection to it, avoiding DNS
     rebinding between "resolve at validation time" and "resolve again at connect time" (first answer is a
     benign IP that passes the check, second answer is the metadata IP). If the host is already an IP
-    literal it is validated and returned directly. Resolution failure returns None (left to the connection
-    phase's timeout/error handling rather than being rejected here). Addresses security audit item AUDIT-1
-    (SSRF).
+    literal it is validated and returned directly. Resolution failure raises ScannerResolveError (fail
+    closed): handing the bare hostname to the HTTP client would let it resolve the name again, unchecked.
+    Addresses security audit item AUDIT-1 (SSRF) and #33.
     """
     import ipaddress as _ip
     import socket as _sock
     try:
         infos = _sock.getaddrinfo(host, None)
-    except _sock.gaierror:
-        return None
+    except (_sock.gaierror, UnicodeError) as e:
+        raise ScannerResolveError(f"Host {host} could not be resolved ({e}); refusing to connect")
     validated = None
     for info in infos:
         addr = info[4][0].split('%')[0]  # Strip the IPv6 scope id
@@ -160,13 +172,16 @@ def _resolve_validated_ip(host: str) -> Optional[str]:
             if validated is None:
                 validated = addr
             continue
-        if ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified:
+        if (ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified
+                or str(ip) in _BLOCKED_METADATA_ADDRESSES):
             raise ScannerSSRFError(
                 f"Refusing to connect to disallowed address {addr} "
                 f"(link-local / cloud-metadata / reserved addresses are blocked)"
             )
         if validated is None:
             validated = addr
+    if validated is None:
+        raise ScannerResolveError(f"Host {host} did not resolve to a usable address; refusing to connect")
     return validated
 
 
@@ -217,8 +232,12 @@ class MCPScanner:
             List of open ports
         """
         # SSRF protection (AUDIT-1): resolve and validate once, then pin the connection to that IP
-        # (prevents DNS rebinding)
-        connect_host = _resolve_validated_ip(host) or host
+        # (prevents DNS rebinding). An unresolvable host has no open ports; a disallowed address still raises.
+        try:
+            connect_host = _resolve_validated_ip(host)
+        except ScannerResolveError as e:
+            logger.warning(f"Port scan skipped: {e}")
+            return []
         tasks = [self._check_port(connect_host, port) for port in ports]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -303,11 +322,15 @@ class MCPScanner:
         so servers protected by MCP Gate still report their real name, version and tools.
         """
         public_url = f"{protocol}://{_url_host(host)}:{port}{path}"
-        # SSRF protection (AUDIT-1): resolve and validate once, pin the connection to that IP (prevents
-        # DNS rebinding), and keep the original Host header so vhost routing is unaffected.
-        connect_host = _resolve_validated_ip(host) or host
-        url = f"{protocol}://{_url_host(connect_host)}:{port}{path}"
         start_time = time.time()
+        # SSRF protection (AUDIT-1): resolve and validate once, pin the connection to that IP (prevents
+        # DNS rebinding), and keep the original Host header so vhost routing is unaffected. A host that does
+        # not resolve, or resolves to a blocked address, is reported as a failed check and never contacted.
+        try:
+            connect_host = _resolve_validated_ip(host)
+        except ScannerSSRFError as e:
+            return MCPVerifyResult(success=False, error=str(e), response_time_ms=(time.time() - start_time) * 1000)
+        url = f"{protocol}://{_url_host(connect_host)}:{port}{path}"
 
         headers = {
             "Content-Type": "application/json",
@@ -340,7 +363,10 @@ class MCPScanner:
                     json=payload,
                     headers=headers,
                     timeout=timeout,
-                    ssl=False
+                    ssl=False,
+                    # A redirect hands the peer control over where we connect next (e.g. a 307 to
+                    # http://169.254.169.254/), bypassing the address check above: never follow one.
+                    allow_redirects=False,
                 ) as response:
                     elapsed_ms = (time.time() - start_time) * 1000
                     logger.info(f"MCP verify response: status={response.status}, content-type={response.headers.get('Content-Type', 'N/A')}")
@@ -474,8 +500,9 @@ class MCPScanner:
     ) -> List[MCPToolInfo]:
         """Get the tool list of an MCP service (three-step flow: initialize -> initialized -> tools/list)."""
         # SSRF protection (AUDIT-1): resolve and validate once, pin the connection to that IP (prevents
-        # DNS rebinding), and keep the original Host header so vhost routing is unaffected.
-        connect_host = _resolve_validated_ip(host) or host
+        # DNS rebinding), and keep the original Host header so vhost routing is unaffected. ScannerSSRFError
+        # (blocked address or unresolvable host) propagates so the caller can say why.
+        connect_host = _resolve_validated_ip(host)
         url = f"{protocol}://{_url_host(connect_host)}:{port}{path}"
 
         headers = {
@@ -503,7 +530,8 @@ class MCPScanner:
                 }
 
                 async with session.post(
-                    url, json=init_request, headers=headers, timeout=timeout, ssl=False
+                    url, json=init_request, headers=headers, timeout=timeout, ssl=False,
+                    allow_redirects=False,  # never follow a redirect (see verify_mcp_service)
                 ) as init_response:
                     if init_response.status == 401:
                         raise PermissionError("Service requires authentication. Please configure auth_token for this service.")
@@ -529,7 +557,8 @@ class MCPScanner:
                     notify_headers["mcp-session-id"] = session_id
 
                 async with session.post(
-                    url, json=initialized_notification, headers=notify_headers, timeout=timeout, ssl=False
+                    url, json=initialized_notification, headers=notify_headers, timeout=timeout, ssl=False,
+                    allow_redirects=False,
                 ) as notify_response:
                     # Consume the response body (even though it is not needed, read it to avoid connection issues)
                     await notify_response.read()
@@ -547,7 +576,8 @@ class MCPScanner:
                     tools_headers["mcp-session-id"] = session_id
 
                 async with session.post(
-                    url, json=tools_request, headers=tools_headers, timeout=timeout, ssl=False
+                    url, json=tools_request, headers=tools_headers, timeout=timeout, ssl=False,
+                    allow_redirects=False,
                 ) as response:
                     if response.status == 401:
                         raise PermissionError("Service requires authentication. Please configure auth_token for this service.")

@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import List, Optional
 from urllib.parse import parse_qs, urlencode
@@ -52,6 +53,13 @@ async def _form(request: Request) -> dict:
     """application/x-www-form-urlencoded (per the OAuth spec) -- parsed by hand, no python-multipart needed."""
     raw = (await request.body()).decode("utf-8", "replace")
     return {k: v[0] for k, v in parse_qs(raw).items() if v}
+
+
+async def _authenticate_client(request: Request, db: Session, form: dict):
+    """oauth.authenticate_client off the event loop: a private_key_jwt client may need its jwks_uri fetched,
+    a blocking network call (DNS + HTTPS, up to the fetch timeout) that must not stall every other request."""
+    return await asyncio.to_thread(oauth.authenticate_client, db,
+                                   authorization_header=request.headers.get("Authorization", ""), form=form)
 
 
 # ---------------------------------------------------------------------------
@@ -172,7 +180,7 @@ async def token(request: Request, db: Session = Depends(get_db)):
         grant_type = form.get("grant_type")
         if not grant_type:
             raise OAuthError("invalid_request", "missing grant_type")
-        client = oauth.authenticate_client(db, authorization_header=request.headers.get("Authorization", ""), form=form)
+        client = await _authenticate_client(request, db, form)
         if grant_type not in client.grant_type_list():
             raise OAuthError("unauthorized_client", f"client may not use grant_type={grant_type}")
         ip = _client_ip(request)
@@ -209,7 +217,7 @@ async def revoke(request: Request, db: Session = Depends(get_db)):
     """Token revocation (RFC 7009). Only tokens issued to the authenticated client are revoked; always returns 200."""
     try:
         form = await _form(request)
-        client = oauth.authenticate_client(db, authorization_header=request.headers.get("Authorization", ""), form=form)
+        client = await _authenticate_client(request, db, form)
         if form.get("token"):
             oauth.revoke_token(db, client=client, token=form["token"], ip=_client_ip(request))
         return JSONResponse(content={}, status_code=200, headers=NO_STORE)
@@ -224,7 +232,7 @@ async def revoked_tokens(request: Request, db: Session = Depends(get_db)):
     only those revoked since a unix timestamp (`since`). Requires confidential-client authentication."""
     try:
         form = await _form(request)
-        caller = oauth.authenticate_client(db, authorization_header=request.headers.get("Authorization", ""), form=form)
+        caller = await _authenticate_client(request, db, form)
         return JSONResponse(content=oauth.revoked_feed(db, caller=caller, since=form.get("since")), headers=NO_STORE)
     except OAuthError as e:
         return _error_json(e)
@@ -237,7 +245,7 @@ async def usage_report(request: Request, db: Session = Depends(get_db)):
     authentication."""
     try:
         form = await _form(request)
-        caller = oauth.authenticate_client(db, authorization_header=request.headers.get("Authorization", ""), form=form)
+        caller = await _authenticate_client(request, db, form)
         try:
             events = json.loads(form.get("events") or "[]")
         except ValueError:
@@ -255,7 +263,7 @@ async def introspect(request: Request, db: Session = Depends(get_db)):
     (resource server) can introspect any token."""
     try:
         form = await _form(request)
-        caller = oauth.authenticate_client(db, authorization_header=request.headers.get("Authorization", ""), form=form)
+        caller = await _authenticate_client(request, db, form)
         token_value = form.get("token")
         if not token_value:
             return JSONResponse(content={"active": False}, headers=NO_STORE)
