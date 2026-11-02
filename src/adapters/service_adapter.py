@@ -1,10 +1,13 @@
 """Service domain adapter."""
 
+import re
 from typing import Optional
 
 from db.crud import ServiceCRUD, normalize_audience, normalize_service_host
 from db.models import Service
 from src.adapters.exceptions import ConflictError, NotFoundError, ValidationFailedError
+from src.logging import get_logger
+from src.utils import public_cache
 from src.utils.field_limits import FieldTooLongError, check_max_length, column_limit
 from src.utils.mcp_target import InvalidTargetError, validate_host, validate_mcp_path, validate_port, validate_protocol
 
@@ -14,9 +17,19 @@ def fallback_service_name(host: str, port: int) -> str:
     return f"mcp-{normalize_service_host(host).replace('.', '-')}-{port}"
 
 
+_logger = get_logger("services")
+
+_UNSAFE_NAME_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
+
+
 def sanitize_server_name(server_name: str) -> str:
-    """Turn an MCP serverInfo.name into a service name (no spaces or slashes, cut to fit the column)."""
-    return server_name.replace(" ", "-").replace("/", "-")[:column_limit(Service.name)]
+    """Turn an MCP serverInfo.name into a service name: ASCII letters, digits, '.', '_' and '-' only.
+
+    The name is chosen by the remote server and ends up in copy-paste shell snippets (H-08), so anything else
+    (spaces, ';', '$', quotes, newlines, non-ASCII) becomes '-'. Returns "" when nothing usable is left; the
+    caller then falls back to the generated name.
+    """
+    return _UNSAFE_NAME_CHARS.sub("-", server_name or "").strip("-.")[:column_limit(Service.name)].strip("-.")
 
 
 def fallback_service_description(host: str, port: int) -> str:
@@ -85,6 +98,13 @@ def _check_lengths(fields: dict) -> None:
 class ServiceAdapter(ServiceCRUD):
 
     @classmethod
+    def delete(cls, db, service_id):
+        """Delete a service; its declared scopes go with it (cascade), so the cached discovery metadata too."""
+        deleted = super().delete(db, service_id)
+        public_cache.invalidate()
+        return deleted
+
+    @classmethod
     def adopt_server_name(cls, db, service, server_name: Optional[str]) -> Optional[str]:
         """Replace a generated fallback name with the server's real name, once it becomes readable.
 
@@ -123,6 +143,57 @@ class ServiceAdapter(ServiceCRUD):
             return None
         cls.update(db, str(service.id), description=desc)
         return desc
+
+    @classmethod
+    def delete_unmanaged(cls, db, service_id) -> str:
+        """Delete a service from the Services page; returns its name (#22).
+
+        A service that a managed instance (Marketplace / BYO) still points at is refused with 409
+        `service.managed_use_uninstall`: deleting only the row would leave the container or process running,
+        unregistered and without OAuth in front of it. Uninstall stops it first and removes the service too.
+        """
+        from src.adapters.managed_adapter import ManagedMcpProcessAdapter
+
+        service = cls.get_existing(db, service_id)
+        owner = next((p for p in ManagedMcpProcessAdapter.list_all(db) if p.service_id == service.id), None)
+        if owner is not None:
+            raise ConflictError(
+                code="service.managed_use_uninstall",
+                params={"name": service.name, "process_id": str(owner.id), "process_name": owner.name},
+                fallback=(f"'{service.name}' is run by the managed instance '{owner.name}'. "
+                          "Uninstall it from the Marketplace instead; that stops it and removes the service."),
+            )
+        name = service.name
+        cls.delete(db, service_id)
+        return name
+
+    @classmethod
+    def register_discovered(cls, db, *, tools: list, response_time_ms=None, **fields):
+        """Register one scanned server with its tools and an `online` health stamp, all or nothing (#20).
+
+        The CRUD steps commit separately, so a failure after the service row was written is undone by
+        deleting that row again (tools cascade). The error is re-raised for the caller to report per server.
+        """
+        from src.adapters.managed_adapter import MCPToolAdapter
+
+        created_id = None
+        try:
+            service = cls.create(db=db, **fields)
+            created_id = str(service.id)
+            if tools:
+                MCPToolAdapter.sync_tools(db, created_id, tools)
+            cls.update_health(db=db, service_id=created_id, status="online", response_time_ms=response_time_ms,
+                              reset_fail_count=True)
+            return service
+        except Exception:
+            db.rollback()
+            if created_id is not None:
+                try:
+                    cls.delete(db, created_id)
+                except Exception as cleanup_error:  # leave the original error in charge
+                    db.rollback()
+                    _logger.error(f"Could not remove half-registered service {created_id}: {cleanup_error}")
+            raise
 
     @classmethod
     def create_checked(cls, db, **kwargs):

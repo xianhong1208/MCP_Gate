@@ -45,18 +45,22 @@ class LaunchRequest:
     labels: Dict[str, str] = field(default_factory=dict)
 
 
-def bridge_argv(inner_command: List[str], port: int) -> List[str]:
+def bridge_argv(inner_command: List[str], port: int, host: Optional[str] = None) -> List[str]:
     """supergateway argv bridging a stdio MCP server to Streamable HTTP on ``port``.
 
     --outputTransport streamableHttp (not legacy SSE) and --stateful are what this project's scanner and
-    health check need; see the Docker runtime for the history."""
-    return [
+    health check need; see the Docker runtime for the history. ``host`` adds ``--host`` (supergateway >= 4.2.0;
+    older versions ignore the unknown flag and listen on every interface, so the process runtime also pins
+    the bind another way). Inside a container the default (all interfaces) is what the port mapping needs."""
+    argv = [
         SUPERGATEWAY_BIN, "--stdio", " ".join(inner_command),
         "--outputTransport", "streamableHttp",
         "--stateful",
         "--streamableHttpPath", STDIO_HTTP_PATH,
-        "--port", str(port),
     ]
+    if host:
+        argv += ["--host", host]
+    return argv + ["--port", str(port)]
 
 
 class Runtime(ABC):

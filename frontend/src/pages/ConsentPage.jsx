@@ -8,6 +8,7 @@ import AuthShell from '../components/AuthShell'
 import { formatTime } from '../utils/format'
 import { describeScope } from '../utils/scopes'
 import { Button, Badge, CheckRow, Alert, Spinner, SectionLabel } from '../components/ui'
+import { safeHttpUrl } from '../utils/url'
 
 /**
  * OAuth consent page: /consent?rid=<authorization request id>
@@ -122,11 +123,9 @@ export default function ConsentPage() {
       {/* Client */}
       <div className="flex items-start gap-3">
         <span className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-md border border-border bg-muted text-muted-foreground">
-          {client.logo_uri ? (
-            <img src={client.logo_uri} alt="" className="h-full w-full object-cover" />
-          ) : (
-            <Bot className="h-5 w-5" aria-hidden="true" />
-          )}
+          {/* The client's logo_uri is never loaded: fetching it would tell whoever registered the client
+              that (and from where) the owner is looking at this page (H-16). */}
+          <Bot className="h-5 w-5" aria-hidden="true" />
         </span>
         <div className="min-w-0">
           <h2 className="text-lg font-semibold leading-tight text-foreground">
@@ -135,16 +134,18 @@ export default function ConsentPage() {
           <p className="mt-1 text-sm text-muted-foreground">{t('consent.subtitle', { email: user?.email || '' })}</p>
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <Badge tone={client.created_via === 'dcr' ? 'warning' : 'success'}>{viaLabel}</Badge>
-            {client.client_uri && (
+            {client.client_uri && (safeHttpUrl(client.client_uri) ? (
               <a
-                href={client.client_uri}
+                href={safeHttpUrl(client.client_uri)}
                 target="_blank"
-                rel="noreferrer"
+                rel="noopener noreferrer"
                 className="max-w-[240px] truncate font-mono text-xs text-muted-foreground transition-colors duration-200 hover:text-link"
               >
                 {client.client_uri}
               </a>
-            )}
+            ) : (
+              <span className="max-w-[240px] truncate font-mono text-xs text-muted-foreground">{client.client_uri}</span>
+            ))}
           </div>
         </div>
       </div>

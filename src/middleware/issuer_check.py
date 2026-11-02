@@ -12,11 +12,21 @@ peer is a trusted proxy, exactly like the rate limiter treats ``X-Forwarded-For`
 otherwise silence or fake the warning. When a header carries a comma-separated list, the rightmost
 value is used: it is the one written by the trusted proxy we are talking to, whereas the leftmost
 one may have come from the client.
+
+The Host header is client-controlled, so the registry is hardened against being fed garbage (H-10): only
+syntactically valid ``http(s)://host[:port]`` values are recorded, at most ``MAX_OBSERVED`` of them (least
+recently seen evicted first, entries from internet peers before those from local or proxied peers), each
+expiring ``TTL_SECONDS`` after it was last seen. The "set OAUTH_ISSUER to ..." advice is given only for hosts
+reached from a loopback / private address or a trusted proxy (``plausible``); a host named by an internet
+client is reported neutrally, and those warnings are rate limited.
 """
 
 from __future__ import annotations
 
+import ipaddress
+import re
 import threading
+import time
 from datetime import datetime, timezone
 from typing import Dict, Iterable, Optional
 from urllib.parse import urlsplit
@@ -29,8 +39,103 @@ from .public_cors import is_public_oauth_path
 
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 
+MAX_OBSERVED = 20
+TTL_SECONDS = 24 * 3600
+MAX_UNTRUSTED_WARNINGS_PER_WINDOW = 20
+_WARNING_WINDOW_SECONDS = 3600
+_MAX_HOST_LEN = 253
+_LABEL = re.compile(r"^[a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?$")
+
+# Address ranges a LAN client or a reverse proxy sits in. Spelled out rather than ip.is_private, which also
+# covers documentation and other reserved ranges.
+_LOCAL_NETWORKS = tuple(ipaddress.ip_network(n) for n in (
+    "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "fc00::/7",
+))
+
 _lock = threading.Lock()
 _observed: Dict[str, dict] = {}
+_warn_window = {"start": 0.0, "count": 0, "suppressed": False}
+
+
+def _now_real() -> float:
+    return time.monotonic()
+
+
+_now = _now_real  # patched by tests
+
+
+def _valid_host(hostport: str) -> bool:
+    """``host[:port]`` where host is a DNS name, an IPv4 address or a bracketed IPv6 literal."""
+    if not hostport or len(hostport) > _MAX_HOST_LEN + 7:
+        return False
+    if hostport.startswith("["):
+        literal, _, rest = hostport[1:].partition("]")
+        if rest and not (rest.startswith(":") and _valid_port(rest[1:])):
+            return False
+        try:
+            return ipaddress.ip_address(literal).version == 6
+        except ValueError:
+            return False
+    host, sep, port = hostport.rpartition(":")
+    if not sep:
+        host = hostport
+    elif not _valid_port(port):
+        return False
+    if not host or len(host) > _MAX_HOST_LEN:
+        return False
+    labels = host.rstrip(".").split(".")
+    return all(_LABEL.match(label) for label in labels)
+
+
+def _valid_port(port: str) -> bool:
+    return port.isdigit() and 1 <= int(port) <= 65535
+
+
+def is_recordable(base_url: str) -> bool:
+    """A normalised base URL that could be a real address of this server."""
+    scheme, sep, hostport = base_url.partition("://")
+    return bool(sep) and scheme in ("http", "https") and _valid_host(hostport)
+
+
+def _peer_is_local_or_proxy(peer: str, trusted_proxies: Iterable[str]) -> bool:
+    """Loopback / private / link-local peers and trusted proxies: a mismatch seen from them is most likely a
+    real misconfiguration (LAN address, unconfigured reverse proxy), not a forged Host header."""
+    if not peer:
+        return False
+    if is_ip_in_whitelist(peer, list(trusted_proxies or ())):
+        return True
+    try:
+        ip = ipaddress.ip_address(peer)
+    except ValueError:
+        return False
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
+        ip = ip.ipv4_mapped
+    return ip.is_loopback or ip.is_link_local or any(ip in net for net in _LOCAL_NETWORKS if net.version == ip.version)
+
+
+def _expire(now: float) -> None:
+    for key in [k for k, v in _observed.items() if now - v["_seen_at"] > TTL_SECONDS]:
+        del _observed[key]
+
+
+def _evict_one() -> None:
+    # Hosts named by internet clients go first, then the least recently seen.
+    victim = min(_observed.values(), key=lambda v: (v["plausible"], v["_seen_at"]))
+    del _observed[victim["base_url"]]
+
+
+def _allow_untrusted_warning(now: float) -> Optional[bool]:
+    """True: log it. None: log the one-off "suppressing" notice instead. False: stay quiet."""
+    with _lock:
+        if now - _warn_window["start"] > _WARNING_WINDOW_SECONDS:
+            _warn_window.update(start=now, count=0, suppressed=False)
+        if _warn_window["count"] < MAX_UNTRUSTED_WARNINGS_PER_WINDOW:
+            _warn_window["count"] += 1
+            return True
+        if not _warn_window["suppressed"]:
+            _warn_window["suppressed"] = True
+            return None
+        return False
 
 
 def normalize_base_url(scheme: str, host: str) -> str:
@@ -72,27 +177,42 @@ def external_base_url(scope: dict, trusted_proxies: Iterable[str]) -> str:
 
 
 def observed_mismatches() -> list[dict]:
-    """Distinct base URLs that reached the OAuth surface while differing from the issuer, oldest first."""
+    """Distinct base URLs that reached the OAuth surface while differing from the issuer, oldest first
+    (at most MAX_OBSERVED, none older than TTL_SECONDS since last seen)."""
     with _lock:
-        return [dict(v) for v in sorted(_observed.values(), key=lambda v: v["first_seen"])]
+        _expire(_now())
+        return [{k: v for k, v in e.items() if not k.startswith("_")}
+                for e in sorted(_observed.values(), key=lambda v: (v["first_seen"], v["_seen_at"]))]
 
 
 def reset_observed() -> None:
     with _lock:
         _observed.clear()
+        _warn_window.update(start=0.0, count=0, suppressed=False)
 
 
-def record_mismatch(observed: str, issuer: str, path: str) -> bool:
-    """Remember an observed base URL; return True the first time it is seen (the caller logs then)."""
-    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+def record_mismatch(observed: str, issuer: str, path: str, *, peer: str = "",
+                    trusted_proxies: Iterable[str] = ()) -> bool:
+    """Remember an observed base URL; return True the first time it is seen (the caller logs then).
+    Values that cannot be a real address are ignored (False)."""
+    if not is_recordable(observed):
+        return False
+    plausible = _peer_is_local_or_proxy(peer, trusted_proxies)
+    stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    now = _now()
     with _lock:
+        _expire(now)
         entry = _observed.get(observed)
         if entry is None:
-            _observed[observed] = {"base_url": observed, "issuer": issuer, "first_seen": now, "last_seen": now,
-                                   "count": 1, "first_path": path}
+            while len(_observed) >= MAX_OBSERVED:
+                _evict_one()
+            _observed[observed] = {"base_url": observed, "issuer": issuer, "first_seen": stamp, "last_seen": stamp,
+                                   "count": 1, "first_path": path, "plausible": plausible, "_seen_at": now}
             return True
-        entry["last_seen"] = now
+        entry["last_seen"] = stamp
+        entry["_seen_at"] = now
         entry["count"] += 1
+        entry["plausible"] = entry["plausible"] or plausible
         return False
 
 
@@ -108,13 +228,32 @@ class IssuerMismatchMiddleware:
     async def __call__(self, scope, receive, send):
         if scope["type"] == "http" and is_public_oauth_path(scope["path"]):
             observed = external_base_url(scope, self.trusted_proxies)
-            if observed != self.issuer_base and record_mismatch(observed, self.issuer, scope["path"]):
-                logger.warning(
-                    "OAuth request to {path} arrived via {observed} but OAUTH_ISSUER is {issuer}. Tokens carry "
-                    "iss={issuer} and discovery advertises {issuer}/..., so clients using {observed} will fail "
-                    "verification or reach the wrong endpoints. Either set OAUTH_ISSUER to {observed}, or reach "
-                    "the server through the issuer host (and list the proxy in security.trusted_proxies so "
-                    "X-Forwarded-Proto/Host are honoured).",
-                    path=scope["path"], observed=observed, issuer=self.issuer,
-                )
+            client = scope.get("client")
+            peer = client[0] if client else ""
+            if observed != self.issuer_base and record_mismatch(
+                    observed, self.issuer, scope["path"], peer=peer, trusted_proxies=self.trusted_proxies):
+                self._warn(observed, peer, scope["path"])
         await self.app(scope, receive, send)
+
+    def _warn(self, observed: str, peer: str, path: str) -> None:
+        if _peer_is_local_or_proxy(peer, self.trusted_proxies):
+            logger.warning(
+                "OAuth request to {path} arrived via {observed} but OAUTH_ISSUER is {issuer}. Tokens carry "
+                "iss={issuer} and discovery advertises {issuer}/..., so clients using {observed} will fail "
+                "verification or reach the wrong endpoints. Either set OAUTH_ISSUER to {observed}, or reach "
+                "the server through the issuer host (and list the proxy in security.trusted_proxies so "
+                "X-Forwarded-Proto/Host are honoured).",
+                path=path, observed=observed, issuer=self.issuer,
+            )
+            return
+        allowed = _allow_untrusted_warning(_now())
+        if allowed:
+            logger.warning(
+                "OAuth request to {path} from {peer} named host {observed}, which is not OAUTH_ISSUER ({issuer}). "
+                "The Host header is chosen by the client; if your clients do not use this address, ignore it. "
+                "If they do, see docs/troubleshooting.md (issuer mismatch).",
+                path=path, peer=peer or "?", observed=observed, issuer=self.issuer,
+            )
+        elif allowed is None:
+            logger.warning("Further issuer-mismatch warnings for hosts named by internet clients are suppressed "
+                           "for the next hour.")

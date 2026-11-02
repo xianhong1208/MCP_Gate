@@ -367,6 +367,9 @@ export default function DashboardPage() {
                   {t('dashboard.issuerMismatch.seen', { n: m.count })}
                   {m.last_seen && <> · <LastChecked value={m.last_seen} withIcon={false} className="text-xs" /></>}
                 </span>
+                {m.plausible === false && (
+                  <span className="text-xs text-muted-foreground">{t('dashboard.issuerMismatch.untrusted')}</span>
+                )}
               </li>
             ))}
           </ul>

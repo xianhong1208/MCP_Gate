@@ -131,7 +131,9 @@ function ToolsModal({ service, onClose }) {
 
 // Scan services modal
 function ScanModal({ onClose, onScanComplete }) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
+  // Per-row / per-host errors come as {error, params, fallback}; translate the code when we know it
+  const errorText = (e) => (e && i18n.exists(`errors.${e.error}`) ? t(`errors.${e.error}`, e.params || {}) : e?.fallback)
   const [formData, setFormData] = useState({
     hosts: 'localhost',
     portMode: 'individual',
@@ -227,6 +229,14 @@ function ScanModal({ onClose, onScanComplete }) {
               {scanResult.registered_count > 0 && t('services.scan.registeredServices', { count: scanResult.registered_count })}
             </Alert>
 
+            {scanResult.skipped_hosts?.length > 0 && (
+              <Alert tone="warning" title={t('services.scan.skippedHosts')}>
+                <ul className="space-y-0.5">
+                  {scanResult.skipped_hosts.map((h) => <li key={h.host}>{errorText(h)}</li>)}
+                </ul>
+              </Alert>
+            )}
+
             {scanResult.discovered.some((s) => s.server_name === '(requires auth)') && (
               <Alert tone="warning" title={t('services.scan.authRequiredTitle')}>
                 {t('services.scan.authRequiredHint')}
@@ -250,6 +260,9 @@ function ScanModal({ onClose, onScanComplete }) {
                         ) : svc.server_name && (
                           <p className="mt-0.5 text-xs text-muted-foreground">{svc.server_name} {svc.server_version && `v${svc.server_version}`}</p>
                         )}
+                        {svc.register_error && (
+                          <p className="mt-0.5 text-xs text-danger">{errorText(svc.register_error)}</p>
+                        )}
                       </div>
                       <div className="flex shrink-0 items-center gap-3 text-xs text-muted-foreground">
                         {svc.tools_count > 0 && (
@@ -257,6 +270,8 @@ function ScanModal({ onClose, onScanComplete }) {
                         )}
                         {svc.registered ? (
                           <Badge tone="success"><Check className="h-3 w-3" />{t('services.scan.registered')}</Badge>
+                        ) : svc.register_error ? (
+                          <Badge tone="danger">{t('services.scan.registerFailed')}</Badge>
                         ) : svc.service_name ? (
                           <Badge tone="neutral">{t('services.scan.alreadyExists')}</Badge>
                         ) : null}

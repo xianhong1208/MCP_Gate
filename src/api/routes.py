@@ -21,7 +21,7 @@ from src.api.schemas import (
     ServiceInfo, ServiceListResponse, ServiceUpdateRequest,
 )
 from src.audit import ActorType, AuditAction, AuditService, AuditStatus, ResourceType
-from src.identity import get_current_user
+from src.identity import get_current_user, get_optional_current_user
 from src.logging import get_logger
 from src.scheduler import get_scheduler
 from src.utils.crypto import encrypt_token
@@ -84,8 +84,10 @@ async def health_check():
 
 
 @router.get("/api/system/version", tags=["System"])
-async def get_version():
-    """Version and build information. Public."""
+def get_version(user: Optional[AdminUser] = Depends(get_optional_current_user)):
+    """Version and build information. The app version is public; build, Python and OS details need a session."""
+    if user is None:
+        return {"version": __version__}
     return {
         "version": __version__, "build_time": __build_time__, "build_commit": __build_commit__,
         "python_version": platform.python_version(), "platform": platform.system(),
@@ -162,13 +164,12 @@ async def update_service(service_id: str, request: ServiceUpdateRequest, http_re
 @router.delete("/api/services/{service_id}", tags=["Services"])
 async def delete_service(service_id: str, http_request: Request, db: Session = Depends(get_db),
                          user: AdminUser = Depends(get_current_user)):
-    """Delete an MCP server and its tool list and token events."""
+    """Delete an MCP server and its tool list and token events. A server run by a managed instance answers 409
+    `service.managed_use_uninstall`: uninstall it from the Marketplace instead, which also stops it."""
     try:
-        service = ServiceAdapter.get_existing(db, service_id)
+        name = ServiceAdapter.delete_unmanaged(db, service_id)
     except AdapterError as e:
         raise _adapter_exc(e)
-    name = service.name
-    ServiceAdapter.delete(db, service_id)
     _audit(db, http_request, user, AuditAction.DELETE_SERVICE, ResourceType.SERVICE, service_id, {"name": name})
     return {"message": f"Service '{name}' deleted"}
 
@@ -435,7 +436,17 @@ async def get_dashboard_overview(db: Session = Depends(get_db), _: AdminUser = D
 async def run_cleanup_now(http_request: Request, db: Session = Depends(get_db),
                           user: AdminUser = Depends(get_current_user)):
     """Run the retention clean-up jobs now."""
-    results = await get_scheduler().run_all_cleanup_now()
+    report = await get_scheduler().run_all_cleanup_now()
+    results, errors = report["results"], report["errors"]
+    if errors:
+        # A failed job used to be counted as 0 and reported as success (#23)
+        _audit(db, http_request, user, AuditAction.CLEANUP_EXPIRED, ResourceType.SYSTEM, None,
+               {"results": results, "errors": errors}, status=AuditStatus.FAILURE)
+        jobs = ", ".join(sorted(errors))
+        raise HTTPException(status_code=500, detail={
+            "error": "system.cleanup_failed", "params": {"jobs": jobs}, "results": results, "errors": errors,
+            "fallback": f"Cleanup failed for: {jobs}. See the server log.",
+        })
     _audit(db, http_request, user, AuditAction.CLEANUP_EXPIRED, ResourceType.SYSTEM, None, results)
     return {"message": "Cleanup completed", "results": results}
 

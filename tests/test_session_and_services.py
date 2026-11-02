@@ -91,3 +91,14 @@ def test_audit_logs_recorded(owner_client, service):
     logs = owner_client.get("/api/audit/logs").json()
     actions = {entry["action"] for entry in logs["logs"]}
     assert {"admin_setup", "create_service"} <= actions
+
+
+def test_system_version_hides_platform_details_without_a_session(client):
+    """H-18: only the app version is public; Python version, OS and build details need a session."""
+    body = client.get("/api/system/version").json()
+    assert set(body) == {"version"} and body["version"]
+
+
+def test_system_version_shows_details_to_the_owner(owner_client):
+    body = owner_client.get("/api/system/version").json()
+    assert {"version", "build_time", "build_commit", "python_version", "platform"} <= set(body)

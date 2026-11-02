@@ -155,6 +155,16 @@ class DiscoveredServiceInfo(BaseModel):
     registered: bool = False
     service_name: Optional[str] = None
     service_id: Optional[str] = None
+    # Set when auto-register failed for this server: {error, params, fallback} (the scan itself succeeds)
+    register_error: Optional[dict] = None
+
+
+class ScanHostError(BaseModel):
+    """A host the scan skipped, e.g. because it resolves to a blocked address."""
+    host: str
+    error: str
+    params: dict = {}
+    fallback: str = ""
 
 
 class ScanResponse(BaseModel):
@@ -164,6 +174,7 @@ class ScanResponse(BaseModel):
     scanned_ports: int
     discovered: List[DiscoveredServiceInfo]
     registered_count: int = 0
+    skipped_hosts: List[ScanHostError] = []
 
 
 class VerifyRequest(BaseModel):

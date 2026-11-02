@@ -217,6 +217,7 @@
       "title": "{{n}} 個 host 在存取 OAuth 端點時與 OAUTH_ISSUER({{issuer}})不一致",
       "hint": "Token 的 iss 與 discovery 公告的網址都是上面的 issuer,透過以下位址存取的 client 會驗證失敗或連到錯的端點:",
       "seen": "{{n}} 次請求",
+      "untrusted": "(由外部網路的 client 指定,Host 標頭可能是偽造的)",
       "fix": "請把 OAUTH_ISSUER 改成 client 實際使用的位址,或改由 issuer 的 host 存取,並把反向代理加入 security.trusted_proxies。詳見 docs/troubleshooting.md。"
     },
     "chart": {
@@ -534,6 +535,8 @@
       "toolsCount": "{{n}} 個 tools",
       "registered": "已註冊",
       "alreadyExists": "已存在",
+      "registerFailed": "未註冊",
+      "skippedHosts": "已略過的主機",
       "protectedLabel": "由 MCP Gate 保護"
     },
     "detail": {
@@ -1061,6 +1064,7 @@
       "too_long": "「{{field}}」太長（最多 {{max}} 個字元）。"
     },
     "service": {
+      "managed_use_uninstall": "「{{name}}」由託管伺服器「{{process_name}}」執行，請改到「市集」解除安裝；這會先停止它，再一併移除服務。",
       "not_found": "找不到服務",
       "duplicate": "已存在同名稱與 host:port 的服務。",
       "no_host_port": "服務未設定 host 或 port",
@@ -1079,7 +1083,9 @@
       "invalid_port": "連接埠 {{port}} 超出範圍（1-65535）。",
       "invalid_port_range": "連接埠範圍須符合 1 ≤ 起始 ≤ 結束 ≤ 65535。",
       "too_many_probes": "掃描範圍過大：{{hosts}} 個主機 × {{ports}} 個連接埠，超過 {{limit}} 次探測的上限。",
-      "invalid_host": "「{{host}}」不是有效的主機名稱或 IP 位址。"
+      "invalid_host": "「{{host}}」不是有效的主機名稱或 IP 位址。",
+      "address_blocked": "{{host}} 解析到被封鎖的位址（link-local 或雲端 metadata），已略過。",
+      "register_failed": "無法註冊此伺服器，詳情請見伺服器日誌。"
     },
     "managed": {
       "env_vars_unknown": "{{catalog_id}} 含有未知的環境變數:{{extras}}",
@@ -1105,6 +1111,9 @@
       "definition_not_found": "找不到這個自訂 MCP 定義",
       "definition_in_use": "此定義仍有已部署的實例,請先解除安裝後再刪除",
       "unknown_env_vars": "含有定義中未宣告的環境變數:{{extras}}"
+    },
+    "system": {
+      "cleanup_failed": "清理工作失敗：{{jobs}}。詳情請見伺服器日誌。"
     },
     "generic": {
       "serverError": "發生未預期的錯誤,請稍後再試",

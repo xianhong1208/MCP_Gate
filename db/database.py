@@ -92,8 +92,11 @@ def get_db() -> Generator[Session, None, None]:
 
 
 def reset_engine() -> None:
-    """Drop the singletons (used by tests when switching the DB URL)."""
+    """Drop the singletons (used by tests when switching the DB URL), and the documents cached from the old DB."""
+    from src.utils import public_cache
+
     global _engine, _session_factory
+    public_cache.invalidate()
     if _engine is not None:
         _engine.dispose()
     _engine = None

@@ -25,6 +25,7 @@ from db.models import (
     AdminUser, OAuthAuthorizationCode, OAuthAuthorizationRequest, OAuthClient, OAuthToken, Service, format_datetime,
     local_now,
 )
+from db.database import make_session
 from db.seed import CONSOLE_CLIENT_ID, SCANNER_CLIENT_ID
 from src.adapters import (
     OAuthAuthRequestAdapter, OAuthClientAdapter, OAuthCodeAdapter, OAuthConsentAdapter, OAuthScopeAdapter,
@@ -36,6 +37,7 @@ from src.oauth import client_assertion, signing_keys
 from src.oauth.consent_policy import should_skip_consent
 from src.oauth.errors import OAuthError
 from src.oauth.jwt_utils import JWTVerifyError, decode_rs256, sign_rs256, unverified_header
+from src.utils import public_cache
 from src.utils.crypto import hash_token
 from src.utils.field_limits import column_limit
 
@@ -1119,6 +1121,20 @@ def mint_audience_token(db: Session, audience: str) -> Optional[str]:
         ttl_seconds=SCANNER_TOKEN_TTL_SECONDS, record=False,
     )
     return token
+
+
+def cached_metadata() -> dict:
+    """build_metadata from memory, for the public discovery endpoints; opens a session only on a cache miss.
+    Keyed on the issuer; the scope adapters invalidate it when scopes_supported changes."""
+
+    def build() -> dict:
+        db = make_session()
+        try:
+            return build_metadata(db)
+        finally:
+            db.close()
+
+    return public_cache.get_or_build(f"metadata:{issuer()}", build)
 
 
 def build_metadata(db: Session) -> dict:

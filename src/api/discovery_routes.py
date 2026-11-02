@@ -8,9 +8,10 @@ from sqlalchemy.orm import Session
 from db import get_db
 from db.models import AdminUser, Service
 from src.adapters import (
-    MCPToolAdapter, ServiceAdapter, describe_server, fallback_service_description, fallback_service_name,
+    ServiceAdapter, describe_server, fallback_service_description, fallback_service_name,
     sanitize_server_name,
 )
+from src.adapters.exceptions import AdapterError
 from src.api.schemas import DiscoveredServiceInfo, ScanRequest, ScanResponse, VerifyRequest, VerifyResponse
 from src.audit import ActorType, AuditService, AuditStatus, ResourceType
 from src.discovery.scanner import get_scanner
@@ -105,9 +106,10 @@ async def scan_services(request: ScanRequest, http_request: Request, db: Session
     ports = _scan_ports(request)  # validated outside the try: its 422s must not become a 500
     try:
         scanner = get_scanner()
+        skipped_hosts: list = []
         discovered = await scanner.discover_services(
             hosts=request.hosts, ports=ports, verify=True, get_tools=True, auth_token=request.auth_token,
-            token_factory=_scanner_token_factory(db),
+            token_factory=_scanner_token_factory(db), host_errors=skipped_hosts,
         )
 
         discovered_info = []
@@ -125,7 +127,8 @@ async def scan_services(request: ScanRequest, http_request: Request, db: Session
                 if request.service_name:
                     service_name = request.service_name
                 elif vr and vr.server_name and vr.server_name != "(requires auth)":
-                    service_name = sanitize_server_name(vr.server_name)
+                    service_name = (sanitize_server_name(vr.server_name)
+                                    or fallback_service_name(svc.host, svc.port))
                 else:
                     service_name = fallback_service_name(svc.host, svc.port)
 
@@ -137,27 +140,32 @@ async def scan_services(request: ScanRequest, http_request: Request, db: Session
                 else:
                     description = (describe_server(vr.server_name, vr.server_version, vr.server_description)
                                    if vr else None) or fallback_service_description(svc.host, svc.port)
-                    new_service = ServiceAdapter.create(
-                        db=db, name=service_name, description=description, host=svc.host, port=svc.port,
-                        protocol=svc.protocol, mcp_path=svc.mcp_path, source="auto_discovered",
-                        requires_auth=svc.requires_auth,
-                    )
-                    if svc.tools:
-                        MCPToolAdapter.sync_tools(db, str(new_service.id), [
-                            {"name": t.name, "description": t.description, "input_schema": t.input_schema}
-                            for t in svc.tools
-                        ])
-                    ServiceAdapter.update_health(db=db, service_id=str(new_service.id), status="online",
-                                                 response_time_ms=vr.response_time_ms if vr else None,
-                                                 reset_fail_count=True)
-                    info.registered = True
-                    info.service_name = service_name
-                    info.service_id = str(new_service.id)
-                    registered_count += 1
-                    await get_ws_manager().broadcast_service_added(
-                        service_id=str(new_service.id), service_name=service_name,
-                        service_data={"host": svc.host, "port": svc.port, "tools_count": len(svc.tools)},
-                    )
+                    # One server failing to register is reported on its row; the scan goes on (#20)
+                    try:
+                        new_service = ServiceAdapter.register_discovered(
+                            db, name=service_name, description=description, host=svc.host, port=svc.port,
+                            protocol=svc.protocol, mcp_path=svc.mcp_path, source="auto_discovered",
+                            requires_auth=svc.requires_auth,
+                            tools=[{"name": t.name, "description": t.description, "input_schema": t.input_schema}
+                                   for t in svc.tools],
+                            response_time_ms=vr.response_time_ms if vr else None,
+                        )
+                    except AdapterError as e:
+                        info.register_error = e.to_detail()
+                        logger.warning(f"Scan: {svc.host}:{svc.port} not registered: {e.code}")
+                    except Exception as e:
+                        info.register_error = {"error": "discovery.register_failed", "params": {},
+                                               "fallback": "This server could not be registered."}
+                        logger.error(f"Scan: registering {svc.host}:{svc.port} failed: {e}")
+                    else:
+                        info.registered = True
+                        info.service_name = service_name
+                        info.service_id = str(new_service.id)
+                        registered_count += 1
+                        await get_ws_manager().broadcast_service_added(
+                            service_id=str(new_service.id), service_name=service_name,
+                            service_data={"host": svc.host, "port": svc.port, "tools_count": len(svc.tools)},
+                        )
             discovered_info.append(info)
 
         AuditService.log_from_request(
@@ -165,12 +173,14 @@ async def scan_services(request: ScanRequest, http_request: Request, db: Session
             status=AuditStatus.SUCCESS, actor_type=ActorType.ADMIN, actor_id=str(current_user.id),
             actor_name=current_user.audit_name,
             details={"hosts": request.hosts, "ports_count": len(ports), "discovered_count": len(discovered_info),
-                     "registered_count": registered_count},
+                     "registered_count": registered_count,
+                     "register_failed_count": sum(1 for i in discovered_info if i.register_error),
+                     "skipped_hosts": [h["host"] for h in skipped_hosts]},
         )
         return ScanResponse(
             success=True, message=f"Scan completed. Found {len(discovered_info)} MCP services.",
             scanned_hosts=len(request.hosts), scanned_ports=len(ports), discovered=discovered_info,
-            registered_count=registered_count,
+            registered_count=registered_count, skipped_hosts=skipped_hosts,
         )
     except Exception as e:
         logger.error(f"Scan error: {e}")
