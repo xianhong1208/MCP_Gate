@@ -401,7 +401,6 @@ async def integration_snippets(service_id: str, db: Session = Depends(get_db),
     fastmcp_server = f'''from fastmcp import FastMCP
 from fastmcp.server.auth import RemoteAuthProvider
 from fastmcp.server.auth.providers.jwt import JWTVerifier
-from pydantic import AnyHttpUrl
 
 auth = RemoteAuthProvider(
     token_verifier=JWTVerifier(
@@ -409,7 +408,7 @@ auth = RemoteAuthProvider(
         issuer="{base}",
         audience="{audience}",
     ),
-    authorization_servers=[AnyHttpUrl("{base}")],
+    authorization_servers=["{base}"],
     base_url="{audience}",
 )
 
@@ -431,7 +430,6 @@ if __name__ == "__main__":
 from fastmcp import FastMCP
 from fastmcp.server.auth import RemoteAuthProvider
 from mcp_gate_hooks import MCPGateVerifier
-from pydantic import AnyHttpUrl
 
 auth = RemoteAuthProvider(
     token_verifier=MCPGateVerifier(
@@ -443,7 +441,7 @@ auth = RemoteAuthProvider(
         poll_interval=15,                         # seconds between revocation-feed polls
         flush_interval=30,                        # seconds between usage reports
     ),
-    authorization_servers=[AnyHttpUrl("{base}")],
+    authorization_servers=["{base}"],
     base_url="{audience}",
 )
 

@@ -75,6 +75,7 @@ def test_session_invalidated_after_password_change(owner_client):
     time.sleep(1.1)
     assert owner_client.put("/api/session/me/password", json={"current_password": OWNER_PASSWORD,
                                                               "new_password": "another-password-9"}).status_code == 200
+    owner_client.cookies.clear()  # httpx2 (used by TestClient when installed) keeps the new cookie next to a set() one
     owner_client.cookies.set("mcp_session", old_cookie)
     assert owner_client.get("/api/session/me").status_code == 401
 

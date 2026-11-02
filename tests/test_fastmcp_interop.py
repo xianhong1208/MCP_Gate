@@ -78,7 +78,6 @@ def mcp_server(center):
     from fastmcp import FastMCP
     from fastmcp.server.auth import RemoteAuthProvider
     from fastmcp.server.auth.providers.jwt import JWTVerifier
-    from pydantic import AnyHttpUrl
 
     port = _free_port()
     base_url = f"http://127.0.0.1:{port}"
@@ -86,7 +85,7 @@ def mcp_server(center):
     auth = RemoteAuthProvider(
         token_verifier=JWTVerifier(jwks_uri=f"{center['url']}/.well-known/jwks.json",
                                    issuer=center["url"], audience=mcp_url),
-        authorization_servers=[AnyHttpUrl(center["url"])],
+        authorization_servers=[center["url"]],
         base_url=base_url,
     )
     mcp = FastMCP("interop-demo", instructions="MCP Gate demo server", auth=auth)

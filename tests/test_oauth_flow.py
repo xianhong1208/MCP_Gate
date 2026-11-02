@@ -319,6 +319,10 @@ def test_key_rotation_keeps_old_tokens_verifiable(owner_client, service):
 def test_snippets(owner_client, service):
     s = owner_client.get(f"/api/oauth/snippets/{service['id']}").json()
     assert "JWTVerifier" in s["fastmcp_server"]
+    # The issuer goes in as a plain string: AnyHttpUrl would publish "http://testserver/", which mcp 2
+    # clients reject as an issuer mismatch
+    assert 'authorization_servers=["http://testserver"]' in s["fastmcp_server"]
+    assert "AnyHttpUrl" not in s["fastmcp_server"]
     assert s["audience"] == RESOURCE and s["issuer"] == "http://testserver"
     assert s["mcp_json_oauth"]["mcpServers"]["demo-mcp"]["url"] == RESOURCE
 

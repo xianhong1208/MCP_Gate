@@ -40,6 +40,7 @@ def test_change_password_invalidates_old_session(owner_client):
                                                            "new_password": "new-password-456"})
     assert r.status_code == 200
     # The response set a new cookie; putting the old cookie back must be rejected
+    owner_client.cookies.clear()  # httpx2 (used by TestClient when installed) keeps the new cookie next to a set() one
     owner_client.cookies.set("mcp_session", old_cookie)
     assert owner_client.get("/api/session/me").status_code == 401
     login = owner_client.post("/api/session/login", json={"email": OWNER_EMAIL, "password": "new-password-456"})

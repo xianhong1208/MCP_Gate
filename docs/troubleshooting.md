@@ -16,6 +16,9 @@ The client is reusing a stale `client_id` whose redirect URIs changed. Delete th
 **Consent screen never appears; client times out**
 The browser cannot reach `OAUTH_ISSUER`. Check that the issuer is the address your browser can open, not an internal one, and that `/oauth/authorize` is proxied.
 
+**`Authorization server metadata issuer mismatch: http://host:4568 != http://host:4568/`**
+The MCP server advertises MCP Gate with a trailing slash in `/.well-known/oauth-protected-resource`, and the client (mcp 2 and later) compares it with `OAUTH_ISSUER` as an exact string. This happens when the server passes `AnyHttpUrl(issuer)` to `RemoteAuthProvider(authorization_servers=...)`: pydantic adds the slash. Pass the issuer as a plain string (fastmcp 4 keeps it as-is), as the **Integration** panel snippet does.
+
 **`401` from the MCP server after a successful login**
 The server's `JWTVerifier` settings do not match MCP Gate: `issuer` must equal `OAUTH_ISSUER` exactly, `audience` must equal the audience shown on the service page, and `jwks_uri` must be reachable from the server. Compare with the **Integration** panel.
 

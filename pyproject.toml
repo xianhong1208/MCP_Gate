@@ -64,7 +64,7 @@ dev = [
     "pytest-cov>=4.1.0",
     "pytest-mock>=3.14.0",
     "ruff>=0.9.0",
-    "fastmcp>=3.4.10,<4",  # 4.x pulls mcp 2, whose stricter issuer check needs its own work
+    "fastmcp>=4.1.5",
     "psycopg2-binary>=2.9.10",
 ]
 
