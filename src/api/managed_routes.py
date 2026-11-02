@@ -438,8 +438,9 @@ async def get_managed_logs(
 
 
 # ---------- BYO (bring-your-own launch command) MCP definitions ----------
-# Equivalent to authorising arbitrary container execution -- only the logged-in owner may use it
-# (see docs/design/byo-mcp-launch.md).
+# Saving a launch command is equivalent to authorising arbitrary container execution, so only
+# the logged-in owner may use these endpoints. Launch arguments are vetted by
+# src/marketplace/argv_policy.py and secrets in them are masked in every API response.
 
 def _byo_info(d) -> ByoDefinitionInfo:
     """API view of a BYO definition: secrets in args are masked (the stored argv keeps them for launching)."""
