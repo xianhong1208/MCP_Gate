@@ -4,7 +4,8 @@ in the console, without introspecting every request.
     MCP_GATE_CLIENT_ID=mcpc_... MCP_GATE_CLIENT_SECRET=... uv run python examples/fastmcp_server_hooks.py
 
 Register a confidential client in the console first (OAuth Clients -> Register trusted client, any client
-secret method) and put its credentials in the environment. See mcp_gate_hooks.py for the details.
+secret method), bind it to this server (PUT /api/oauth/clients/{client_id}/resource-server with
+{"service_id": "<this server's id>"}) and put its credentials in the environment. See mcp_gate_hooks.py.
 """
 
 import os

@@ -10,7 +10,9 @@ verifier closes both without introspecting every request:
   ``POST <issuer>/oauth/usage``, which feeds the token's "last used" and the dashboard statistics.
 
 Both endpoints require a *confidential* client registered in the MCP Gate console (OAuth Clients ->
-Register trusted client). Give the verifier either that client's secret or, for ``private_key_jwt``
+Register trusted client) and bound to this server as its resource server (``resource_service_id`` when
+registering it, or ``PUT /api/oauth/clients/{client_id}/resource-server``); the feed and usage reports then
+cover only tokens whose audience is this server. Give the verifier either that client's secret or, for ``private_key_jwt``
 clients, the private key PEM and its kid.
 
 Usage::
@@ -88,6 +90,11 @@ class MCPGateVerifier(JWTVerifier):
         self._ensure_running()
         result = await super().verify_token(token)
         if result is None:
+            return None
+        if (result.claims or {}).get("token_use") != "access":
+            # Only access tokens authorize requests. MCP Gate's refresh tokens name its token endpoint as their
+            # audience, but refresh tokens from releases before 1.2 carried this server's audience.
+            logger.info("Bearer token rejected for client %s: not an access token", result.client_id)
             return None
         jti = (result.claims or {}).get("jti")
         if jti and jti in self._revoked:

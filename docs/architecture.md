@@ -50,6 +50,7 @@ Confidential clients exchange `client_id` + secret for an access token whose `su
 |---|---|
 | Format | JWT, RS256, `typ: at+jwt` (`refresh+jwt` for refresh tokens) |
 | Claims | `iss`, `sub`, `aud`, `scope`, `client_id`, `jti`, `iat`, `exp`, `token_use`; `email`, `name` when a user is present |
+| Refresh tokens | `token_use: refresh`, `aud` = `<issuer>/oauth/token` (never a resource), so a resource server checking `aud` refuses them as Bearer tokens; the granted resource is kept in the token record |
 | Access lifetime | `OAUTH_ACCESS_EXPIRE_MINUTES` (60) |
 | Refresh lifetime | `OAUTH_REFRESH_EXPIRE_DAYS` (30) |
 | Verification | Signature against JWKS, `iss`, `exp`; `aud` and scopes by the resource server |
@@ -57,7 +58,7 @@ Confidential clients exchange `client_id` + secret for an access token whose `su
 
 ## Keys and secrets
 
-- Signing keys are RSA-2048 by default. The private PEM is encrypted with AES-256-GCM (`ENCRYPTION_KEY`) before it is stored; `kid` is the RFC 7638 thumbprint. Rotation creates a new active key and keeps old ones in JWKS so existing tokens still verify.
+- Signing keys are RSA-2048 by default. The private PEM is encrypted with AES-256-GCM (`ENCRYPTION_KEY`) before it is stored; `kid` is the RFC 7638 thumbprint. Rotation creates a new active key; the old one stays in JWKS for the access-token lifetime plus 5 minutes (`oauth.retired_key_publish_minutes`), and beyond that only while a live access token or PAT it signed is still recorded. Once dropped from JWKS, tokens it signed are inactive on introspection too; MCP Gate keeps the key to verify refresh tokens it signed.
 - `ENCRYPTION_KEY` and `SESSION_SECRET_KEY` come from the environment or from `data/secrets.json` (created on first start, mode `0600`).
 - Console sessions are HS256 JWTs in an HttpOnly cookie, signed with `SESSION_SECRET_KEY`, and rejected if issued before the user's last password change.
 

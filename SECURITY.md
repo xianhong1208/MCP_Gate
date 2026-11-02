@@ -12,21 +12,22 @@ Only the latest release on the `main` branch receives fixes.
 
 | Asset | Protection |
 |---|---|
-| RS256 signing private keys | Encrypted at rest with AES-256-GCM using `ENCRYPTION_KEY`; only public keys are ever served (`/.well-known/jwks.json`). |
+| RS256 signing private keys | Encrypted at rest with AES-256-GCM using `ENCRYPTION_KEY`; only public keys are ever served (`/.well-known/jwks.json`). After a rotation the old public key leaves the JWKS once nothing it signed can still be valid (the access-token lifetime, or longer while a PAT it signed is live), so rotating answers a key compromise: revoke the PATs signed before the rotation and the old key stops being accepted. |
 | Stored secrets (service bearer tokens, container environment variables) | Same AES-256-GCM encryption. The console never returns them; environment values are write-only. |
 | `ENCRYPTION_KEY`, `SESSION_SECRET_KEY` | Read from the environment, or generated on first start and written to `data/secrets.json` with mode `0600`. Rotating `ENCRYPTION_KEY` makes existing private keys and secrets unreadable. |
 | Owner password | bcrypt (12 rounds). Changing it invalidates every existing console session. |
 | Console session | HttpOnly cookie, `SameSite=Lax` by default, `Secure` when `SECURE_COOKIE=true`; 12-hour lifetime, 30-minute idle timeout in the UI. |
-| Authorization codes | Stored as SHA-256 hashes, single use, 120-second lifetime, bound to client, redirect URI, PKCE challenge and resource. Reuse revokes every token derived from the code. |
-| Refresh tokens | Rotated on every use; presenting a rotated token revokes the whole family. |
+| Authorization codes | Stored as SHA-256 hashes, single use, 120-second lifetime, bound to client, redirect URI, PKCE challenge and resource. Reuse revokes every token derived from the code; a redemption that fails a check (PKCE verifier, client, redirect URI, resource) burns the code. |
+| Refresh tokens | Rotated on every use; presenting a rotated token revokes the whole family. Their audience is MCP Gate's own token endpoint, so a resource server that checks `aud` (every `JWTVerifier` configured with its audience) refuses them as Bearer tokens; `MCPGateVerifier` also requires `token_use: access`. |
 | Client secrets | Stored as SHA-256 hashes, compared in constant time, returned once at registration. |
-| Redirect URIs | Exact-match against the registered list; `http` is allowed only for loopback hosts. |
+| Redirect URIs | Exact-match against the registered list, except that a loopback IP literal (`http://127.0.0.1/…`, `http://[::1]/…`) matches on any port (RFC 8252 §7.3); `localhost` must match exactly. `http` is allowed only for loopback hosts. |
 
 ## Known limitations
 
+- **Resource servers are explicit.** Only a confidential client registered in the console *and bound to one MCP server* may read the revocation feed, introspect other clients' tokens or report usage, and it only sees tokens whose audience is that server. Any other client can introspect only its own tokens.
 - **Access tokens verified offline are revoked with a delay.** A server that uses a plain `JWTVerifier` keeps accepting a revoked access token until it expires (60 minutes by default). Use `MCPGateVerifier` from `examples/mcp_gate_hooks.py`, which polls `POST /oauth/revoked` (default every 15 s) and also reports usage, so the window shrinks to the poll interval; use FastMCP's `IntrospectionTokenVerifier` where it must be instant.
 - **Single tenant.** Anyone who can sign in to the console is an administrator. Protect the console URL accordingly.
 - **Single process.** The rate limiter counts requests in memory and the scheduler (expiry purges, audit retention, health checks) runs inside the server process. Run exactly one MCP Gate process: with several workers or replicas each one keeps its own counters, so the effective limit multiplies, and every scheduled job runs once per process. MCP Gate logs a warning at startup when `WEB_CONCURRENCY` or `UVICORN_WORKERS` is greater than 1.
 - **Client IPs behind a proxy.** `X-Forwarded-For` / `X-Real-IP` are honoured only when the direct peer is listed in `security.trusted_proxies`, and `X-Forwarded-For` is read right to left, skipping trusted proxies. List every proxy hop you run there, or the audit log and the rate limiter see the proxy's address instead of the client's.
-- **Dynamic client registration is open by default** (`OAUTH_DCR_AUTO_APPROVE=true`). Registering a client grants nothing by itself — the owner must approve every authorization on the consent screen — but set it to `false` if you want to review clients before they can even ask.
+- **Dynamic client registration is open by default** (`OAUTH_DCR_AUTO_APPROVE=true`). Registering a client grants nothing by itself — the owner must approve every authorization on the consent screen — but set it to `false` if you want to review clients before they can even ask. A dynamically registered client can only use `authorization_code` and `refresh_token`: `client_credentials` (a token without consent) is reserved for confidential clients the owner registers in the console.
 - **Plain HTTP is for local use only.** Deploy behind HTTPS (see [docs/deploy.md](docs/deploy.md)); the OAuth 2.1 specification requires it.

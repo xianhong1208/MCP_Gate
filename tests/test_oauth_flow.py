@@ -24,6 +24,16 @@ def _register(client, **overrides):
     return r.json()
 
 
+def _register_console(client, **overrides):
+    """A client the owner registers in the console (the only way to get client_credentials)."""
+    body = {"client_name": "Console client", "redirect_uris": [], "grant_types": ["client_credentials"],
+            "token_endpoint_auth_method": "client_secret_basic"}
+    body.update(overrides)
+    r = client.post("/api/oauth/clients", json=body)
+    assert r.status_code == 201, r.text
+    return r.json()
+
+
 def _authorize_and_consent(client, client_id, *, scope=None, resource=RESOURCE, remember=False):
     verifier, challenge = make_pkce()
     params = {
@@ -97,8 +107,7 @@ def test_dcr_rejects_bad_redirect(client):
 
 
 def test_dcr_confidential_client_gets_secret_once(client):
-    reg = _register(client, token_endpoint_auth_method="client_secret_post",
-                    grant_types=["client_credentials"], redirect_uris=[])
+    reg = _register(client, token_endpoint_auth_method="client_secret_post")
     assert reg["client_secret"]
     r = client.get("/oauth/register")  # no such GET
     assert r.status_code in (404, 405)
@@ -238,8 +247,7 @@ def test_manual_client_skips_consent(owner_client, service):
 
 
 def test_client_credentials_grant(owner_client, service):
-    reg = _register(owner_client, token_endpoint_auth_method="client_secret_basic",
-                    grant_types=["client_credentials"], redirect_uris=[])
+    reg = _register_console(owner_client)
     r = owner_client.post("/oauth/token", data={"grant_type": "client_credentials", "resource": RESOURCE,
                                                 "scope": "mcp:tools:read"},
                           auth=(reg["client_id"], reg["client_secret"]))

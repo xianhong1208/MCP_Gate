@@ -13,9 +13,10 @@ import db.database as database
 from db.models import local_now
 from src.audit import record_scheduled_purge
 from src.adapters import (
-    AuditLogAdapter, OAuthAuthRequestAdapter, OAuthCodeAdapter, OAuthTokenAdapter, ServiceAdapter,
-    TokenUsageAdapter,
+    AuditLogAdapter, OAuthAuthRequestAdapter, OAuthClientAdapter, OAuthCodeAdapter, OAuthTokenAdapter,
+    ServiceAdapter, TokenUsageAdapter,
 )
+from src.config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +94,9 @@ class CleanupScheduler:
             n = OAuthAuthRequestAdapter.delete_expired(db)
             n += OAuthCodeAdapter.delete_expired(db)
             n += OAuthTokenAdapter.delete_expired(db)
+            unused_days = Config.get_oauth_config().dcr_unused_client_days
+            if unused_days and unused_days > 0:
+                n += OAuthClientAdapter.delete_unused_dcr(db, older_than=timedelta(days=unused_days))
             if n:
                 logger.info(f"Cleaned up {n} expired OAuth records")
             record_scheduled_purge(db, "expired_oauth", n)

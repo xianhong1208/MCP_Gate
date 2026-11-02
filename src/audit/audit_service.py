@@ -32,6 +32,7 @@ class AuditAction(str, Enum):
     OAUTH_CLIENT_APPROVE = "oauth_client_approve"
     OAUTH_CLIENT_REVOKE = "oauth_client_revoke"
     OAUTH_CLIENT_DELETE = "oauth_client_delete"
+    OAUTH_CLIENT_BIND = "oauth_client_bind"
     OAUTH_CONSENT_DELETE = "oauth_consent_delete"
     OAUTH_SCOPE_UPSERT = "oauth_scope_upsert"
     OAUTH_SCOPE_DELETE = "oauth_scope_delete"

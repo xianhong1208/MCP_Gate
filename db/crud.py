@@ -573,6 +573,20 @@ class OAuthClientCRUD:
         client.last_used_at = local_now()
         db.commit()
 
+    @staticmethod
+    def delete_unused_dcr(db: Session, older_than: timedelta) -> int:
+        """Delete dynamically registered clients that never obtained a token (no last use, no token record) and
+        were registered before ``older_than`` ago. Their pending requests, codes and consents go with them."""
+        has_tokens = db.query(OAuthToken.jti).filter(OAuthToken.client_id == OAuthClient.client_id).exists()
+        stale = db.query(OAuthClient).filter(
+            OAuthClient.created_via == "dcr", OAuthClient.last_used_at.is_(None),
+            OAuthClient.created_at < local_now() - older_than, ~has_tokens,
+        ).all()
+        for client in stale:
+            db.delete(client)
+        db.commit()
+        return len(stale)
+
 
 class OAuthAuthRequestCRUD:
 
@@ -750,15 +764,30 @@ class OAuthTokenCRUD:
 
     @staticmethod
     def list_revoked_unexpired(db: Session, *, since: Optional[datetime] = None,
-                               kinds: tuple = ("access", "pat")) -> List[OAuthToken]:
+                               kinds: tuple = ("access", "pat"), audience: Optional[str] = None) -> List[OAuthToken]:
         """Revoked tokens an offline verifier would otherwise still accept: revoked, not yet expired.
-        Bounded by the access-token lifetime, so the feed never grows without limit."""
+        Bounded by the access-token lifetime, so the feed never grows without limit. ``audience`` limits it to
+        the tokens of one server."""
         q = db.query(OAuthToken).filter(
             OAuthToken.revoked_at.isnot(None), OAuthToken.expires_at >= local_now(), OAuthToken.kind.in_(kinds),
+            # a refresh token rotated away in the normal course of things is not a revocation
+            or_(OAuthToken.kind != "refresh", OAuthToken.revoke_reason.is_(None),
+                OAuthToken.revoke_reason != "rotated"),
         )
+        if audience is not None:
+            q = q.filter(OAuthToken.audience == audience)
         if since is not None:
             q = q.filter(OAuthToken.revoked_at >= since)
         return q.order_by(OAuthToken.revoked_at.asc()).all()
+
+    @staticmethod
+    def any_live_issued_between(db: Session, start: datetime, end: datetime,
+                                kinds: tuple = ("access", "pat")) -> bool:
+        """Is any recorded, unrevoked, unexpired token of ``kinds`` issued within [start, end]?"""
+        return db.query(OAuthToken.jti).filter(
+            OAuthToken.kind.in_(kinds), OAuthToken.revoked_at.is_(None), OAuthToken.expires_at >= local_now(),
+            OAuthToken.issued_at >= start, OAuthToken.issued_at <= end,
+        ).first() is not None
 
     @staticmethod
     def apply_usage(db: Session, token: OAuthToken, *, count: int, last_seen: Optional[datetime]) -> OAuthToken:

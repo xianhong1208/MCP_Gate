@@ -51,9 +51,30 @@ def _client_ip(request: Request) -> Optional[str]:
     return resolve_client_ip(request)
 
 
-async def _form(request: Request) -> dict:
+# Request-body caps for the public OAuth endpoints (anonymous callers; nothing legitimate comes close)
+REGISTRATION_BODY_LIMIT = 64 * 1024     # RFC 7591 metadata, including an inline jwks with a few keys
+FORM_BODY_LIMIT = 64 * 1024             # token / revoke / introspect / revocation feed
+USAGE_BODY_LIMIT = 512 * 1024           # up to MAX_USAGE_EVENTS usage events
+
+
+async def _read_body(request: Request, limit: int, error: str = "invalid_request") -> bytes:
+    """The request body, refused with 413 once it exceeds ``limit`` bytes (checked against Content-Length up front
+    and while streaming, so an oversized body is never buffered whole)."""
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > limit:
+        raise OAuthError(error, f"request body too large (maximum {limit} bytes)", 413)
+    chunks, size = [], 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > limit:
+            raise OAuthError(error, f"request body too large (maximum {limit} bytes)", 413)
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+async def _form(request: Request, limit: int = FORM_BODY_LIMIT) -> dict:
     """application/x-www-form-urlencoded (per the OAuth spec) -- parsed by hand, no python-multipart needed."""
-    raw = (await request.body()).decode("utf-8", "replace")
+    raw = (await _read_body(request, limit)).decode("utf-8", "replace")
     return {k: v[0] for k, v in parse_qs(raw).items() if v}
 
 
@@ -76,7 +97,7 @@ async def authorization_server_metadata(db: Session = Depends(get_db)):
 
 @router.get("/.well-known/jwks.json")
 async def jwks(db: Session = Depends(get_db)):
-    """Public signing keys (JWKS). MCP servers fetch these to verify tokens offline; includes retired keys so older tokens still verify. Public."""
+    """Public signing keys (JWKS). MCP servers fetch these to verify tokens offline; a rotated-out key stays published while tokens it signed can still be valid. Public."""
     return JSONResponse(content=get_jwks(db), headers={"Cache-Control": "public, max-age=300"})
 
 
@@ -88,7 +109,9 @@ async def register(request: Request, db: Session = Depends(get_db)):
     """Dynamic client registration (RFC 7591). Returns a client_id (and a one-time client_secret for confidential clients). Public."""
     try:
         try:
-            metadata = await request.json()
+            metadata = json.loads(await _read_body(request, REGISTRATION_BODY_LIMIT, "invalid_client_metadata"))
+        except OAuthError:
+            raise
         except Exception:
             raise OAuthError("invalid_client_metadata", "request body must be a JSON object")
         client, secret = oauth.register_client(db, metadata, created_via="dcr")
@@ -182,6 +205,10 @@ async def token(request: Request, db: Session = Depends(get_db)):
         grant_type = form.get("grant_type")
         if not grant_type:
             raise OAuthError("invalid_request", "missing grant_type")
+        if len(form.get("scope") or "") > oauth.MAX_SCOPE_PARAM:
+            raise OAuthError("invalid_scope", "scope is too long")
+        if len(form.get("resource") or "") > oauth.MAX_RESOURCE_PARAM:
+            raise OAuthError("invalid_target", "resource is too long")
         client = await _authenticate_client(request, db, form)
         if grant_type not in client.grant_type_list():
             raise OAuthError("unauthorized_client", f"client may not use grant_type={grant_type}")
@@ -231,7 +258,8 @@ async def revoke(request: Request, db: Session = Depends(get_db)):
 @router.post("/oauth/revoked")
 async def revoked_tokens(request: Request, db: Session = Depends(get_db)):
     """Revocation feed for MCP servers that verify JWTs offline: tokens revoked but not yet expired, optionally
-    only those revoked since a unix timestamp (`since`). Requires confidential-client authentication."""
+    only those revoked since a unix timestamp (`since`). Requires a resource server: a console-registered
+    confidential client bound to an MCP server; only that server's tokens are listed."""
     try:
         form = await _form(request)
         caller = await _authenticate_client(request, db, form)
@@ -243,10 +271,10 @@ async def revoked_tokens(request: Request, db: Session = Depends(get_db)):
 @router.post("/oauth/usage")
 async def usage_report(request: Request, db: Session = Depends(get_db)):
     """Usage report from an MCP server that verifies JWTs offline: `events` is a JSON array of
-    {jti, count, last_seen}. Feeds the token counters and the dashboard. Requires confidential-client
-    authentication."""
+    {jti, count (1..1,000,000), last_seen}. Feeds the token counters and the dashboard. Requires a resource server
+    (a console-registered confidential client bound to an MCP server); other servers' jtis are returned as unknown."""
     try:
-        form = await _form(request)
+        form = await _form(request, USAGE_BODY_LIMIT)
         caller = await _authenticate_client(request, db, form)
         try:
             events = json.loads(form.get("events") or "[]")
@@ -261,8 +289,8 @@ async def usage_report(request: Request, db: Session = Depends(get_db)):
 
 @router.post("/oauth/introspect")
 async def introspect(request: Request, db: Session = Depends(get_db)):
-    """Requires client authentication. A public client can only introspect its own tokens; a confidential client
-    (resource server) can introspect any token."""
+    """Requires client authentication. A client can introspect its own tokens; a resource server (a
+    console-registered confidential client bound to an MCP server) can introspect access tokens for that server."""
     try:
         form = await _form(request)
         caller = await _authenticate_client(request, db, form)

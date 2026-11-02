@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from db import get_db
-from db.models import AdminUser, OAuthScope
+from db.models import AdminUser, OAuthScope, format_datetime
 from src.adapters import (
     OAuthClientAdapter, OAuthConsentAdapter, OAuthKeyAdapter, OAuthScopeAdapter, OAuthTokenAdapter,
     ServiceAdapter, ServiceScopeAdapter, TokenUsageAdapter,
@@ -62,6 +62,13 @@ class ClientCreateRequest(BaseModel):
     # private_key_jwt: exactly one of these
     jwks_uri: Optional[str] = None
     jwks: Optional[dict] = None
+    # Resource-server binding: the MCP server this confidential client speaks for (revocation feed,
+    # introspection, usage reports). Without it the client is not a resource server.
+    resource_service_id: Optional[str] = None
+
+
+class ResourceServerBindingRequest(BaseModel):
+    service_id: Optional[str] = None
 
 
 @router.get("/clients")
@@ -131,18 +138,48 @@ async def revoke_client(client_id: str, request: Request, db: Session = Depends(
     return {**client.to_dict(), "tokens_revoked": revoked}
 
 
+@router.put("/clients/{client_id}/resource-server")
+async def bind_resource_server(client_id: str, body: ResourceServerBindingRequest, request: Request,
+                               db: Session = Depends(get_db), user: AdminUser = Depends(get_current_user)):
+    """Bind a console-registered confidential client to the MCP server it speaks for (or unbind with
+    `service_id: null`). Only a bound client may read the revocation feed, introspect other clients' tokens and
+    report usage, and it only ever sees tokens whose audience is that server."""
+    try:
+        client = OAuthClientAdapter.get_existing(db, client_id)
+    except AdapterError as e:
+        raise _adapter_exc(e)
+    if client.created_via != "manual":
+        raise HTTPException(status_code=400, detail={
+            "error": "oauth.invalid_client_metadata",
+            "fallback": "Only clients registered in the console can act as a resource server"})
+    audience = None
+    if body.service_id:
+        try:
+            audience = oauth.resource_server_audience_for(db, body.service_id, client.token_endpoint_auth_method)
+        except OAuthError as e:
+            raise _oauth_exc(e)
+    client.resource_audience = audience
+    OAuthClientAdapter.save(db, client)
+    _audit(db, request, user, AuditAction.OAUTH_CLIENT_BIND, ResourceType.OAUTH_CLIENT, client_id,
+           {"resource_audience": audience})
+    return client.to_dict()
+
+
 @router.delete("/clients/{client_id}")
 async def delete_client(client_id: str, request: Request, db: Session = Depends(get_db),
                         user: AdminUser = Depends(get_current_user)):
-    """Delete a client. Its token history is kept with the client name snapshotted; its remembered consents are removed."""
+    """Delete a client. Its tokens are revoked first (as Revoke does), then kept as history with the client name
+    snapshotted; its remembered consents are removed."""
     try:
         client = OAuthClientAdapter.get_existing(db, client_id)
     except AdapterError as e:
         raise _adapter_exc(e)
     if client.created_via == "system":
         raise HTTPException(status_code=400, detail={"error": "oauth.system_client", "fallback": "Built-in client"})
+    revoked = OAuthTokenAdapter.revoke_by_client(db, client_id, reason="client_deleted")
     OAuthClientAdapter.delete(db, client_id)
-    _audit(db, request, user, AuditAction.OAUTH_CLIENT_DELETE, ResourceType.OAUTH_CLIENT, client_id)
+    _audit(db, request, user, AuditAction.OAUTH_CLIENT_DELETE, ResourceType.OAUTH_CLIENT, client_id,
+           {"tokens_revoked": revoked})
     return {"message": "Client deleted"}
 
 
@@ -349,14 +386,16 @@ async def delete_consent(consent_id: str, request: Request, db: Session = Depend
 # ---------------------------------------------------------------------------
 @router.get("/keys")
 async def list_keys(db: Session = Depends(get_db), _: AdminUser = Depends(get_current_user)):
-    """Signing keys published in JWKS, with the active one marked."""
+    """Every signing key, with the active one marked and `published` telling whether it is still in the JWKS (a
+    retired key leaves it once nothing it signed can still be valid)."""
     keys = OAuthKeyAdapter.list_all(db)
-    return {"keys": [k.to_dict() for k in keys], "total": len(keys)}
+    return {"keys": [{**k.to_dict(), "published": signing_keys.is_published(db, k)} for k in keys],
+            "total": len(keys)}
 
 
 @router.post("/keys/rotate")
 async def rotate_key(request: Request, db: Session = Depends(get_db), user: AdminUser = Depends(get_current_user)):
-    """Create a new active signing key. Old keys stay in JWKS so existing tokens keep verifying."""
+    """Create a new active signing key. The old key stays in JWKS while tokens it signed can still be valid."""
     key = signing_keys.rotate_signing_key(db)
     _audit(db, request, user, AuditAction.OAUTH_KEY_ROTATE, ResourceType.SYSTEM, key.kid)
     return key.to_dict()
@@ -371,7 +410,7 @@ async def activity(limit: int = Query(50, ge=1, le=500), db: Session = Depends(g
     """Recent token events: issued, introspected, revoked."""
     rows = TokenUsageAdapter.recent(db, limit=limit)
     return {"events": [{
-        "at": r.used_at.isoformat() if r.used_at else None,
+        "at": format_datetime(r.used_at),
         "event": r.event, "grant_type": r.grant_type, "client_id": r.client_id, "sub": r.sub,
         "audience": r.audience, "service_id": str(r.service_id) if r.service_id else None,
         "success": bool(r.success), "ip": r.ip_address,
@@ -438,7 +477,9 @@ if __name__ == "__main__":
     fastmcp_hooks = f'''# Same server, but revocations take effect within seconds and usage shows up in the console.
 # Copy examples/mcp_gate_hooks.py from the MCP Gate repository next to this file, and register a
 # confidential client in the console (OAuth Clients -> Register trusted client, client secret or
-# private_key_jwt) whose credentials this server uses to talk back to MCP Gate.
+# private_key_jwt) bound to this server as its resource server
+# (PUT /api/oauth/clients/<CLIENT_ID>/resource-server {{"service_id": "{service.id}"}});
+# this server uses its credentials to talk back to MCP Gate.
 from fastmcp import FastMCP
 from fastmcp.server.auth import RemoteAuthProvider
 from mcp_gate_hooks import MCPGateVerifier

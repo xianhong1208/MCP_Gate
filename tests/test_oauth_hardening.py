@@ -4,7 +4,7 @@ history, session invalidation, third-party login state."""
 from urllib.parse import parse_qs, urlparse
 
 from tests.conftest import OWNER_PASSWORD
-from tests.test_oauth_flow import _authorize_and_consent, _exchange, _register
+from tests.test_oauth_flow import _authorize_and_consent, _exchange, _register, _register_console
 
 
 def test_public_client_cannot_introspect_others_tokens(owner_client, service):
@@ -21,9 +21,8 @@ def test_public_client_cannot_introspect_others_tokens(owner_client, service):
     peek = owner_client.post("/oauth/introspect", data={"token": tokens["access_token"], "client_id": other["client_id"]}).json()
     assert peek == {"active": False}
 
-    # Confidential client (= resource server, e.g. FastMCP IntrospectionTokenVerifier) -> allowed
-    rs = _register(owner_client, client_name="Resource server", token_endpoint_auth_method="client_secret_basic",
-                   grant_types=["client_credentials"], redirect_uris=[])
+    # The server's resource-server client (e.g. FastMCP IntrospectionTokenVerifier) -> allowed
+    rs = _register_console(owner_client, client_name="Resource server", resource_service_id=service["id"])
     seen = owner_client.post("/oauth/introspect", data={"token": tokens["access_token"]},
                              auth=(rs["client_id"], rs["client_secret"])).json()
     assert seen["active"] is True and seen["client_id"] == reg["client_id"]
