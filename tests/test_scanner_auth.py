@@ -81,3 +81,19 @@ def test_summarize_instructions_takes_first_paragraph():
     assert summarize_instructions("") is None and summarize_instructions(None) is None
     long = "x" * 500
     assert len(summarize_instructions(long)) == 200 and summarize_instructions(long).endswith("…")
+
+
+def test_requires_auth_follows_the_verify_result():
+    """A reachable no-auth server with zero tools is not "requires auth" (#34)."""
+    from src.discovery.scanner import DiscoveredService
+
+    open_ok = MCPVerifyResult(success=True, reachable=True, server_name="empty")
+    assert DiscoveredService("h", 1, verify_result=open_ok).requires_auth is False
+    locked = MCPVerifyResult(success=True, reachable=True, requires_auth=True, server_name="(requires auth)")
+    assert DiscoveredService("h", 1, verify_result=locked).requires_auth is True
+    minted = MCPVerifyResult(success=True, reachable=True, requires_auth=True, server_name="anydoc")
+    assert DiscoveredService("h", 1, verify_result=minted).requires_auth is True
+    # nothing verified: the safe default
+    assert DiscoveredService("h", 1).requires_auth is True
+    failed = MCPVerifyResult(success=False, reachable=True, error="HTTP 404")
+    assert DiscoveredService("h", 1, verify_result=failed).requires_auth is True

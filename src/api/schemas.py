@@ -1,8 +1,8 @@
 """API request / response models."""
 
-from typing import List, Literal, Optional
+from typing import Annotated, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # ==================== Service ====================
@@ -130,8 +130,10 @@ class AuditLogStatsResponse(BaseModel):
 # ==================== Discovery ====================
 
 class ScanRequest(BaseModel):
-    hosts: List[str] = ["localhost"]
-    ports: List[int] = [3000, 8000, 8080]
+    # Port values, ranges and the hosts x ports budget are checked by the scan route (so the console
+    # gets a readable error); these caps only stop absurd payloads before they are even parsed.
+    hosts: List[Annotated[str, Field(max_length=253)]] = Field(["localhost"], max_length=1024)
+    ports: List[int] = Field([3000, 8000, 8080], max_length=65535)
     port_range_start: Optional[int] = None
     port_range_end: Optional[int] = None
     auto_register: bool = True
