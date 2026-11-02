@@ -52,12 +52,16 @@ def _identity_error(e: IdentityError) -> JSONResponse:
     return JSONResponse(status_code=e.status_code, content={"error": e.code, "params": e.params, "message": str(e)})
 
 
-def _login_response(user: AdminUser, extra: Optional[dict] = None) -> JSONResponse:
-    token, expires_at = session_manager.issue(user)
-    body = {"user": user.to_dict(), "idle_timeout_minutes": identity_service.session_idle_timeout_minutes()}
+def _login_response(db: Session, user: AdminUser, extra: Optional[dict] = None) -> JSONResponse:
+    issued = session_manager.issue(db, user)
+    body = {
+        "user": user.to_dict(), "idle_timeout_minutes": identity_service.session_idle_timeout_minutes(),
+        # The second half of the session: the console keeps it in localStorage and sends it as X-Session-Binding
+        "session_binding": issued.binding,
+    }
     if extra:
         body.update(extra)
-    return session_manager.set_cookie(JSONResponse(content=body), token, expires_at)
+    return session_manager.set_cookie(JSONResponse(content=body), issued.token, issued.expires_at)
 
 
 @router.get("/status")
@@ -84,7 +88,7 @@ async def setup(request: SetupRequest, http_request: Request, db: Session = Depe
         status=AuditStatus.SUCCESS, actor_type=ActorType.ADMIN, actor_id=str(user.id),
         actor_name=user.audit_name,
     )
-    return _login_response(user)
+    return _login_response(db, user)
 
 
 @router.post("/login")
@@ -105,12 +109,20 @@ async def login(request: LoginRequest, http_request: Request, db: Session = Depe
         db=db, request=http_request, action=AuditAction.ADMIN_LOGIN, resource_type=ResourceType.ADMIN,
         status=AuditStatus.SUCCESS, actor_type=ActorType.ADMIN, actor_id=str(user.id), actor_name=user.audit_name,
     )
-    return _login_response(user)
+    return _login_response(db, user)
 
 
 @router.post("/logout")
-async def logout():
-    """Clear the session cookie."""
+async def logout(http_request: Request, db: Session = Depends(get_db)):
+    """End the session server-side (a copied cookie stops working too) and clear the cookie."""
+    payload = session_manager.revoke(db, session_manager.token_from_request(http_request),
+                                     session_manager.binding_from_request(http_request))
+    if payload is not None:
+        AuditService.log_from_request(
+            db=db, request=http_request, action=AuditAction.ADMIN_LOGOUT, resource_type=ResourceType.ADMIN,
+            status=AuditStatus.SUCCESS, actor_type=ActorType.ADMIN, actor_id=payload.user_id,
+            actor_name=payload.email,
+        )
     return session_manager.clear_cookie(JSONResponse(content={"message": "Logged out"}))
 
 
@@ -148,7 +160,8 @@ async def change_password(request: ChangePasswordRequest, http_request: Request,
         status=AuditStatus.SUCCESS, actor_type=ActorType.ADMIN, actor_id=str(current_user.id),
         actor_name=current_user.audit_name, details={"action": "change_password"},
     )
-    return _login_response(current_user, {"message": "Password changed"})
+    # change_password deleted every session of this account (including any issued earlier within the same second)
+    return _login_response(db, current_user, {"message": "Password changed"})
 
 
 # ---------------------------------------------------------------------------
@@ -162,6 +175,18 @@ def _safe_next(raw: Optional[str]) -> str:
     if not raw or not raw.startswith("/") or raw.startswith("//") or raw.startswith("/\\"):
         return "/"
     return raw
+
+
+# Ours are secrets.token_urlsafe(24) (32 characters); anything far longer is not one of ours
+_MAX_STATE_LENGTH = 128
+
+
+def _state_matches(state: Optional[str], expected: str) -> bool:
+    """Constant-time comparison of the callback ``state`` with the cookie's. compare_digest raises TypeError on a
+    non-ASCII str (that was a 500), so both sides are compared as UTF-8 bytes, and over-long input is refused."""
+    if not state or not expected or len(state) > _MAX_STATE_LENGTH:
+        return False
+    return secrets.compare_digest(state.encode("utf-8"), expected.encode("utf-8"))
 
 
 @router.get("/oauth/{provider}/start")
@@ -198,12 +223,18 @@ async def oauth_login_callback(provider: str, request: Request, db: Session = De
     def fail(code_: str) -> RedirectResponse:
         return RedirectResponse(url=f"/login?{urlencode({'error': code_})}", status_code=302)
 
-    if error or not code or not state or not expected_state or not secrets.compare_digest(state, expected_state):
+    if error or not code or not _state_matches(state, expected_state):
         return fail("auth.external_login_failed")
     try:
+        identity = None
         identity = await providers[provider].exchange(code=code, redirect_uri=_callback_url(provider))
         user = identity_service.login_external(db, identity)
     except IdentityError as e:
+        AuditService.log_from_request(
+            db=db, request=request, action=AuditAction.ADMIN_LOGIN, resource_type=ResourceType.ADMIN,
+            status=AuditStatus.FAILURE, actor_type=ActorType.ADMIN, actor_name=identity.email if identity else None,
+            error_message=str(e), details={"provider": provider, "error": e.code},
+        )
         return fail(e.code)
     except Exception as e:
         logger.warning(f"{provider} login failed: {e}")
@@ -212,9 +243,13 @@ async def oauth_login_callback(provider: str, request: Request, db: Session = De
     AuditService.log_from_request(
         db=db, request=request, action=AuditAction.ADMIN_LOGIN, resource_type=ResourceType.ADMIN,
         status=AuditStatus.SUCCESS, actor_type=ActorType.ADMIN, actor_id=str(user.id),
-        actor_name=user.audit_name, details={"provider": provider},
+        actor_name=user.audit_name,
+        details={"provider": provider, **({"linked_provider_account": identity.sub} if identity.linked else {})},
     )
-    token, expires_at = session_manager.issue(user)
-    response = RedirectResponse(url=next_path, status_code=302)
+    issued = session_manager.issue(db, user)
+    # No response body to carry the session binding here: it rides in the fragment, which the browser keeps on the
+    # console's own origin (never sent to a server, not even this one); the console moves it into localStorage.
+    response = RedirectResponse(url=f"{next_path.partition('#')[0]}#{urlencode({'mcp_sb': issued.binding})}",
+                                status_code=302)
     response.delete_cookie(OAUTH_STATE_COOKIE, path="/api/session/oauth")
-    return session_manager.set_cookie(response, token, expires_at)
+    return session_manager.set_cookie(response, issued.token, issued.expires_at)

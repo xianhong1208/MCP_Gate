@@ -31,11 +31,7 @@ def test_setup_rejects_weak_password_and_bad_email(client):
 
 
 def test_change_password_invalidates_old_session(owner_client):
-    import time
-
     old_cookie = owner_client.cookies.get("mcp_session")
-    time.sleep(1.1)  # iat in the same second as password_changed_at still counts as valid (so a login right after a
-    # password change is not misjudged)
     r = owner_client.put("/api/session/me/password", json={"current_password": OWNER_PASSWORD,
                                                            "new_password": "new-password-456"})
     assert r.status_code == 200

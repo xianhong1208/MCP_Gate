@@ -7,7 +7,8 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from db.models import AdminUser
-from src.adapters import AdminUserAdapter
+from src.adapters import AdminSessionAdapter, AdminUserAdapter
+from src.adapters.exceptions import AdapterError
 from src.config import Config
 from src.identity.passwords import (
     hash_password, password_error_message, validate_password_strength, verify_password,
@@ -37,6 +38,8 @@ def needs_setup(db: Session) -> bool:
 
 
 def setup_owner(db: Session, *, email: str, password: str, username: str = "owner") -> AdminUser:
+    """Create the owner. Atomic: the early needs_setup() check only spares the bcrypt work; the account takes the
+    unique owner slot, so of several concurrent calls exactly one succeeds and the others get 409."""
     if not needs_setup(db):
         raise IdentityError("auth.setup_already_done", "Setup already completed", 409)
     email = _normalize_email(email)
@@ -45,10 +48,15 @@ def setup_owner(db: Session, *, email: str, password: str, username: str = "owne
     err = validate_password_strength(password)
     if err:
         raise IdentityError(err, password_error_message(err))
-    return AdminUserAdapter.create(
-        db, email=email, username=username or _default_username(email),
-        password_hash=hash_password(password), auth_provider="local",
-    )
+    password_hash = hash_password(password)
+    try:
+        return AdminUserAdapter.create(
+            db, email=email, username=username or _default_username(email),
+            password_hash=password_hash, auth_provider="local", owner=True,
+        )
+    except AdapterError as e:
+        raise IdentityError("auth.setup_already_done" if e.code == "auth.setup_already_done" else e.code,
+                            e.fallback, 409)
 
 
 def authenticate_local(db: Session, *, email: str, password: str) -> AdminUser:
@@ -68,12 +76,20 @@ def login_external(db: Session, identity: ExternalIdentity) -> AdminUser:
 
     Order: (1) existing account with the same provider+sub, (2) existing account with the same email (auto-linked),
     (3) email on the allowed_emails allowlist -> auto-create; otherwise reject.
+
+    Steps (2) and (3) trust the email, so they require the provider to have verified it: anyone can put any
+    address on a GitHub profile or an unverified Google account, and linking on that would hand them the
+    matching console account (the owner's). An unverified match is refused, not silently treated as "new".
     """
     user = AdminUserAdapter.get_by_provider(db, identity.provider, identity.sub)
     if user is None and identity.email:
         user = AdminUserAdapter.get_by_email(db, identity.email)
         if user is not None:
+            if not identity.email_verified:
+                raise IdentityError("auth.external_email_unverified",
+                                    "The provider has not verified this email address", 403)
             AdminUserAdapter.link_provider(db, user, identity.provider, identity.sub)
+            identity.linked = True
     if user is None:
         allowed = {e.strip().lower() for e in Config.get_identity_config().allowed_emails if e.strip()}
         if not identity.email or identity.email not in allowed or not identity.email_verified:
@@ -98,6 +114,8 @@ def change_password(db: Session, user: AdminUser, *, current_password: Optional[
     if err:
         raise IdentityError(err, password_error_message(err))
     AdminUserAdapter.set_password(db, user, hash_password(new_password))
+    # Every existing session of this account ends now; the caller issues a fresh one for the current browser
+    AdminSessionAdapter.delete_for_user(db, user.id)
 
 
 def update_profile(db: Session, user: AdminUser, *, username: str) -> AdminUser:

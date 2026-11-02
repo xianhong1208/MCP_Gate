@@ -9,6 +9,10 @@ import { PreferencesProvider } from './contexts/PreferencesContext'
 import { ToastProvider } from './contexts/ToastContext'
 import './i18n'
 import './index.css'
+import { adoptBindingFromLocation } from './utils/sessionBinding'
+
+// After a GitHub / Google login the session binding arrives in the URL fragment: store it before anything renders
+adoptBindingFromLocation()
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>

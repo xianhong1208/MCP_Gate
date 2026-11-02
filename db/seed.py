@@ -7,6 +7,7 @@
 
 from typing import Dict, List, Tuple
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from db.models import AdminUser, OAuthClient, OAuthScope, local_now
@@ -87,9 +88,14 @@ def seed_owner(db: Session, email: str, password: str, username: str = "owner") 
         auth_provider="local",
         is_active=True,
         password_changed_at=local_now(),
+        owner_slot=1,
     )
     db.add(user)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:  # someone completed /setup in the meantime
+        db.rollback()
+        return None
     db.refresh(user)
     return user
 

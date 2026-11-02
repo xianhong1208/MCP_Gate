@@ -206,6 +206,13 @@
       "hint": "Dynamically registered clients cannot obtain tokens until approved.",
       "review": "Review"
     },
+    "weakSecrets": {
+      "title": "A server secret is weak",
+      "reasonPlaceholder": "is a known placeholder value",
+      "reasonTooShort": "is shorter than 32 characters",
+      "reasonLowVariety": "uses too few distinct characters",
+      "fix": "Set it to at least 32 random characters (python -c \"import secrets; print(secrets.token_urlsafe(32))\") and restart. Changing SESSION_SECRET_KEY only signs everyone out; changing ENCRYPTION_KEY makes the stored private keys unreadable, so read SECURITY.md before you rotate it."
+    },
     "issuerMismatch": {
       "title": "{{n}} host(s) reached the OAuth endpoints without matching OAUTH_ISSUER ({{issuer}})",
       "hint": "Tokens carry the issuer above and discovery advertises its URLs, so clients using these addresses will fail verification or reach the wrong endpoints:",
@@ -766,7 +773,23 @@
       "created": "created {{date}}",
       "active": "active",
       "inactive": "retired",
-      "empty": "No signing keys"
+      "empty": "No signing keys",
+      "published": "retired, still published",
+      "publishedHint": "No longer signs new tokens, but stays in the JWKS until the last token it signed has expired.",
+      "retiredHint": "No longer in the JWKS: tokens it signed are no longer accepted."
+    },
+    "resourceServer": {
+      "label": "Resource server for",
+      "hint": "The MCP server this client speaks for. Only a bound client may read the revocation feed, introspect tokens and report usage, and only for tokens of that server.",
+      "none": "Not a resource server",
+      "title": "Resource server: {{name}}",
+      "action": "Resource server…",
+      "boundTo": "Resource server for {{name}}",
+      "current": "Currently bound to",
+      "save": "Save",
+      "saveFailed": "Failed to update the resource-server binding",
+      "bound": "{{name}} is now a resource server",
+      "unbound": "{{name}} is no longer a resource server"
     }
   },
   "marketplace": {
@@ -965,7 +988,8 @@
       "admin_logout": "Admin Logout",
       "admin_update": "Admin Update",
       "cleanup_expired": "Cleanup Expired",
-      "rate_limit_exceeded": "Rate Limit"
+      "rate_limit_exceeded": "Rate Limit",
+      "oauth_client_bind": "Client Resource Server Set"
     },
     "detail": {
       "title": "Audit Log Details",
@@ -1005,6 +1029,7 @@
       "local_login_disabled": "Password sign-in is disabled on this server.",
       "external_login_failed": "Sign-in with the external provider failed. Please try again.",
       "external_not_allowed": "This account is not allowed to sign in here.",
+      "external_email_unverified": "Your email address is not verified with this provider, so it cannot be used to sign in to an existing account. Verify it with the provider, or sign in with your password.",
       "provider_not_enabled": "This sign-in provider is not enabled.",
       "setup_already_done": "Setup has already been completed. Please sign in.",
       "invalid_current_password": "Current password is incorrect",
@@ -1013,7 +1038,8 @@
       "validation_password_short": "Password must be at least 8 characters",
       "validation_password_too_long": "Password is too long (max 72 bytes, about 24 Chinese characters)",
       "authentication_required": "Please sign in",
-      "session_expired": "Your session has expired. Please sign in again."
+      "session_expired": "Your session has expired. Please sign in again.",
+      "csrf_origin_denied": "Request refused: it did not come from this console. Reload the page and try again."
     },
     "oauth": {
       "consent_not_found": "Consent record not found",

@@ -13,7 +13,7 @@ An origin is trusted when it is
   browses the console through the "other" one must not be locked out (the issuer mismatch is reported by
   ``issuer_check`` instead);
 * the ``OAUTH_ISSUER`` origin; or
-* listed in ``cors.allowed_origins`` (e.g. the Vite dev server on :5173).
+* listed in ``cors.allowed_origins`` (``CORS_ALLOWED_ORIGINS``; empty by default).
 
 A request without an ``Origin`` header did not come from a browser page (browsers always send one on
 WebSocket handshakes and cross-origin POSTs), so it cannot be a cross-site forgery; whether to accept it is

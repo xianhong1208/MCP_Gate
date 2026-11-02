@@ -66,13 +66,14 @@ class WSManager:
         """Get the number of connections."""
         return len(self._connections)
 
-    async def connect(self, websocket: WebSocket) -> None:
+    async def connect(self, websocket: WebSocket, subprotocol: Optional[str] = None) -> None:
         """Accept a new WebSocket connection.
 
         Args:
             websocket: WebSocket connection
+            subprotocol: the subprotocol to answer with (a browser that offered any fails the handshake otherwise)
         """
-        await websocket.accept()
+        await websocket.accept(subprotocol=subprotocol)
         async with self._lock:
             self._connections.add(websocket)
         logger.info(f"WebSocket connected. Total connections: {self.connection_count}")
@@ -232,15 +233,16 @@ class WSManager:
             logger.warning(f"Failed to send message: {e}")
             return False
 
-    async def handle_connection(self, websocket: WebSocket) -> None:
+    async def handle_connection(self, websocket: WebSocket, subprotocol: Optional[str] = None) -> None:
         """Handle the full lifecycle of a WebSocket connection.
 
         A convenience method that handles connecting, receiving messages, disconnecting, etc.
 
         Args:
             websocket: WebSocket connection
+            subprotocol: passed to accept()
         """
-        await self.connect(websocket)
+        await self.connect(websocket, subprotocol=subprotocol)
         try:
             while True:
                 # Receive a message

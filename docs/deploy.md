@@ -78,9 +78,32 @@ server {
 }
 ```
 
-Keep `Host` and `X-Forwarded-Proto` as shown: the console's WebSocket only accepts handshakes whose
-`Origin` is the address the browser used (or `OAUTH_ISSUER`, or an entry in `cors.allowed_origins`), and
-it reads that address from these headers when the proxy is listed in `security.trusted_proxies`.
+Keep `Host` and `X-Forwarded-Proto` as shown: the console's WebSocket, and every console `POST` / `PUT` /
+`PATCH` / `DELETE`, is only accepted when its `Origin` (or else `Referer`) is the address the browser used
+(or `OAUTH_ISSUER`, or an entry in `cors.allowed_origins`), and MCP Gate reads that address from these
+headers when the proxy is listed in `security.trusted_proxies`. A proxy that rewrites `Host` to the
+upstream address without sending `X-Forwarded-Host` makes every console change fail with 403
+`auth.csrf_origin_denied`.
+
+MCP Gate only answers requests whose `Host` is the `OAUTH_ISSUER` host, `localhost` / `*.localhost`, or an IP
+address (protection against DNS rebinding); anything else gets 421 `http.host_not_allowed` and one warning in the
+log. A proxy that keeps `Host` (both examples above) or rewrites it to `127.0.0.1:4568` needs nothing. If MCP Gate is
+also reached under another name — a Docker Compose service name such as `http://mcp-gate:4568` used by resource
+servers to fetch the JWKS, an internal DNS alias — list it:
+
+```bash
+ALLOWED_HOSTS=mcp-gate,*.internal.example   # exact names or *.suffix; "*" turns the check off
+```
+
+### Local use without a proxy
+
+Running on `http://localhost:4568` is fine for one person on one machine, but the browser shares the console's
+cookie with every other `localhost` port (see `SECURITY.md`, *Known limitations*). MCP Gate does not accept the
+cookie without the per-session binding the console keeps in its own origin's storage, so a local listener that
+receives the cookie cannot use it. If other local services you do not trust run on the same machine, give the
+console a host name of its own so the cookie is not sent to them at all: preferably HTTPS behind a proxy as below,
+or `OAUTH_ISSUER=http://mcp-gate.localhost:4568` (browsers resolve `*.localhost` to loopback without DNS; check
+that your MCP clients accept an `http` issuer that is not literally `localhost` / `127.0.0.1` first).
 
 ## 4. Run as a service
 

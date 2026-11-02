@@ -46,7 +46,11 @@ def test_matching_host_records_nothing(client):
     assert observed_mismatches() == []
 
 
-def test_mismatching_host_is_recorded_once_and_visible_in_overview(owner_client):
+def test_mismatching_host_is_recorded_once_and_visible_in_overview(owner_client, monkeypatch):
+    from src.config import Config
+
+    # A host *name* other than the issuer must be allowed explicitly first (DNS-rebinding check, test_trusted_host)
+    monkeypatch.setattr(Config.get_security_config(), "allowed_hosts", ["mcp.lan"])
     for _ in range(3):
         r = owner_client.get("/.well-known/oauth-authorization-server", headers={"Host": "192.168.1.20:4568"})
         assert r.status_code == 200
@@ -62,5 +66,5 @@ def test_mismatching_host_is_recorded_once_and_visible_in_overview(owner_client)
 
 
 def test_console_paths_are_not_checked(owner_client):
-    assert owner_client.get("/api/session/status", headers={"Host": "elsewhere.example"}).status_code == 200
+    assert owner_client.get("/api/session/status", headers={"Host": "192.168.1.30:4568"}).status_code == 200
     assert observed_mismatches() == []

@@ -13,8 +13,8 @@ import db.database as database
 from db.models import local_now
 from src.audit import record_scheduled_purge
 from src.adapters import (
-    AuditLogAdapter, OAuthAuthRequestAdapter, OAuthClientAdapter, OAuthCodeAdapter, OAuthTokenAdapter,
-    ServiceAdapter, TokenUsageAdapter,
+    AdminSessionAdapter, AuditLogAdapter, OAuthAuthRequestAdapter, OAuthClientAdapter, OAuthCodeAdapter,
+    OAuthTokenAdapter, ServiceAdapter, TokenUsageAdapter,
 )
 from src.config import Config
 
@@ -59,7 +59,7 @@ class CleanupScheduler:
             logger.warning("Scheduler is already running")
             return
         self.scheduler.add_job(self._cleanup_oauth, IntervalTrigger(hours=self.oauth_cleanup_hours),
-                               id="cleanup_oauth", name="Clean up expired OAuth codes/requests/tokens",
+                               id="cleanup_oauth", name="Clean up expired OAuth codes/requests/tokens and console sessions",
                                replace_existing=True)
         self.scheduler.add_job(self._cleanup_old_usage, CronTrigger(hour=3, minute=0),
                                id="cleanup_old_usage", name="Clean up old token events", replace_existing=True)
@@ -94,6 +94,7 @@ class CleanupScheduler:
             n = OAuthAuthRequestAdapter.delete_expired(db)
             n += OAuthCodeAdapter.delete_expired(db)
             n += OAuthTokenAdapter.delete_expired(db)
+            n += AdminSessionAdapter.delete_expired(db)
             unused_days = Config.get_oauth_config().dcr_unused_client_days
             if unused_days and unused_days > 0:
                 n += OAuthClientAdapter.delete_unused_dcr(db, older_than=timedelta(days=unused_days))

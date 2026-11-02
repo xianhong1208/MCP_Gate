@@ -8,7 +8,7 @@ Invariant (guarded by tests/test_architecture_layering.py): only src/adapters/* 
 
 from db.crud import normalize_audience, normalize_service_host  # pure utility functions, re-exported via this layer
 
-from src.adapters.admin_adapter import AdminUserAdapter
+from src.adapters.admin_adapter import AdminSessionAdapter, AdminUserAdapter
 from src.adapters.managed_adapter import (
     BYODefinitionAdapter,
     ManagedMcpProcessAdapter,
@@ -34,6 +34,7 @@ __all__ = [
     "ServiceAdapter",
     "MCPToolAdapter",
     "AdminUserAdapter",
+    "AdminSessionAdapter",
     "BYODefinitionAdapter",
     "ManagedMcpProcessAdapter",
     "TokenUsageAdapter",

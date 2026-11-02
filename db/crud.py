@@ -12,9 +12,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from db.models import (
-    AdminUser, AuditLog, ManagedMcpProcess, MCPTool, OAuthAuthorizationCode,
+    AdminSession, AdminUser, AuditLog, ManagedMcpProcess, MCPTool, OAuthAuthorizationCode,
     OAuthAuthorizationRequest, OAuthClient, OAuthConsent, OAuthScope, OAuthSigningKey,
-    OAuthToken, Service, ServiceScope, TokenUsage, UserMcpDefinition, local_now,
+    OAuthToken, Service, ServiceScope, TokenUsage, UserMcpDefinition, local_now, utc_now,
 )
 from src.utils.field_limits import clip, column_limit
 
@@ -390,6 +390,45 @@ class TokenUsageCRUD:
 
 # ==================== Console users ====================
 
+class OwnerSlotTaken(Exception):
+    """First-time setup lost the race: another request created the owner first."""
+
+
+class AdminSessionCRUD:
+
+    @staticmethod
+    def create(db: Session, *, session_id: str, user_id, created_at: datetime, expires_at: datetime) -> AdminSession:
+        row = AdminSession(id=session_id, user_id=_uuid(user_id), created_at=created_at, expires_at=expires_at)
+        db.add(row)
+        db.commit()
+        return row
+
+    @staticmethod
+    def get(db: Session, session_id: str) -> Optional[AdminSession]:
+        if not session_id:
+            return None
+        return db.query(AdminSession).filter(AdminSession.id == session_id).first()
+
+    @staticmethod
+    def delete(db: Session, session_id: str) -> int:
+        n = db.query(AdminSession).filter(AdminSession.id == session_id).delete(synchronize_session=False)
+        db.commit()
+        return n
+
+    @staticmethod
+    def delete_for_user(db: Session, user_id) -> int:
+        n = db.query(AdminSession).filter(AdminSession.user_id == _uuid(user_id)).delete(
+            synchronize_session=False)
+        db.commit()
+        return n
+
+    @staticmethod
+    def delete_expired(db: Session) -> int:
+        n = db.query(AdminSession).filter(AdminSession.expires_at < utc_now()).delete(synchronize_session=False)
+        db.commit()
+        return n
+
+
 class AdminUserCRUD:
 
     @staticmethod
@@ -425,17 +464,22 @@ class AdminUserCRUD:
 
     @staticmethod
     def create(db: Session, *, email: str, username: str, password_hash: Optional[str],
-               auth_provider: str = "local", provider_sub: Optional[str] = None) -> AdminUser:
+               auth_provider: str = "local", provider_sub: Optional[str] = None,
+               owner: bool = False) -> AdminUser:
+        """``owner=True`` takes the single owner slot; raises OwnerSlotTaken if another account already has it."""
         user = AdminUser(
             email=email, username=username, password_hash=password_hash,
             auth_provider=auth_provider, provider_sub=provider_sub, is_active=True,
             password_changed_at=local_now() if password_hash else None,
+            owner_slot=1 if owner else None,
         )
         db.add(user)
         try:
             db.commit()
         except IntegrityError:
             db.rollback()
+            if owner and db.query(AdminUser).filter(AdminUser.owner_slot == 1).first() is not None:
+                raise OwnerSlotTaken("The owner account already exists")
             raise ValueError(f"Email '{email}' already exists")
         db.refresh(user)
         return user

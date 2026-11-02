@@ -67,7 +67,8 @@ def center(seeded):
                 r = c.post("/api/session/setup", json={"email": OWNER_EMAIL, "password": OWNER_PASSWORD})
                 assert r.status_code == 200, r.text
                 cookie = r.cookies.get("mcp_session")
-            yield {"url": url, "cookie": cookie}
+            # The console sends the session binding with every call (see test_session_binding.py)
+            yield {"url": url, "cookie": cookie, "headers": {"X-Session-Binding": r.json()["session_binding"]}}
     finally:
         cfg.oauth.issuer = previous_issuer
 
@@ -95,7 +96,8 @@ def mcp_server(center):
         return f"Hello, {name}!"
 
     # Register this server in MCP Gate (audience = MCP URL)
-    with httpx.Client(base_url=center["url"], cookies={"mcp_session": center["cookie"]}) as c:
+    with httpx.Client(base_url=center["url"], cookies={"mcp_session": center["cookie"]},
+                      headers=center["headers"]) as c:
         r = c.post("/api/services", json={"name": "interop-demo", "host": "127.0.0.1", "port": port, "mcp_path": "/mcp"})
         assert r.status_code == 201, r.text
         service = r.json()
@@ -106,7 +108,8 @@ def mcp_server(center):
 
 
 def _mint_pat(center, service_id: str, days: int = 1) -> str:
-    with httpx.Client(base_url=center["url"], cookies={"mcp_session": center["cookie"]}) as c:
+    with httpx.Client(base_url=center["url"], cookies={"mcp_session": center["cookie"]},
+                      headers=center["headers"]) as c:
         r = c.post("/api/oauth/tokens/personal", json={"service_id": service_id, "expires_days": days, "label": "test"})
         assert r.status_code == 201, r.text
         return r.json()["access_token"]
@@ -146,7 +149,8 @@ async def test_revoked_pat_still_valid_offline_but_inactive_on_introspect(center
     from fastmcp import Client
     from fastmcp.client.auth import BearerAuth
 
-    with httpx.Client(base_url=center["url"], cookies={"mcp_session": center["cookie"]}) as c:
+    with httpx.Client(base_url=center["url"], cookies={"mcp_session": center["cookie"]},
+                      headers=center["headers"]) as c:
         r = c.post("/api/oauth/tokens/personal", json={"service_id": mcp_server["service"]["id"], "expires_days": 1, "label": "test"})
         pat, jti = r.json()["access_token"], r.json()["jti"]
         assert c.post(f"/api/oauth/tokens/{jti}/revoke").status_code == 200
@@ -171,7 +175,8 @@ async def test_full_oauth_flow_with_fastmcp_client(center, mcp_server):
 
         async def _simulate_browser(self, authorization_url: str) -> None:
             await asyncio.sleep(0.3)  # wait for the callback server to come up
-            async with httpx.AsyncClient(cookies={"mcp_session": center["cookie"]}, follow_redirects=False) as browser:
+            async with httpx.AsyncClient(cookies={"mcp_session": center["cookie"]}, headers=center["headers"],
+                                         follow_redirects=False) as browser:
                 r = await browser.get(authorization_url)
                 assert r.status_code == 302, r.text
                 location = r.headers["location"]
@@ -195,7 +200,8 @@ async def test_full_oauth_flow_with_fastmcp_client(center, mcp_server):
         assert "Hello, OAuth!" in str(result.content[0].text)
 
     # MCP Gate now holds the DCR client, the remembered consent and the issued tokens
-    with httpx.Client(base_url=center["url"], cookies={"mcp_session": center["cookie"]}) as c:
+    with httpx.Client(base_url=center["url"], cookies={"mcp_session": center["cookie"]},
+                      headers=center["headers"]) as c:
         clients = c.get("/api/oauth/clients").json()["clients"]
         assert any(cl["client_name"] == "interop-test-client" and cl["created_via"] == "dcr" for cl in clients)
         tokens = c.get("/api/oauth/tokens", params={"kind": "access"}).json()["tokens"]
@@ -207,7 +213,8 @@ def test_scan_inspects_server_protected_by_this_center(center, mcp_server):
     """Scanning finds a FastMCP server that trusts MCP Gate, reads its name and tools and registers it
     as requiring authentication - without the operator supplying a token."""
     port = int(urlparse(mcp_server["base_url"]).port)
-    with httpx.Client(base_url=center["url"], cookies={"mcp_session": center["cookie"]}, timeout=60) as c:
+    with httpx.Client(base_url=center["url"], cookies={"mcp_session": center["cookie"]},
+                      headers=center["headers"], timeout=60) as c:
         # Forget the registration made by the fixture so the scan sees an unknown peer
         r = c.delete(f"/api/services/{mcp_server['service']['id']}")
         assert r.status_code in (200, 204), r.text
@@ -233,7 +240,8 @@ def test_health_check_keeps_operator_description(center, mcp_server):
     """A manual health check fills an empty description with the server's summary but never overwrites a
     description the operator wrote, and never dumps the full `instructions` text."""
     sid = mcp_server["service"]["id"]
-    with httpx.Client(base_url=center["url"], cookies={"mcp_session": center["cookie"]}, timeout=60) as c:
+    with httpx.Client(base_url=center["url"], cookies={"mcp_session": center["cookie"]},
+                      headers=center["headers"], timeout=60) as c:
         r = c.post(f"/api/services/{sid}/health-check")
         assert r.status_code == 200 and r.json()["status"] == "online", r.text
         desc = c.get(f"/api/services/{sid}").json()["description"]

@@ -1,7 +1,9 @@
 /**
  * MCP Gate API client.
  *
- * Login state is an httpOnly cookie (mcp_session); the frontend never touches a session token.
+ * Login state is an httpOnly cookie (mcp_session) plus the session binding (utils/sessionBinding.js): the cookie
+ * is never visible to the frontend, the binding is kept in localStorage and sent as X-Session-Binding on every
+ * request. A response that carries `session_binding` (login, setup, password change) replaces it.
  *
  * Error envelope (backend is i18n-aware):
  *   1. HTTPException: detail is a dict {error: "code", params: {...}, fallback: "english"}
@@ -10,6 +12,7 @@
  * The handler auto-detects the shape, prefers the i18n lookup by code (errors.<code>), else uses the fallback.
  */
 import i18n from '../i18n'
+import { BINDING_HEADER, clearBinding, getBinding, setBinding } from '../utils/sessionBinding'
 
 const API_BASE = ''  // same origin
 
@@ -51,18 +54,21 @@ function extractErrorMessage(data) {
 
 async function request(endpoint, options = {}) {
   const url = `${API_BASE}${endpoint}`
+  const binding = getBinding()
   const config = {
-    headers: {
-      'Content-Type': 'application/json',
-      ...options.headers,
-    },
     credentials: 'include',
     ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(binding ? { [BINDING_HEADER]: binding } : {}),
+      ...options.headers,
+    },
   }
 
   try {
     const response = await fetch(url, config)
     const data = await response.json().catch(() => ({}))
+    if (response.ok && typeof data?.session_binding === 'string') setBinding(data.session_binding)
 
     if (!response.ok) {
       if (response.status === 401) {
@@ -111,7 +117,11 @@ export const sessionApi = {
   },
 
   async logout() {
-    return request('/api/session/logout', { method: 'POST' })
+    try {
+      return await request('/api/session/logout', { method: 'POST' })
+    } finally {
+      clearBinding()
+    }
   },
 
   /** Current user (cookie is sent automatically) */
@@ -310,7 +320,7 @@ export const oauthApi = {
       return request(`/api/oauth/clients${qs({ status })}`)
     },
     /** Manually register a trusted client from the admin console (approved directly); secret is returned once */
-    async create({ clientName, redirectUris, grantTypes, tokenEndpointAuthMethod, scope, clientUri, requirePkce, defaultResource, jwksUri, jwks }) {
+    async create({ clientName, redirectUris, grantTypes, tokenEndpointAuthMethod, scope, clientUri, requirePkce, defaultResource, jwksUri, jwks, resourceServiceId }) {
       return request('/api/oauth/clients', {
         method: 'POST',
         body: JSON.stringify({
@@ -324,7 +334,15 @@ export const oauthApi = {
           jwks_uri: jwksUri || null,
           jwks: jwks || null,
           default_resource: defaultResource || null,
+          resource_service_id: resourceServiceId || null,
         }),
+      })
+    },
+    /** Bind a console-registered confidential client to the MCP server it speaks for (null = unbind) */
+    async bindResourceServer(clientId, serviceId) {
+      return request(`/api/oauth/clients/${encodeURIComponent(clientId)}/resource-server`, {
+        method: 'PUT',
+        body: JSON.stringify({ service_id: serviceId || null }),
       })
     },
     async get(clientId) {

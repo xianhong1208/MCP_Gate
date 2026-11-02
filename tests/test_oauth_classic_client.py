@@ -12,6 +12,14 @@ import jwt
 from tests.test_oauth_flow import REDIRECT_URI, RESOURCE, _register
 
 
+
+def _skip_consent(owner_client, location):
+    """What the consent page does for a request that may skip consent: approve without asking."""
+    assert location.startswith("/consent?"), location
+    rid = parse_qs(urlparse(location).query)["rid"][0]
+    assert owner_client.get(f"/oauth/authorize/requests/{rid}").json()["can_skip"] is True
+    return owner_client.post(f"/oauth/authorize/requests/{rid}/decision", json={"approve": True}).json()["redirect_to"]
+
 def _create_classic(owner_client, **overrides):
     body = {
         "client_name": "Legacy Platform",
@@ -35,7 +43,7 @@ def test_classic_client_completes_flow_without_pkce_or_resource(owner_client, se
         "response_type": "code", "client_id": client_id, "redirect_uri": REDIRECT_URI, "state": "s1",
     }, follow_redirects=False)
     assert r.status_code == 302, r.text
-    location = r.headers["location"]
+    location = _skip_consent(owner_client, r.headers["location"])
     assert location.startswith(REDIRECT_URI), location  # console-registered -> consent skipped
     code = parse_qs(urlparse(location).query)["code"][0]
 
@@ -52,7 +60,7 @@ def test_classic_client_completes_flow_without_pkce_or_resource(owner_client, se
     r = owner_client.get("/oauth/authorize", params={
         "response_type": "code", "client_id": client_id, "redirect_uri": REDIRECT_URI,
     }, follow_redirects=False)
-    code = parse_qs(urlparse(r.headers["location"]).query)["code"][0]
+    code = parse_qs(urlparse(_skip_consent(owner_client, r.headers["location"])).query)["code"][0]
     r = owner_client.post("/oauth/token", data={
         "grant_type": "authorization_code", "client_id": client_id, "client_secret": "wrong",
         "code": code, "redirect_uri": REDIRECT_URI,

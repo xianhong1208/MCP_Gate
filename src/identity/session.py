@@ -1,14 +1,38 @@
-"""Admin-console session: an HS256 JWT inside an httpOnly cookie.
+"""Admin-console session: an HS256 JWT inside an httpOnly cookie, backed by a server-side record.
 
 This is the short-lived session for a human logging in to the admin console, fully separate from OAuth access tokens
 (RS256, verified by MCP servers): different keys, different typ, neither can impersonate the other.
+
+The JWT's ``jti`` names a row in ``admin_sessions``. A session is valid only while that row exists and has not
+expired, so logout (deletes the row) and a password change (deletes every row of the user) take effect at once,
+instead of a copied cookie staying usable until its ``exp``. Revocation is by deleting records, never by comparing
+wall-clock times: the old "issued before password_changed_at" check missed sessions from the same second and,
+because both sides were naive local time, locked everyone out after a restart with a TZ further west.
+
+Session binding (the cookie alone is not a session)
+---------------------------------------------------
+Cookies are scoped by host, not by port. On a ``localhost`` / ``127.0.0.1`` deployment the browser therefore sends
+``mcp_session`` to *every* local port: to an MCP client's OAuth loopback callback the moment the owner approves it,
+to a local dev server, to any process listening on loopback. ``SameSite`` does not help (all ports are the same
+site, even for ``Strict``) and ``__Host-`` needs HTTPS.
+
+So each session also has a random *binding* secret. It is returned once, in the body of the login / setup /
+password-change response (or, after a GitHub / Google login, in the URL fragment of the redirect into the console),
+and the console keeps it in ``localStorage``, which *is* scoped by origin including the port. Every authenticated
+request must send it in the ``X-Session-Binding`` header; the WebSocket, which cannot set headers, offers it as a
+``Sec-WebSocket-Protocol`` entry ``mcp-gate.v1.binding.<value>``. The cookie JWT carries only its SHA-256 (``sbh``).
+A process that receives the cookie gets nothing it can use: it would need to run script in the console's own origin
+to read the binding, and that is XSS in the console, which is game over with or without this.
 """
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import secrets
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import jwt
@@ -17,11 +41,15 @@ from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from db.database import get_db
-from db.models import AdminUser, local_now
+from db.models import AdminUser, local_now, utc_now
 from src.config import Config
 
 SESSION_COOKIE = "mcp_session"
 SESSION_TYP = "console-session"
+# The second half of a console session (see "Session binding" above)
+SESSION_BINDING_HEADER = "X-Session-Binding"
+WS_PROTOCOL = "mcp-gate.v1"
+_WS_BINDING_PREFIX = f"{WS_PROTOCOL}.binding."
 
 
 class AuthenticationRequired(HTTPException):
@@ -42,6 +70,24 @@ class SessionPayload:
     jti: str
     iat: int
     exp: int
+    binding_hash: str = ""
+
+
+@dataclass
+class IssuedSession:
+    token: str          # the cookie value (signed JWT)
+    binding: str        # the session binding: goes to the console in the response body, never in a cookie
+    expires_at: datetime
+
+
+def binding_hash(binding: str) -> str:
+    return hashlib.sha256(binding.encode("utf-8")).hexdigest()
+
+
+def binding_matches(payload: SessionPayload, binding: Optional[str]) -> bool:
+    if not binding or not payload.binding_hash:
+        return False
+    return hmac.compare_digest(binding_hash(binding), payload.binding_hash)
 
 
 class SessionManager:
@@ -65,19 +111,47 @@ class SessionManager:
     def reset(self) -> None:
         self._secret = None
 
-    def issue(self, user: AdminUser) -> tuple[str, datetime]:
+    def issue(self, db: Session, user: AdminUser) -> IssuedSession:
+        """Create the server-side session record; return the signed cookie value, the binding and the expiry."""
+        from src.adapters import AdminSessionAdapter
+
         cfg = Config.get_session_config()
-        now = local_now()
-        expires_at = now + timedelta(hours=cfg.expire_hours)
+        now = datetime.now(timezone.utc)
+        lifetime = timedelta(hours=cfg.expire_hours)
+        jti = str(uuid.uuid4())
+        binding = secrets.token_urlsafe(32)
+        # The record is kept in naive UTC so a change of the host's TZ cannot shift expiry (see AdminSession)
+        AdminSessionAdapter.create(db, session_id=jti, user_id=user.id, created_at=now.replace(tzinfo=None),
+                                   expires_at=(now + lifetime).replace(tzinfo=None))
         payload = {
             "typ": SESSION_TYP,
             "sub": str(user.id),
             "email": user.email,
-            "jti": str(uuid.uuid4()),
+            "jti": jti,
+            "sbh": binding_hash(binding),
             "iat": int(now.timestamp()),
-            "exp": int(expires_at.timestamp()),
+            "exp": int((now + lifetime).timestamp()),
         }
-        return jwt.encode(payload, self.secret, algorithm="HS256"), expires_at
+        return IssuedSession(token=jwt.encode(payload, self.secret, algorithm="HS256"), binding=binding,
+                             expires_at=local_now() + lifetime)
+
+    @staticmethod
+    def revoke(db: Session, token: Optional[str], binding: Optional[str]) -> Optional[SessionPayload]:
+        """Delete the server-side record of this session (logout). Returns its payload if it was revoked.
+
+        Needs the binding too: a replayed cookie must not even be able to log the owner out."""
+        from src.adapters import AdminSessionAdapter
+
+        if not token:
+            return None
+        try:
+            payload = session_manager.verify(token)
+        except SessionError:
+            return None
+        if not binding_matches(payload, binding):
+            return None
+        AdminSessionAdapter.delete(db, payload.jti)
+        return payload
 
     def verify(self, token: str) -> SessionPayload:
         try:
@@ -90,15 +164,8 @@ class SessionManager:
             raise SessionError("auth.invalid_session", "Not a console session")
         return SessionPayload(
             user_id=payload["sub"], email=payload.get("email", ""),
-            jti=payload["jti"], iat=payload["iat"], exp=payload["exp"],
+            jti=payload["jti"], iat=payload["iat"], exp=payload["exp"], binding_hash=payload.get("sbh", ""),
         )
-
-    @staticmethod
-    def is_stale(payload: SessionPayload, user: AdminUser) -> bool:
-        """Sessions issued before a password change count as revoked (iat < password_changed_at)."""
-        if user.password_changed_at is None:
-            return False
-        return payload.iat < int(user.password_changed_at.timestamp())
 
     # ---- cookie ----
     @staticmethod
@@ -109,6 +176,21 @@ class SessionManager:
         authz = request.headers.get("Authorization", "")
         if authz.startswith("Bearer "):
             return authz[7:].strip()
+        return None
+
+    @staticmethod
+    def binding_from_request(request: Request) -> Optional[str]:
+        return request.headers.get(SESSION_BINDING_HEADER) or None
+
+    @staticmethod
+    def binding_from_ws_protocols(scope: dict) -> Optional[str]:
+        """The binding a WebSocket handshake offered as ``Sec-WebSocket-Protocol: mcp-gate.v1.binding.<value>``."""
+        for name, value in scope.get("headers", []):
+            if name.lower() == b"sec-websocket-protocol":
+                for proto in value.decode("latin-1").split(","):
+                    proto = proto.strip()
+                    if proto.startswith(_WS_BINDING_PREFIX):
+                        return proto[len(_WS_BINDING_PREFIX):] or None
         return None
 
     @staticmethod
@@ -124,34 +206,40 @@ class SessionManager:
 
     @staticmethod
     def clear_cookie(response: Response) -> Response:
+        """Delete the cookie with the same attributes it was set with: browsers ignore a deletion whose
+        ``Secure`` / ``SameSite`` / path differ (``SameSite=None`` without ``Secure`` is rejected outright)."""
         sec = Config.get_security_config()
         samesite = sec.cookie_samesite if sec.cookie_samesite in ("lax", "strict", "none") else "lax"
-        response.delete_cookie(key=SESSION_COOKIE, httponly=True, samesite=samesite, path="/")
+        response.delete_cookie(key=SESSION_COOKIE, httponly=True, samesite=samesite, secure=sec.secure_cookie,
+                               path="/")
         return response
 
 
 session_manager = SessionManager()
 
 
-def _resolve_user(db: Session, token: str) -> AdminUser:
-    from src.adapters import AdminUserAdapter
+def _resolve_user(db: Session, token: str, binding: Optional[str]) -> AdminUser:
+    from src.adapters import AdminSessionAdapter, AdminUserAdapter
 
     payload = session_manager.verify(token)
+    if not binding_matches(payload, binding):
+        raise SessionError("auth.session_binding_invalid", "Session binding missing or wrong")
+    record = AdminSessionAdapter.get(db, payload.jti)
+    if record is None or str(record.user_id) != payload.user_id or record.expires_at <= utc_now():
+        raise SessionError("auth.session_revoked", "Session revoked or unknown")
     user = AdminUserAdapter.get_by_id(db, payload.user_id)
     if not user or not user.is_active:
         raise SessionError("auth.user_invalid", "User not found or inactive")
-    if session_manager.is_stale(payload, user):
-        raise SessionError("auth.session_revoked", "Session revoked (password changed)")
     return user
 
 
 async def get_current_user(request: Request, db: Session = Depends(get_db)) -> AdminUser:
-    """FastAPI dependency: login required (cookie or Bearer session)."""
+    """FastAPI dependency: login required (cookie or Bearer session, plus the session binding header)."""
     token = session_manager.token_from_request(request)
     if not token:
         raise AuthenticationRequired()
     try:
-        return _resolve_user(db, token)
+        return _resolve_user(db, token, session_manager.binding_from_request(request))
     except SessionError as e:
         raise AuthenticationRequired(e.code, str(e))
 
@@ -161,16 +249,16 @@ async def get_optional_current_user(request: Request, db: Session = Depends(get_
     if not token:
         return None
     try:
-        return _resolve_user(db, token)
+        return _resolve_user(db, token, session_manager.binding_from_request(request))
     except SessionError:
         return None
 
 
-def resolve_user_from_token(db: Session, token: Optional[str]) -> Optional[AdminUser]:
+def resolve_user_from_token(db: Session, token: Optional[str], binding: Optional[str]) -> Optional[AdminUser]:
     """Non-dependency variant (used by the WebSocket handshake)."""
     if not token:
         return None
     try:
-        return _resolve_user(db, token)
+        return _resolve_user(db, token, binding)
     except SessionError:
         return None

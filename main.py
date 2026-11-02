@@ -34,7 +34,8 @@ from src.discovery.websocket_manager import get_ws_manager  # noqa: E402
 from src.exceptions.handlers import register_exception_handlers  # noqa: E402
 from src.logging import RequestLoggingMiddleware, get_logger, setup_logging  # noqa: E402
 from src.middleware import (  # noqa: E402
-    IssuerMismatchMiddleware, PublicOAuthCORSMiddleware, RateLimitConfig, RateLimitMiddleware, SecurityHeadersMiddleware,
+    CSRFOriginMiddleware, IssuerMismatchMiddleware, PublicOAuthCORSMiddleware, RateLimitConfig, RateLimitMiddleware,
+    SecurityHeadersMiddleware, TrustedHostMiddleware,
 )
 from src.scheduler import get_scheduler  # noqa: E402
 from src.version import __build_commit__, __build_time__, __version__  # noqa: E402
@@ -97,12 +98,17 @@ def create_app() -> FastAPI:
     # Added after the console policy so it runs outside it: the OAuth protocol surface
     # (discovery, registration, token) is open to any origin, without credentials.
     app.add_middleware(PublicOAuthCORSMiddleware)
+    # Cookie-authenticated state changes must come from the console's own origin (CSRF); see middleware/csrf.py
+    app.add_middleware(CSRFOriginMiddleware)
 
     rl = Config.get_rate_limit_config()
     sec = Config.get_security_config()
     # Warn (once per host) when OAuth requests arrive through a host that is not OAUTH_ISSUER
     app.add_middleware(IssuerMismatchMiddleware, issuer=Config.get_oauth_config().issuer,
                        trusted_proxies=sec.trusted_proxies)
+    # DNS rebinding: refuse foreign Host names before anything else looks at the request (outside the issuer check,
+    # so a rebinding name is never recorded as an "issuer mismatch" or suggested as OAUTH_ISSUER)
+    app.add_middleware(TrustedHostMiddleware)
     app.add_middleware(RateLimitMiddleware, config=RateLimitConfig(
         enabled=rl.enabled, requests_per_minute=rl.requests_per_minute, requests_per_hour=rl.requests_per_hour,
         whitelist=rl.whitelist, path_limits=rl.path_limits, trusted_proxies=sec.trusted_proxies,
@@ -219,6 +225,11 @@ def init_database(*, run_migrations: bool = True) -> dict:
     identity = Config.get_identity_config()
     db = make_session()
     try:
+        # Weak SESSION_SECRET_KEY / ENCRYPTION_KEY: warned always, refused only while the install is new (no
+        # signing key yet, so nothing is encrypted with it); see src/utils/secret_policy.py
+        from src.adapters import OAuthKeyAdapter
+        from src.utils.secret_policy import check_startup_secrets
+        check_startup_secrets(fresh_install=not OAuthKeyAdapter.list_all(db))
         summary = seed_database(db, bootstrap_email=identity.bootstrap_admin_email,
                                 bootstrap_password=identity.bootstrap_admin_password)
         from src.oauth.signing_keys import ensure_active_signing_key
@@ -250,8 +261,12 @@ def main():
         ensure_database_ready(Config.get_database_config().url, logger)
         sys.exit(0 if run_migration_command(args.migrate_only, args.message, args.revision) else 1)
 
+    from src.utils.secret_policy import WeakSecretError
     try:
         summary = init_database(run_migrations=not args.no_migrate)
+    except WeakSecretError as e:
+        logger.error(str(e))
+        sys.exit(1)
     except Exception as e:
         logger.error(f"Failed to initialize database: {e}")
         sys.exit(1)

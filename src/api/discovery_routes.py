@@ -17,7 +17,7 @@ from src.discovery.scanner import get_scanner
 from src.oauth import service as oauth_service
 from src.discovery.websocket_manager import get_ws_manager
 from src.identity import get_current_user
-from src.identity.session import SESSION_COOKIE, resolve_user_from_token
+from src.identity.session import SESSION_COOKIE, WS_PROTOCOL, resolve_user_from_token, session_manager
 from src.middleware.origin_check import request_origin_allowed
 from src.utils.field_limits import FieldTooLongError, check_max_length, column_limit
 from src.utils.mcp_target import InvalidTargetError, build_mcp_url, validate_host
@@ -205,7 +205,8 @@ ws_router = APIRouter(tags=["WebSocket"])
 
 @ws_router.websocket("/ws/services")
 async def websocket_services(websocket: WebSocket):
-    """Real-time service status push. Auth: the console's session cookie, from the console's own origin.
+    """Real-time service status push. Auth: the console's session cookie plus its session binding (offered as the
+    ``mcp-gate.v1.binding.<value>`` subprotocol; ``mcp-gate.v1`` is the one accepted), from the console's own origin.
 
     The cookie is attached to any page's WebSocket handshake (WebSockets are not covered by CORS), so a
     handshake whose Origin is not the console's is refused before the cookie is looked at. A token in the
@@ -219,10 +220,11 @@ async def websocket_services(websocket: WebSocket):
     token = websocket.cookies.get(SESSION_COOKIE)
     db = make_session()
     try:
-        user = resolve_user_from_token(db, token)
+        # A browser cannot set headers on a WebSocket handshake: the session binding comes as a subprotocol entry
+        user = resolve_user_from_token(db, token, session_manager.binding_from_ws_protocols(websocket.scope))
     finally:
         db.close()
     if user is None:
         await websocket.close(code=4001, reason="Authentication required")
         return
-    await get_ws_manager().handle_connection(websocket)
+    await get_ws_manager().handle_connection(websocket, subprotocol=WS_PROTOCOL)

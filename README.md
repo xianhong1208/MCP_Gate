@@ -201,6 +201,8 @@ Settings live in [`config/config.yaml`](config/config.yaml) and read their secre
 | `OAUTH_DCR_AUTO_APPROVE` | `true` | Whether dynamically registered clients are usable immediately (the consent screen still gates them) or must be approved in the console. |
 | `GITHUB_CLIENT_ID/_SECRET`, `GOOGLE_CLIENT_ID/_SECRET` | — | Enable GitHub / Google sign-in for the console (experimental — the providers are implemented but not yet verified against live accounts). Callback: `<issuer>/api/session/oauth/<provider>/callback`. |
 | `SECURE_COOKIE` | `false` | Set to `true` behind HTTPS. |
+| `CORS_ALLOWED_ORIGINS` | — | Comma-separated extra origins given credentialed access to the console API. Leave empty unless another site must call it; the Vite dev server does not need it. |
+| `ALLOWED_HOSTS` | — | Comma-separated host names MCP Gate answers to besides the `OAUTH_ISSUER` host, `localhost` and IP addresses (e.g. a container service name); `*.suffix` wildcards, `*` disables the check. Other names get 421. |
 | `ENABLE_API_DOCS` | — | `true` exposes OpenAPI at `/docs`. Environment-only; not in `config.yaml`. |
 
 Advanced: `SERVER_HOST` / `SERVER_PORT` override the bind address when it must differ from the issuer, for example listening on `127.0.0.1` behind a reverse proxy. See [Deploy](docs/deploy.md) for the full reverse-proxy and HTTPS procedure.

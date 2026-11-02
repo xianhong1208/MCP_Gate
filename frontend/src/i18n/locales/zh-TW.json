@@ -206,6 +206,13 @@
       "hint": "動態註冊的 client 在核准前無法取得 token。",
       "review": "前往審核"
     },
+    "weakSecrets": {
+      "title": "伺服器密鑰強度不足",
+      "reasonPlaceholder": "是常見的預設佔位值",
+      "reasonTooShort": "短於 32 個字元",
+      "reasonLowVariety": "使用的不同字元太少",
+      "fix": "請改成至少 32 個隨機字元（python -c \"import secrets; print(secrets.token_urlsafe(32))\"）後重新啟動。更換 SESSION_SECRET_KEY 只會讓所有人重新登入；更換 ENCRYPTION_KEY 會讓已儲存的私鑰無法解密，輪替前請先閱讀 SECURITY.md。"
+    },
     "issuerMismatch": {
       "title": "{{n}} 個 host 在存取 OAuth 端點時與 OAUTH_ISSUER({{issuer}})不一致",
       "hint": "Token 的 iss 與 discovery 公告的網址都是上面的 issuer,透過以下位址存取的 client 會驗證失敗或連到錯的端點:",
@@ -766,7 +773,23 @@
       "created": "建立於 {{date}}",
       "active": "使用中",
       "inactive": "已退役",
-      "empty": "沒有簽章金鑰"
+      "empty": "沒有簽章金鑰",
+      "published": "已停用，仍公開",
+      "publishedHint": "不再簽發新 token，但會留在 JWKS 中，直到它簽過的最後一個 token 過期。",
+      "retiredHint": "已不在 JWKS 中：它簽過的 token 不再被接受。"
+    },
+    "resourceServer": {
+      "label": "代表的資源伺服器",
+      "hint": "此 client 代表的 MCP 伺服器。只有綁定後的 client 能讀取撤銷清單、內省 token 與回報使用量，而且只限該伺服器的 token。",
+      "none": "不是資源伺服器",
+      "title": "資源伺服器：{{name}}",
+      "action": "資源伺服器…",
+      "boundTo": "代表 {{name}} 的資源伺服器",
+      "current": "目前綁定到",
+      "save": "儲存",
+      "saveFailed": "更新資源伺服器綁定失敗",
+      "bound": "{{name}} 已設為資源伺服器",
+      "unbound": "{{name}} 已不再是資源伺服器"
     }
   },
   "marketplace": {
@@ -965,7 +988,8 @@
       "admin_logout": "管理員登出",
       "admin_update": "管理員更新",
       "cleanup_expired": "清除過期項目",
-      "rate_limit_exceeded": "速率限制"
+      "rate_limit_exceeded": "速率限制",
+      "oauth_client_bind": "設定 Client 資源伺服器"
     },
     "detail": {
       "title": "稽核日誌詳情",
@@ -1005,6 +1029,7 @@
       "local_login_disabled": "此伺服器已停用密碼登入。",
       "external_login_failed": "第三方登入失敗,請再試一次。",
       "external_not_allowed": "此帳號不允許在這裡登入。",
+      "external_email_unverified": "此登入服務尚未驗證你的電子郵件，無法用它登入既有帳號。請先在該服務完成驗證，或改用密碼登入。",
       "provider_not_enabled": "此登入方式未啟用。",
       "setup_already_done": "初始設定已完成,請直接登入。",
       "invalid_current_password": "目前的密碼錯誤",
@@ -1013,7 +1038,8 @@
       "validation_password_short": "密碼至少需要 8 個字元",
       "validation_password_too_long": "密碼太長（上限 72 bytes，約 24 個中文字）",
       "authentication_required": "請先登入",
-      "session_expired": "登入已逾時,請重新登入。"
+      "session_expired": "登入已逾時,請重新登入。",
+      "csrf_origin_denied": "請求被拒絕：它不是從此主控台發出的。請重新整理頁面後再試一次。"
     },
     "oauth": {
       "consent_not_found": "找不到同意紀錄",

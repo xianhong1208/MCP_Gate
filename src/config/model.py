@@ -2,7 +2,7 @@
 
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 
 class DatabaseConfig(BaseModel):
@@ -84,18 +84,41 @@ class RateLimitConfig(BaseModel):
     path_limits: Dict[str, int] = {}
 
 
+def _split_list(value):
+    """Accept a YAML list or one comma-separated string (``"${VAR:-}"`` in config.yaml)."""
+    if isinstance(value, str):
+        return [v.strip() for v in value.split(",") if v.strip()]
+    return value
+
+
 class SecurityConfig(BaseModel):
     trusted_proxies: List[str] = ["127.0.0.1", "::1"]
+    # Host names MCP Gate answers to besides the OAUTH_ISSUER host, localhost / *.localhost and IP literals
+    # (DNS-rebinding protection, see src/middleware/trusted_host.py). Exact names, "*.suffix", or "*" for any.
+    allowed_hosts: List[str] = []
     # Secure flag on cookies; set to true when deploying over HTTPS
     secure_cookie: bool = False
     cookie_samesite: str = "lax"
 
+    @field_validator("allowed_hosts", mode="before")
+    @classmethod
+    def _split_hosts(cls, value):
+        return _split_list(value)
+
 
 class CORSConfig(BaseModel):
-    allowed_origins: List[str] = ["http://localhost:4568", "http://localhost:5173"]
+    """Credentialed CORS for the console API. The console itself is same-origin and needs none of it, so the
+    default is empty: every origin listed here can read and drive the admin API from the owner's browser.
+    ``allowed_origins`` also accepts one comma-separated string (``${CORS_ALLOWED_ORIGINS:-}`` in config.yaml)."""
+    allowed_origins: List[str] = []
     allow_methods: List[str] = ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
-    allow_headers: List[str] = ["Content-Type", "Authorization", "X-Requested-With"]
+    allow_headers: List[str] = ["Content-Type", "Authorization", "X-Requested-With", "X-Session-Binding"]
     allow_credentials: bool = True
+
+    @field_validator("allowed_origins", mode="before")
+    @classmethod
+    def _split_origins(cls, value):
+        return _split_list(value)
 
 
 class LoggingConfig(BaseModel):

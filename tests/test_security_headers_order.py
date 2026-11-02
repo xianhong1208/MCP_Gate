@@ -22,10 +22,17 @@ def test_security_headers_on_normal_response(client):
     _assert_security_headers(client.get("/health"))
 
 
-def test_security_headers_on_cors_preflight(client):
-    r = client.options("/api/session/status", headers={
-        "Origin": "http://localhost:5173", "Access-Control-Request-Method": "GET",
-    })
+def test_security_headers_on_cors_preflight(client, monkeypatch):
+    from src.config import Config
+
+    monkeypatch.setattr(Config.get_cors_config(), "allowed_origins", ["http://localhost:5173"])
+    from main import create_app
+    from tests.conftest import make_console_client
+
+    with make_console_client(create_app()) as c:
+        r = c.options("/api/session/status", headers={
+            "Origin": "http://localhost:5173", "Access-Control-Request-Method": "GET",
+        })
     assert r.status_code == 200
     assert r.headers.get("access-control-allow-origin") == "http://localhost:5173"
     _assert_security_headers(r)

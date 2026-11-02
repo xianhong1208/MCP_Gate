@@ -251,6 +251,7 @@ def test_jwks_uri_cannot_point_inside(client, monkeypatch, uri, resolved, messag
     """MCP Gate fetches jwks_uri itself, so it must never be steered at internal addresses (SSRF)."""
     from src.config import Config
     monkeypatch.setattr(Config.get_oauth_config(), "issuer", "https://auth.example")  # production: no loopback
+    monkeypatch.setattr(Config.get_security_config(), "allowed_hosts", ["testserver"])  # the TestClient's Host
     monkeypatch.setattr(client_assertion, "_resolve_host",
                         lambda host: [] if host == "localhost.evil.example" else resolved)
     r = client.post("/oauth/register", json={"client_name": "x", "redirect_uris": [REDIRECT_URI],

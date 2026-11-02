@@ -26,7 +26,7 @@ from sqlalchemy.orm import Session
 
 from db import get_db
 from db.models import AdminUser
-from src.identity import get_current_user, get_optional_current_user
+from src.identity import get_current_user
 from src.logging import get_logger
 from src.oauth import service as oauth
 from src.oauth.errors import OAuthError
@@ -137,10 +137,13 @@ async def authorize(
     state: Optional[str] = None,
     resource: Optional[str] = None,
     db: Session = Depends(get_db),
-    user: Optional[AdminUser] = Depends(get_optional_current_user),
 ):
-    """Validate params -> persist the authorization request -> issue the code directly (logged in and consent may be
-    skipped), otherwise redirect to /consent."""
+    """Validate params -> persist the authorization request -> redirect to the /consent page.
+
+    Even when consent may be skipped (remembered, or a console-registered client) the code is not issued here: this
+    is a top-level navigation, so it carries the session cookie but cannot carry the session binding, and a 302
+    with the code in ``Location`` would hand the code to anyone replaying a leaked cookie. The consent page sees
+    ``can_skip`` and approves on its own, with the full session."""
     try:
         req = oauth.begin_authorization(
             db, response_type=response_type, client_id=client_id, redirect_uri=redirect_uri,
@@ -153,10 +156,6 @@ async def authorize(
             return RedirectResponse(url=oauth.error_redirect(redirect_uri, e, state), status_code=302)
         return _error_json(e)
 
-    if user is not None:
-        info = oauth.describe_request(db, req, user)
-        if info["can_skip"]:
-            return RedirectResponse(url=oauth.approve_request(db, req, user), status_code=302)
     return RedirectResponse(url=f"/consent?{urlencode({'rid': req.id})}", status_code=302)
 
 

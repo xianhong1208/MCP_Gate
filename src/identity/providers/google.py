@@ -20,5 +20,10 @@ class GoogleLoginProvider(OAuthLoginProvider):
             sub=str(data.get("sub")),
             email=(data.get("email") or "").lower() or None,
             name=data.get("name"),
-            email_verified=bool(data.get("email_verified", False)),
+            email_verified=_is_true(data.get("email_verified")),
         )
+
+
+def _is_true(value) -> bool:
+    """OIDC says boolean, but some responses carry the string "true"; anything else (including "false") is False."""
+    return value is True or (isinstance(value, str) and value.strip().lower() == "true")
