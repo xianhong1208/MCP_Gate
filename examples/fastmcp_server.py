@@ -18,7 +18,6 @@ from fastmcp import FastMCP
 from fastmcp.server.auth import RemoteAuthProvider
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 from fastmcp.server.dependencies import get_access_token
-from pydantic import AnyHttpUrl
 
 MCP_GATE = os.environ.get("MCP_GATE_URL", "http://localhost:4568").rstrip("/")
 HOST = os.environ.get("MCP_HOST", "127.0.0.1")
@@ -33,7 +32,7 @@ auth = RemoteAuthProvider(
         audience=AUDIENCE,
         # required_scopes=["mcp:tools:invoke"],  # uncomment to require a scope
     ),
-    authorization_servers=[AnyHttpUrl(MCP_GATE)],
+    authorization_servers=[MCP_GATE],
     base_url=BASE_URL,
 )
 

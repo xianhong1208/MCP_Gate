@@ -25,7 +25,7 @@ Usage::
             audience="https://mcp.example.com/mcp",
             client_id="mcpc_...", client_secret="...",
         ),
-        authorization_servers=[AnyHttpUrl("https://auth.example.com")],
+        authorization_servers=["https://auth.example.com"],
         base_url="https://mcp.example.com",
     )
 

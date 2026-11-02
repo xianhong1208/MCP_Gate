@@ -90,7 +90,6 @@ uv run python main.py
 from fastmcp import FastMCP
 from fastmcp.server.auth import RemoteAuthProvider
 from fastmcp.server.auth.providers.jwt import JWTVerifier
-from pydantic import AnyHttpUrl
 
 auth = RemoteAuthProvider(
     token_verifier=JWTVerifier(
@@ -98,7 +97,7 @@ auth = RemoteAuthProvider(
         issuer="http://localhost:4568",
         audience="http://127.0.0.1:8000/mcp",   # 必須和管理台上的 audience 一致
     ),
-    authorization_servers=[AnyHttpUrl("http://localhost:4568")],
+    authorization_servers=["http://localhost:4568"],
     base_url="http://127.0.0.1:8000",
 )
 

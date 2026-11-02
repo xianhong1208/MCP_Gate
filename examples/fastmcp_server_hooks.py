@@ -15,7 +15,6 @@ sys.path.insert(0, os.path.dirname(__file__))  # so `mcp_gate_hooks` resolves wh
 from fastmcp import FastMCP  # noqa: E402
 from fastmcp.server.auth import RemoteAuthProvider  # noqa: E402
 from mcp_gate_hooks import MCPGateVerifier  # noqa: E402
-from pydantic import AnyHttpUrl  # noqa: E402
 
 MCP_GATE = os.environ.get("MCP_GATE_URL", "http://localhost:4568").rstrip("/")
 HOST = os.environ.get("MCP_HOST", "127.0.0.1")
@@ -35,7 +34,7 @@ auth = RemoteAuthProvider(
         poll_interval=float(os.environ.get("MCP_GATE_POLL_INTERVAL", "15")),
         flush_interval=float(os.environ.get("MCP_GATE_FLUSH_INTERVAL", "30")),
     ),
-    authorization_servers=[AnyHttpUrl(MCP_GATE)],
+    authorization_servers=[MCP_GATE],
     base_url=BASE_URL,
 )
 
