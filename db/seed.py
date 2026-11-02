@@ -65,12 +65,21 @@ def seed_system_clients(db: Session) -> None:
 
 
 def seed_owner(db: Session, email: str, password: str, username: str = "owner") -> AdminUser | None:
-    """Create the owner account (no-op if any account already exists)."""
+    """Create the owner account (no-op if any account already exists).
+
+    The password goes through the same policy as /setup; one that fails it is not used (the owner is then
+    created through the /setup page) rather than aborting startup.
+    """
     if not email or not password:
         return None
     if db.query(AdminUser).count() > 0:
         return None
-    from src.identity.passwords import hash_password
+    from src.identity.passwords import hash_password, password_error_message, validate_password_strength
+    err = validate_password_strength(password)
+    if err:
+        from src.logging import get_logger
+        get_logger("seed").warning(f"ADMIN_PASSWORD ignored: {password_error_message(err)}. Create the owner on /setup instead.")
+        return None
     user = AdminUser(
         email=email.strip().lower(),
         username=username,

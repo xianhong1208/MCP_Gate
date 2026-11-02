@@ -18,6 +18,8 @@ from src.oauth import service as oauth_service
 from src.discovery.websocket_manager import get_ws_manager
 from src.identity import get_current_user
 from src.identity.session import SESSION_COOKIE, resolve_user_from_token
+from src.middleware.origin_check import request_origin_allowed
+from src.utils.mcp_target import InvalidTargetError, build_mcp_url, validate_host
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +64,11 @@ def _scan_ports(request: ScanRequest) -> list:
     """
     if not request.hosts or any(not h or not h.strip() for h in request.hosts):
         raise _scan_error("no_hosts", "At least one host is required.")
+    for host in request.hosts:
+        try:
+            validate_host(host.strip())
+        except InvalidTargetError:
+            raise _scan_error("invalid_host", f"'{host}' is not a bare host name or IP address.", host=host)
     for port in request.ports:
         if not _MIN_PORT <= port <= _MAX_PORT:
             raise _scan_error("invalid_port", f"Port {port} is out of range (1-65535).", port=port)
@@ -167,6 +174,10 @@ async def verify_service(request: VerifyRequest, db: Session = Depends(get_db),
                          _: AdminUser = Depends(get_current_user)):
     """Check whether host:port serves MCP and return its server info."""
     try:
+        build_mcp_url(request.protocol, request.host, request.port, request.mcp_path)
+    except InvalidTargetError as e:
+        raise HTTPException(status_code=400, detail={"error": e.code, "fallback": e.fallback})
+    try:
         result = await get_scanner().verify_mcp_service(
             host=request.host, port=request.port, path=request.mcp_path, protocol=request.protocol,
             auth_token=request.auth_token, token_factory=_scanner_token_factory(db),
@@ -186,10 +197,18 @@ ws_router = APIRouter(tags=["WebSocket"])
 
 @ws_router.websocket("/ws/services")
 async def websocket_services(websocket: WebSocket):
-    """Real-time service status push. Auth: session cookie (SPA) or ?token= (session JWT)."""
+    """Real-time service status push. Auth: the console's session cookie, from the console's own origin.
+
+    The cookie is attached to any page's WebSocket handshake (WebSockets are not covered by CORS), so a
+    handshake whose Origin is not the console's is refused before the cookie is looked at. A token in the
+    query string is not accepted: URLs end up in proxy and access logs.
+    """
     from db.database import make_session
 
-    token = websocket.cookies.get(SESSION_COOKIE) or websocket.query_params.get("token")
+    if not request_origin_allowed(websocket.scope):
+        await websocket.close(code=1008, reason="Origin not allowed")
+        return
+    token = websocket.cookies.get(SESSION_COOKIE)
     db = make_session()
     try:
         user = resolve_user_from_token(db, token)

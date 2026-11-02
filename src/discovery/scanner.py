@@ -16,6 +16,8 @@ from typing import List, Optional, Dict, Any, Callable
 
 import aiohttp
 
+from src.utils.mcp_target import InvalidTargetError, build_mcp_url
+
 logger = logging.getLogger(__name__)
 
 
@@ -201,11 +203,6 @@ def _resolve_validated_ip(host: str) -> str:
     return validated
 
 
-def _url_host(host: str) -> str:
-    """Host form for building URLs: IPv6 addresses need square brackets."""
-    return f"[{host}]" if ":" in host else host
-
-
 class MCPScanner:
     """MCP service scanner"""
 
@@ -337,8 +334,14 @@ class MCPScanner:
         peer's MCP URL is minted (MCP Gate is the authorization server) and the probe is retried once,
         so servers protected by MCP Gate still report their real name, version and tools.
         """
-        public_url = f"{protocol}://{_url_host(host)}:{port}{path}"
         start_time = time.time()
+        # Protocol, host and path come from the operator: an '@' in the path or a URL in the protocol
+        # would move the authority away from the pinned IP below, so they are validated before anything
+        # is resolved or contacted (a stored service that fails here is reported, never connected to).
+        try:
+            public_url = build_mcp_url(protocol, host, port, path)
+        except InvalidTargetError as e:
+            return MCPVerifyResult(success=False, error=str(e), response_time_ms=(time.time() - start_time) * 1000)
         # SSRF protection (AUDIT-1): resolve and validate once, pin the connection to that IP (prevents
         # DNS rebinding), and keep the original Host header so vhost routing is unaffected. A host that does
         # not resolve, or resolves to a blocked address, is reported as a failed check and never contacted.
@@ -346,7 +349,7 @@ class MCPScanner:
             connect_host = _resolve_validated_ip(host)
         except ScannerSSRFError as e:
             return MCPVerifyResult(success=False, error=str(e), response_time_ms=(time.time() - start_time) * 1000)
-        url = f"{protocol}://{_url_host(connect_host)}:{port}{path}"
+        url = build_mcp_url(protocol, connect_host, port, path)
 
         headers = {
             "Content-Type": "application/json",
@@ -517,13 +520,15 @@ class MCPScanner:
         """Get the tool list of an MCP service (three-step flow: initialize -> initialized -> tools/list).
 
         Returns [] only when the server answered a valid tools/list with an empty `tools` array.
-        Raises PermissionError on 401 and ToolsListError on any other failure.
+        Raises PermissionError on 401, InvalidTargetError for an unacceptable protocol / host / path,
+        and ToolsListError on any other failure.
         """
+        build_mcp_url(protocol, host, port, path)  # reject a bad target before resolving anything
         # SSRF protection (AUDIT-1): resolve and validate once, pin the connection to that IP (prevents
         # DNS rebinding), and keep the original Host header so vhost routing is unaffected. ScannerSSRFError
         # (blocked address or unresolvable host) propagates so the caller can say why.
         connect_host = _resolve_validated_ip(host)
-        url = f"{protocol}://{_url_host(connect_host)}:{port}{path}"
+        url = build_mcp_url(protocol, connect_host, port, path)
 
         headers = {
             "Content-Type": "application/json",

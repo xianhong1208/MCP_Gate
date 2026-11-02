@@ -258,8 +258,59 @@ class TestRateLimiter:
         # The /admin/login path has a limit of 2
         await limiter.is_allowed("10.0.0.2", "/admin/login")
         await limiter.is_allowed("10.0.0.2", "/admin/login")
-        allowed, _, _ = await limiter.is_allowed("10.0.0.2", "/admin/login")
-        assert allowed is False
+        allowed, reason, _ = await limiter.is_allowed("10.0.0.2", "/admin/login")
+        assert allowed is False and reason == "rate_limit_path"
+
+    @pytest.mark.asyncio
+    async def test_exhausted_path_bucket_does_not_block_other_paths(self):
+        """Hitting the login limit used to block the whole IP for 60 s (the bucket was the IP's total)."""
+        from src.middleware.rate_limiter import RateLimiter, RateLimitConfig
+
+        limiter = RateLimiter(RateLimitConfig(requests_per_minute=100, path_limits={"/api/session/login": 3},
+                                              whitelist=[]))
+        for _ in range(3):
+            assert (await limiter.is_allowed("10.0.0.3", "/api/session/login"))[0] is True
+        assert (await limiter.is_allowed("10.0.0.3", "/api/session/login"))[:2] == (False, "rate_limit_path")
+        # still blocked on login, but the rest of the console keeps working
+        assert (await limiter.is_allowed("10.0.0.3", "/api/session/login"))[0] is False
+        assert (await limiter.is_allowed("10.0.0.3", "/api/services"))[0] is True
+        # and another IP's login bucket is untouched
+        assert (await limiter.is_allowed("10.0.0.4", "/api/session/login"))[0] is True
+
+    @pytest.mark.asyncio
+    async def test_other_traffic_does_not_use_up_the_path_bucket(self):
+        """Console polling from the same IP must not count against the login limit."""
+        from src.middleware.rate_limiter import RateLimiter, RateLimitConfig
+
+        limiter = RateLimiter(RateLimitConfig(requests_per_minute=100, path_limits={"/api/session/login": 2},
+                                              whitelist=[]))
+        for _ in range(30):
+            assert (await limiter.is_allowed("10.0.0.5", "/api/stats/summary"))[0] is True
+        assert (await limiter.is_allowed("10.0.0.5", "/api/session/login"))[0] is True
+
+    @pytest.mark.asyncio
+    async def test_global_limit_still_counts_path_limited_requests(self):
+        from src.middleware.rate_limiter import RateLimiter, RateLimitConfig
+
+        limiter = RateLimiter(RateLimitConfig(requests_per_minute=3, path_limits={"/oauth/token": 10},
+                                              whitelist=[]))
+        for _ in range(3):
+            assert (await limiter.is_allowed("10.0.0.6", "/oauth/token"))[0] is True
+        # the path bucket has room, but the IP's global budget is spent -> everything is blocked
+        assert (await limiter.is_allowed("10.0.0.6", "/oauth/token"))[:2] == (False, "rate_limit_minute")
+        assert (await limiter.is_allowed("10.0.0.6", "/api/services"))[0] is False
+
+    @pytest.mark.asyncio
+    async def test_stats_report_the_path_bucket(self):
+        from src.middleware.rate_limiter import RateLimiter, RateLimitConfig
+
+        limiter = RateLimiter(RateLimitConfig(requests_per_minute=100, path_limits={"/login": 5}, whitelist=[]))
+        await limiter.is_allowed("10.0.0.7", "/login")
+        await limiter.is_allowed("10.0.0.7", "/other")
+        assert limiter.get_stats("10.0.0.7", "/login")["minute_limit"] == 5
+        assert limiter.get_stats("10.0.0.7", "/login")["minute_count"] == 1
+        assert limiter.get_stats("10.0.0.7", "/other")["minute_limit"] == 100
+        assert limiter.get_stats("10.0.0.7")["minute_count"] == 2
 
 
 class TestRateLimiterSingleton:

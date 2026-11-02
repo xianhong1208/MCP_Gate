@@ -25,6 +25,7 @@ from src.identity import get_current_user
 from src.logging import get_logger
 from src.scheduler import get_scheduler
 from src.utils.crypto import encrypt_token
+from src.utils.mcp_target import InvalidTargetError
 from src.version import __build_commit__, __build_time__, __version__
 
 logger = get_logger("api")
@@ -208,6 +209,8 @@ async def refresh_service_tools(service_id: str, http_request: Request, body: Op
             host=service.host, port=service.port, path=service.mcp_path, protocol=service.protocol,
             auth_token=auth_token,
         )
+    except InvalidTargetError as e:
+        raise HTTPException(status_code=400, detail={"error": e.code, "fallback": e.fallback})
     except PermissionError:
         raise HTTPException(status_code=502, detail={"error": "service.remote_permission_denied",
                                                      "fallback": "Permission denied by remote MCP service."})

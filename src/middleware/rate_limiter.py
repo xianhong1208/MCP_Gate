@@ -98,6 +98,12 @@ class RateLimiter:
         """
         Check whether a request is allowed.
 
+        Two independent budgets apply. Every request counts towards the IP's global per-minute and
+        per-hour limits; exceeding those blocks the whole IP. A path listed in `path_limits` (e.g. the
+        login endpoint) additionally has its own per-minute bucket per IP; exhausting it blocks only that
+        path for that IP, so a brute-force attempt on the login form is slowed down without locking the
+        rest of the console, and console polling cannot use up the login budget.
+
         Returns:
             (allowed, reason, retry_after)
         """
@@ -108,44 +114,47 @@ class RateLimiter:
         if is_ip_in_whitelist(client_ip, self.config.whitelist):
             return True, "", 0
 
+        path_limit = self.config.path_limits.get(path) if path else None
+        path_key = f"{client_ip}:path:{path}" if path_limit is not None else None
+
         async with self._lock:
-            # Check whether temporarily blocked
-            if client_ip in self.blocked_until:
-                if time.time() < self.blocked_until[client_ip]:
-                    retry_after = int(self.blocked_until[client_ip] - time.time())
-                    return False, "too_many_requests", retry_after
-                else:
-                    del self.blocked_until[client_ip]
+            # Blocked IP-wide, or blocked for this path only
+            for key in (client_ip, path_key):
+                if key is None or key not in self.blocked_until:
+                    continue
+                remaining = self.blocked_until[key] - time.time()
+                if remaining > 0:
+                    return False, "too_many_requests", max(1, int(remaining))
+                del self.blocked_until[key]
 
-            # Get the limit values
-            minute_limit = self.config.requests_per_minute
-            hour_limit = self.config.requests_per_hour
+            # The path's own bucket, counted per (IP, path)
+            if path_key is not None and self.minute_counter.add_request(path_key) > path_limit:
+                self.blocked_until[path_key] = time.time() + 60
+                return False, "rate_limit_path", 60
 
-            # Specific paths may have custom limits
-            if path and path in self.config.path_limits:
-                minute_limit = self.config.path_limits[path]
-
-            # Check the per-minute limit
-            minute_count = self.minute_counter.add_request(f"{client_ip}:minute")
-            if minute_count > minute_limit:
-                # Limit exceeded; block temporarily for 60 seconds
+            # The IP's global per-minute limit, counting every path
+            if self.minute_counter.add_request(f"{client_ip}:minute") > self.config.requests_per_minute:
                 self.blocked_until[client_ip] = time.time() + 60
                 return False, "rate_limit_minute", 60
 
-            # Check the per-hour limit
-            hour_count = self.hour_counter.add_request(f"{client_ip}:hour")
-            if hour_count > hour_limit:
-                # Hourly limit exceeded; block until the next hour
+            # The IP's global per-hour limit
+            if self.hour_counter.add_request(f"{client_ip}:hour") > self.config.requests_per_hour:
                 self.blocked_until[client_ip] = time.time() + 300  # 5 minutes
                 return False, "rate_limit_hour", 300
 
             return True, "", 0
 
-    def get_stats(self, client_ip: str) -> dict:
-        """Get request statistics for a client."""
+    def get_stats(self, client_ip: str, path: str = None) -> dict:
+        """Get request statistics for a client; for a path with its own limit, that bucket's numbers."""
+        path_limit = self.config.path_limits.get(path) if path else None
+        if path_limit is not None:
+            minute_count, minute_limit = self.minute_counter.get_count(f"{client_ip}:path:{path}"), path_limit
+        else:
+            minute_count = self.minute_counter.get_count(f"{client_ip}:minute")
+            minute_limit = self.config.requests_per_minute
         return {
-            "minute_count": self.minute_counter.get_count(f"{client_ip}:minute"),
-            "minute_limit": self.config.requests_per_minute,
+            "minute_count": minute_count,
+            "minute_limit": minute_limit,
             "hour_count": self.hour_counter.get_count(f"{client_ip}:hour"),
             "hour_limit": self.config.requests_per_hour,
             "is_blocked": client_ip in self.blocked_until,
@@ -190,7 +199,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         # Add rate limit headers
         response = await call_next(request)
-        stats = self.limiter.get_stats(client_ip)
+        stats = self.limiter.get_stats(client_ip, request.url.path)
         response.headers["X-RateLimit-Limit"] = str(stats["minute_limit"])
         response.headers["X-RateLimit-Remaining"] = str(
             max(0, stats["minute_limit"] - stats["minute_count"])
