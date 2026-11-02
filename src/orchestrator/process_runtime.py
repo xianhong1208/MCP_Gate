@@ -20,7 +20,14 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from src.orchestrator.runtime import SUPERGATEWAY_BIN, LaunchRequest, ProgressFn, Runtime, bridge_argv
+from src.orchestrator.runtime import (
+    SUPERGATEWAY_BIN,
+    LaunchRequest,
+    ProgressFn,
+    Runtime,
+    RuntimeUnavailableError,
+    bridge_argv,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +37,11 @@ _BASE_ENV_KEYS = ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "TEMP", "TMP", "SY
 
 
 class ProcessRuntimeError(Exception):
-    """Raised when an instance cannot be started; the Orchestrator wraps it."""
+    """Raised when an instance cannot be started or stopped; the Orchestrator wraps it."""
+
+
+class ProcessRuntimeUnavailableError(ProcessRuntimeError, RuntimeUnavailableError):
+    """supergateway is not installed, so nothing can run under this runtime."""
 
 
 class ProcessRuntime(Runtime):
@@ -95,7 +106,7 @@ class ProcessRuntime(Runtime):
                                       "catalog images need the docker runtime (MCP_RUNTIME=docker)")
         ok, detail = self.availability()
         if not ok:
-            raise ProcessRuntimeError(detail)
+            raise ProcessRuntimeUnavailableError(detail)
         self.stop(request.name)
         self.remove(request.name)
 
@@ -121,42 +132,62 @@ class ProcessRuntime(Runtime):
         self._pid_file(request.name).write_text(str(child.pid))
         logger.info(f"Process started for {request.name}: pid={child.pid}")
 
+    def _signal(self, pid: int, sig: int) -> None:
+        """Signal the instance's process group (or the pid alone). A process that is already gone is fine;
+        being refused (EPERM) is not -- the instance would keep running."""
+        try:
+            os.killpg(pid, sig)
+            return
+        except ProcessLookupError:
+            pass
+        except OSError:
+            pass  # not a group leader / group gone: fall back to the pid
+        try:
+            os.kill(pid, sig)
+        except ProcessLookupError:
+            return
+        except OSError as e:
+            raise ProcessRuntimeError(f"cannot signal pid {pid}: {e}") from e
+
+    def _is_gone(self, pid: int, name: str, child: Optional[subprocess.Popen]) -> bool:
+        if child is not None:
+            return child.poll() is not None
+        return not self._pid_is_ours(pid, name)
+
     def stop(self, name: str) -> None:
         pid = self._read_pid(name)
         child = self._children.pop(name, None)
         if pid is None or not self._pid_is_ours(pid, name):
             return
-        try:
-            os.killpg(pid, signal.SIGTERM)
-        except OSError:
-            try:
-                os.kill(pid, signal.SIGTERM)
-            except OSError:
-                return
+        self._signal(pid, signal.SIGTERM)
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
-            if child is not None:
-                if child.poll() is not None:
-                    return
-            elif not self._pid_is_ours(pid, name):
+            if self._is_gone(pid, name, child):
                 return
             time.sleep(0.2)
-        try:
-            os.killpg(pid, signal.SIGKILL)
-        except OSError:
-            pass
+        self._signal(pid, signal.SIGKILL)
         if child is not None:
             try:
                 child.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 pass
+        else:
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline and not self._is_gone(pid, name, None):
+                time.sleep(0.2)
+        if not self._is_gone(pid, name, child):
+            if child is not None:
+                self._children[name] = child  # keep the handle: it is still ours and still alive
+            raise ProcessRuntimeError(f"process {pid} for {name} is still alive after SIGKILL")
 
     def remove(self, name: str) -> None:
         self._children.pop(name, None)
         try:
             self._pid_file(name).unlink()
-        except OSError:
+        except FileNotFoundError:
             pass
+        except OSError as e:
+            raise ProcessRuntimeError(f"cannot remove pid file for {name}: {e}") from e
 
     def instance_id(self, name: str, running_only: bool = False) -> Optional[str]:
         child = self._children.get(name)

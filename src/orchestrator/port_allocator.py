@@ -6,9 +6,10 @@ Allocates a free TCP port for the supergateway bridge subprocess. Rules:
   2. Allocate the first port that passes both checks
   3. If the whole range is full, raise PortAllocationError
 
+A process that already has a port keeps it (preferred_port) as long as it passes the same two checks:
+clients have its URL configured, so a restart must not silently move it to the lowest free port.
+
 Design considerations:
-  - Manually specifying a port is not supported (MVP stage; to add vendor customisation
-    later, just extend allocate() to accept a preferred_port parameter)
   - The double check (DB + socket bind) avoids race conditions: the DB alone could hand out
     a port that another process is using but has not yet written to the DB; the bind test
     alone could hand out a port reserved in the DB whose container has not started yet
@@ -59,32 +60,48 @@ class PortAllocator:
                 return True
 
     @staticmethod
-    def _db_used_ports(db: Session) -> set:
-        """Managed Process ports already allocated in the DB (non-NULL port)"""
-        rows = db.query(ManagedMcpProcess.port).filter(
-            ManagedMcpProcess.port.isnot(None)
-        ).all()
-        return {r[0] for r in rows if r[0] is not None}
+    def _own_uuid(process_id: Optional[str]) -> Optional[uuid.UUID]:
+        if not process_id:
+            return None
+        try:  # the id column is a native UUID; a string would make the driver choke on .hex
+            return uuid.UUID(str(process_id))
+        except ValueError:
+            return None
 
-    def allocate(self, db: Session, exclude_process_id: Optional[str] = None) -> int:
+    @classmethod
+    def _db_used_ports(cls, db: Session, exclude_process_id: Optional[str] = None) -> set:
+        """Managed Process ports already allocated in the DB (non-NULL port), other than exclude_process_id's"""
+        q = db.query(ManagedMcpProcess.port).filter(ManagedMcpProcess.port.isnot(None))
+        own_id = cls._own_uuid(exclude_process_id)
+        if own_id is not None:
+            q = q.filter(ManagedMcpProcess.id != own_id)
+        return {r[0] for r in q.all() if r[0] is not None}
+
+    def unavailable_reason(self, db: Session, port: int, exclude_process_id: Optional[str] = None) -> Optional[str]:
+        """Why ``port`` cannot be used by ``exclude_process_id``'s instance, or None when it can.
+
+        The caller is expected to have removed that process's own leftover instance first, so anything
+        still bound to the port belongs to someone else."""
+        if port in self._db_used_ports(db, exclude_process_id):
+            return f"port {port} is assigned to another managed process"
+        if self._is_port_listening(port):
+            return f"port {port} is already in use on the host"
+        return None
+
+    def allocate(
+        self, db: Session, exclude_process_id: Optional[str] = None, preferred_port: Optional[int] = None,
+    ) -> int:
         """Return a free port
 
         Args:
             db: SQLAlchemy session
-            exclude_process_id: when re-allocating for an existing process, treat its
-                current port as available (so it can "restart keeping the original port")
+            exclude_process_id: allocating for an existing process -- its own DB port does not count as taken
+            preferred_port: returned as-is when it is usable (e.g. the port the process already has, so a
+                restart keeps its URL); otherwise the range is scanned for the lowest free port
         """
-        used = self._db_used_ports(db)
-        if exclude_process_id:
-            try:  # the id column is a native UUID; a string would make the driver choke on .hex
-                own_id = uuid.UUID(str(exclude_process_id))
-            except ValueError:
-                own_id = None
-            own = db.query(ManagedMcpProcess.port).filter(
-                ManagedMcpProcess.id == own_id
-            ).first() if own_id else None
-            if own and own[0] is not None:
-                used.discard(own[0])
+        used = self._db_used_ports(db, exclude_process_id)
+        if preferred_port is not None and preferred_port not in used and not self._is_port_listening(preferred_port):
+            return preferred_port
 
         for port in self._port_range():
             if port in used:

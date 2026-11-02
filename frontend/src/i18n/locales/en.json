@@ -890,7 +890,9 @@
       "registering_service": "Registering service",
       "stopping_container": "Stopping container",
       "loading_image": "Loading image (docker load)",
-      "verifying_image": "Verifying image"
+      "verifying_image": "Verifying image",
+      "waiting_ready": "Waiting for the MCP server to answer",
+      "starting_process": "Starting process"
     }
   },
   "audit": {
@@ -1058,7 +1060,9 @@
       "image_load_failed": "Failed to load image: {{reason}}",
       "image_not_installed": "Image \"{{image}}\" is not installed yet. Click Install in the Marketplace first",
       "image_tar_mismatch": "Image tar mismatch: expected {{expected}}, loaded {{loaded}}. Check the tar contents or the catalog image/tag",
-      "image_tar_not_found": "Image tar not found: {{path}}. Place the tar at that path and retry"
+      "image_tar_not_found": "Image tar not found: {{path}}. Place the tar at that path and retry",
+      "runtime_unavailable": "The managed-server runtime is unavailable (is the Docker daemon running?): {{reason}}",
+      "uninstall_stop_failed": "Uninstall aborted: the instance could not be stopped and may still be running: {{reason}}"
     },
     "byo": {
       "invalid_command": "Launch command violates the security policy: {{reason}}",

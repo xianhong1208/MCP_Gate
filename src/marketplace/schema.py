@@ -9,7 +9,7 @@ Design principles:
   - the secret + required flags tell the UI how to render the field (password / plain input)
   - docker.tag should be pinned by us to a verified version; shipping with latest is not recommended
 """
-from typing import List, Optional
+from typing import List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # Single source of truth for the docker argv policy. The same rules are applied again by the
@@ -59,9 +59,12 @@ class DockerSpec(BaseModel):
         default_factory=lambda: ["--rm"],
         description="docker run args",
     )
-    transport: str = Field(
+    # Catalog images must ship their own HTTP server: the orchestrator has no inner command to bridge for a
+    # catalog entry, so anything else could only fail at start time. Rejected at load time instead (the loader
+    # skips the file and records why). stdio servers are deployed as BYO definitions.
+    transport: Literal["http"] = Field(
         "http",
-        description="stdio = needs the supergateway bridge; http = the image ships its own HTTP server",
+        description="Must be 'http': the image ships its own HTTP server (stdio servers go through BYO definitions)",
     )
     container_port: int = Field(
         8080,
