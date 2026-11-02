@@ -38,6 +38,7 @@ from src.middleware import (  # noqa: E402
     SecurityHeadersMiddleware, TrustedHostMiddleware,
 )
 from src.scheduler import get_scheduler  # noqa: E402
+from src.utils.db_url import mask_db_url, redact_url_credentials  # noqa: E402
 from src.version import __build_commit__, __build_time__, __version__  # noqa: E402
 
 logger = get_logger("main")
@@ -240,6 +241,29 @@ def init_database(*, run_migrations: bool = True) -> dict:
         db.close()
 
 
+
+def _print_banner(summary: dict, host: str, port: int) -> None:
+    """Startup banner. The database URL is printed with its password masked (N1)."""
+    config = Config.get_config_model()
+    issuer = config.oauth.issuer
+    logger.info("")
+    logger.info("╔══════════════════════════════════════════════════════╗")
+    logger.info("║   MCP Gate — OAuth 2.1 AS for your MCP servers     ║")
+    logger.info("╚══════════════════════════════════════════════════════╝")
+    logger.info(f"  Version:    {__version__} ({__build_commit__}, {__build_time__})")
+    logger.info(f"  Address:    http://{host}:{port}")
+    logger.info(f"  Issuer:     {issuer}")
+    logger.info(f"  Database:   {mask_db_url(config.database.url)}")
+    logger.info(f"  Metadata:   {issuer}/.well-known/oauth-authorization-server")
+    logger.info(f"  JWKS:       {issuer}/.well-known/jwks.json  (kid={summary.get('signing_kid', '?')[:12]}…)")
+    if summary.get("users", 0) == 0:
+        logger.warning(f"  No admin account yet → open http://localhost:{port}/setup to create the owner")
+    elif summary.get("owner_created"):
+        logger.info("  Owner account created from ADMIN_EMAIL / ADMIN_PASSWORD")
+    if os.environ.get("ENABLE_API_DOCS", "").lower() == "true":
+        logger.info(f"  API Docs:   http://{host}:{port}/docs")
+    logger.info("")
+
 def main():
     args = parse_args()
     try:
@@ -268,31 +292,13 @@ def main():
         logger.error(str(e))
         sys.exit(1)
     except Exception as e:
-        logger.error(f"Failed to initialize database: {e}")
+        logger.error(f"Failed to initialize database: {redact_url_credentials(str(e))}")
         sys.exit(1)
 
     app = create_app()
     host = args.host or config.server.host
     port = args.port or config.effective_port
-    issuer = config.oauth.issuer
-
-    logger.info("")
-    logger.info("╔══════════════════════════════════════════════════════╗")
-    logger.info("║   MCP Gate — OAuth 2.1 AS for your MCP servers     ║")
-    logger.info("╚══════════════════════════════════════════════════════╝")
-    logger.info(f"  Version:    {__version__} ({__build_commit__}, {__build_time__})")
-    logger.info(f"  Address:    http://{host}:{port}")
-    logger.info(f"  Issuer:     {issuer}")
-    logger.info(f"  Database:   {config.database.url}")
-    logger.info(f"  Metadata:   {issuer}/.well-known/oauth-authorization-server")
-    logger.info(f"  JWKS:       {issuer}/.well-known/jwks.json  (kid={summary.get('signing_kid', '?')[:12]}…)")
-    if summary.get("users", 0) == 0:
-        logger.warning(f"  No admin account yet → open http://localhost:{port}/setup to create the owner")
-    elif summary.get("owner_created"):
-        logger.info("  Owner account created from ADMIN_EMAIL / ADMIN_PASSWORD")
-    if os.environ.get("ENABLE_API_DOCS", "").lower() == "true":
-        logger.info(f"  API Docs:   http://{host}:{port}/docs")
-    logger.info("")
+    _print_banner(summary, host, port)
 
     if args.reload:
         uvicorn.run("main:create_app", host=host, port=port, reload=True, factory=True, log_config=None,
