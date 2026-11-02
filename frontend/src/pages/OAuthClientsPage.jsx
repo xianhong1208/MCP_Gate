@@ -11,6 +11,7 @@ import CodeBlock from '../components/CodeBlock'
 import LastChecked from '../components/LastChecked'
 import ScopeEditor from '../components/ScopeEditor'
 import clsx from 'clsx'
+import { safeHttpUrl } from '../utils/url'
 import {
   PageHeader, Button, IconButton, Badge, StatusPill, Card, CardHeader, EmptyState, Alert, LoadingBlock, Tabs,
   Table, THead, TBody, TR, TH, TD, RowActions,
@@ -556,7 +557,8 @@ export default function OAuthClientsPage() {
                     <TD className="max-w-xs">
                       <div className="flex items-center gap-3">
                         <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-md border border-border bg-muted text-muted-foreground">
-                          {c.logo_uri ? <img src={c.logo_uri} alt="" className="h-full w-full object-cover" /> : <Bot className="h-4 w-4" aria-hidden="true" />}
+                          {/* logo_uri is never loaded (H-16): it would let the registrant track the owner */}
+                          <Bot className="h-4 w-4" aria-hidden="true" />
                         </span>
                         <div className="min-w-0">
                           <p className="flex items-center gap-1.5 truncate font-medium text-foreground">
@@ -571,9 +573,11 @@ export default function OAuthClientsPage() {
                               {t('clients.resourceServer.boundTo', { name: serviceForAudience(services, c.resource_audience)?.name || c.resource_audience })}
                             </p>
                           )}
-                          {c.client_uri && (
-                            <a href={c.client_uri} target="_blank" rel="noreferrer" className="block truncate text-xs text-link transition-colors duration-200 hover:text-link-hover">{c.client_uri}</a>
-                          )}
+                          {c.client_uri && (safeHttpUrl(c.client_uri) ? (
+                            <a href={safeHttpUrl(c.client_uri)} target="_blank" rel="noopener noreferrer" className="block truncate text-xs text-link transition-colors duration-200 hover:text-link-hover">{c.client_uri}</a>
+                          ) : (
+                            <p className="truncate text-xs text-muted-foreground">{c.client_uri}</p>
+                          ))}
                         </div>
                       </div>
                     </TD>

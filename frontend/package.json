@@ -9,7 +9,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node tests/mcpConfig.test.mjs && node tests/format.test.mjs && node tests/redirect.test.mjs && node tests/sessionBinding.test.mjs && node tests/export.test.mjs && node tests/i18nKeys.test.mjs && node tests/snippets.test.mjs",
+    "test": "node tests/mcpConfig.test.mjs && node tests/format.test.mjs && node tests/redirect.test.mjs && node tests/sessionBinding.test.mjs && node tests/export.test.mjs && node tests/i18nKeys.test.mjs && node tests/snippets.test.mjs && node tests/url.test.mjs",
     "lint": "eslint ."
   },
   "dependencies": {
