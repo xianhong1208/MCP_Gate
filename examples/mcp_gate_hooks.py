@@ -91,6 +91,11 @@ class MCPGateVerifier(JWTVerifier):
         result = await super().verify_token(token)
         if result is None:
             return None
+        if (result.claims or {}).get("token_use") != "access":
+            # Only access tokens authorize requests. MCP Gate's refresh tokens name its token endpoint as their
+            # audience, but refresh tokens from releases before 1.2 carried this server's audience.
+            logger.info("Bearer token rejected for client %s: not an access token", result.client_id)
+            return None
         jti = (result.claims or {}).get("jti")
         if jti and jti in self._revoked:
             logger.info("Bearer token rejected for client %s: revoked (jti %s)", result.client_id, jti)

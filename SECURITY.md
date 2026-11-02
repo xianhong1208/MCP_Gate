@@ -18,7 +18,7 @@ Only the latest release on the `main` branch receives fixes.
 | Owner password | bcrypt (12 rounds). Changing it invalidates every existing console session. |
 | Console session | HttpOnly cookie, `SameSite=Lax` by default, `Secure` when `SECURE_COOKIE=true`; 12-hour lifetime, 30-minute idle timeout in the UI. |
 | Authorization codes | Stored as SHA-256 hashes, single use, 120-second lifetime, bound to client, redirect URI, PKCE challenge and resource. Reuse revokes every token derived from the code. |
-| Refresh tokens | Rotated on every use; presenting a rotated token revokes the whole family. |
+| Refresh tokens | Rotated on every use; presenting a rotated token revokes the whole family. Their audience is MCP Gate's own token endpoint, so a resource server that checks `aud` (every `JWTVerifier` configured with its audience) refuses them as Bearer tokens; `MCPGateVerifier` also requires `token_use: access`. |
 | Client secrets | Stored as SHA-256 hashes, compared in constant time, returned once at registration. |
 | Redirect URIs | Exact-match against the registered list; `http` is allowed only for loopback hosts. |
 

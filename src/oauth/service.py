@@ -597,6 +597,10 @@ def issue_access_token(
     return token, expires_in, rec
 
 
+def refresh_token_audience() -> str:
+    return f"{issuer()}/oauth/token"
+
+
 def issue_refresh_token(
     db: Session, *, sub: str, client_id: str, scope: str, audience: Optional[str],
     service: Optional[Service], user: Optional[AdminUser], parent_jti: Optional[str] = None,
@@ -605,12 +609,14 @@ def issue_refresh_token(
     now = _now_ts()
     expires_in = cfg.refresh_expire_days * 86400
     jti = str(uuid.uuid4())
+    # The audience is MCP Gate's own token endpoint, never the resource: a refresh token is presented only
+    # here, so a resource server verifying aud (every JWTVerifier configured with its audience) refuses it as a
+    # Bearer token. The resource it was granted for lives in the token record (rec.audience).
     payload = {
         "iss": issuer(), "sub": sub, "client_id": client_id, "scope": scope,
         "iat": now, "exp": now + expires_in, "jti": jti, "token_use": "refresh",
+        "aud": refresh_token_audience(),
     }
-    if audience:
-        payload["aud"] = audience
     token = _sign(db, payload, typ="refresh+jwt")
     rec = OAuthTokenAdapter.create(
         db, jti=jti, kind="refresh", client_id=client_id, user_id=user.id if user else None, sub=sub,
@@ -853,7 +859,11 @@ def revoked_feed(db: Session, *, caller: OAuthClient, since: Optional[float] = N
         except (TypeError, ValueError, OverflowError):
             raise OAuthError("invalid_request", "since must be a unix timestamp")
     now = local_now()
-    rows = OAuthTokenAdapter.list_revoked_unexpired(db, since=since_dt, audience=audience)
+    # Revoked refresh tokens are listed too: refresh JWTs issued before 1.2 carry the server's audience and an
+    # older verifier would accept them as Bearer tokens. Routine rotation is left out (it is not a revocation
+    # anyone asked for, and listing it would grow the feed with every refresh).
+    rows = OAuthTokenAdapter.list_revoked_unexpired(db, since=since_dt, audience=audience,
+                                                    kinds=("access", "pat", "refresh"))
     return {
         "revoked": [{"jti": t.jti, "revoked_at": int(t.revoked_at.timestamp()),
                      "exp": int(t.expires_at.timestamp())} for t in rows],

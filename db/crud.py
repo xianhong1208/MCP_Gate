@@ -756,6 +756,9 @@ class OAuthTokenCRUD:
         the tokens of one server."""
         q = db.query(OAuthToken).filter(
             OAuthToken.revoked_at.isnot(None), OAuthToken.expires_at >= local_now(), OAuthToken.kind.in_(kinds),
+            # a refresh token rotated away in the normal course of things is not a revocation
+            or_(OAuthToken.kind != "refresh", OAuthToken.revoke_reason.is_(None),
+                OAuthToken.revoke_reason != "rotated"),
         )
         if audience is not None:
             q = q.filter(OAuthToken.audience == audience)
