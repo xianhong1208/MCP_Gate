@@ -53,6 +53,7 @@ All notable changes to MCP Gate (formerly MCP Center) are documented here. The f
 - **`client_uri`, `logo_uri`, `tos_uri` and `policy_uri` must be web URLs** — `https`, or `http` to `localhost` / loopback. `javascript:`, `data:`, `file:` and plain-http remote URLs are refused at registration (DCR and console), so the consent screen can no longer be handed a script URL or a tracking pixel on another host.
 - **Dynamically registered clients that never obtained a token are purged** 30 days after registration by the OAuth cleanup job (`oauth.dcr_unused_client_days`, `0` disables it). Clients that completed a flow, console clients and built-in clients are never touched.
 - `GET /api/oauth/activity` (`at`) and the consent-request details (`expires_at`) now carry their UTC offset like every other console timestamp; they were naive local times that a browser in another time zone misread.
+- **Rotated signing keys are retired from the JWKS.** Every key ever created used to stay published forever, so a leaked old private key could mint tokens resource servers accept indefinitely. A rotated-out key now stays in `/.well-known/jwks.json` for the access-token lifetime plus 5 minutes (`oauth.retired_key_publish_minutes`), and longer only while a live access token or PAT it signed is still recorded; introspection treats tokens signed by an unpublished key as inactive. MCP Gate keeps the key to verify the refresh tokens it signed, so clients refresh without noticing. `GET /api/oauth/keys` reports `published` per key.
 
 ## [1.1.0] — 2026-09-18
 

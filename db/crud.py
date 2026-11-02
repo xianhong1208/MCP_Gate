@@ -781,6 +781,15 @@ class OAuthTokenCRUD:
         return q.order_by(OAuthToken.revoked_at.asc()).all()
 
     @staticmethod
+    def any_live_issued_between(db: Session, start: datetime, end: datetime,
+                                kinds: tuple = ("access", "pat")) -> bool:
+        """Is any recorded, unrevoked, unexpired token of ``kinds`` issued within [start, end]?"""
+        return db.query(OAuthToken.jti).filter(
+            OAuthToken.kind.in_(kinds), OAuthToken.revoked_at.is_(None), OAuthToken.expires_at >= local_now(),
+            OAuthToken.issued_at >= start, OAuthToken.issued_at <= end,
+        ).first() is not None
+
+    @staticmethod
     def apply_usage(db: Session, token: OAuthToken, *, count: int, last_seen: Optional[datetime]) -> OAuthToken:
         """Fold a batch of verifications an MCP server reported into the token's counters."""
         token.use_count = (token.use_count or 0) + max(1, int(count))

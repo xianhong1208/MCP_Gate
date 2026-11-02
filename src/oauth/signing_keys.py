@@ -2,8 +2,11 @@
 
 The private key lives only in MCP Gate (stored AES-256-GCM encrypted in the DB); the public key is published via
 /.well-known/jwks.json and FastMCP's JWTVerifier uses it to verify signatures. kid = RFC 7638 JWK thumbprint, so
-several keys can coexist: on rotation the old key is retired (no longer signs) but stays in the JWKS, so old tokens
-that have not yet expired still verify.
+several keys can coexist: on rotation the old key is retired (no longer signs) but stays in the JWKS while tokens it
+signed can still be valid -- the access-token lifetime after rotation (``oauth.retired_key_publish_minutes``), or
+longer while a live access token / PAT it signed is still recorded. After that it is dropped from the JWKS, so a
+leaked old key stops minting tokens resource servers accept. MCP Gate keeps the key itself to verify the refresh
+tokens it signed (they are only ever presented to MCP Gate).
 """
 
 import base64
@@ -16,7 +19,10 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from sqlalchemy.orm import Session
 
 from db.models import OAuthSigningKey
-from src.adapters import OAuthKeyAdapter
+from datetime import timedelta
+
+from db.models import local_now
+from src.adapters import OAuthKeyAdapter, OAuthTokenAdapter
 from src.config import Config
 from src.utils.crypto import decrypt_token, encrypt_token
 
@@ -85,5 +91,31 @@ def public_jwk_of(key: OAuthSigningKey) -> dict:
     return json.loads(key.public_jwk)
 
 
+CLOCK_SKEW = timedelta(minutes=5)
+
+
+def retired_key_grace() -> timedelta:
+    cfg = Config.get_oauth_config()
+    if cfg.retired_key_publish_minutes is not None:
+        return timedelta(minutes=max(0, cfg.retired_key_publish_minutes))
+    return timedelta(minutes=cfg.access_expire_minutes) + CLOCK_SKEW
+
+
+def is_published(db: Session, key: OAuthSigningKey) -> bool:
+    """Whether resource servers should still accept tokens signed by ``key``."""
+    if key.is_active:
+        return True
+    retired = key.rotated_at or key.created_at
+    if retired is None or retired > local_now() - retired_key_grace():
+        return True
+    # A long-lived token it signed (a PAT, or an access token with a custom lifetime) keeps it published until that
+    # token expires or is revoked. Tokens are attributed to the key that was active when they were issued.
+    return OAuthTokenAdapter.any_live_issued_between(db, key.created_at - CLOCK_SKEW, retired + CLOCK_SKEW)
+
+
+def published_keys(db: Session) -> list[OAuthSigningKey]:
+    return [k for k in OAuthKeyAdapter.list_all(db) if is_published(db, k)]
+
+
 def get_jwks(db: Session) -> dict:
-    return {"keys": [public_jwk_of(k) for k in OAuthKeyAdapter.list_all(db)]}
+    return {"keys": [public_jwk_of(k) for k in published_keys(db)]}

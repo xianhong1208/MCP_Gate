@@ -386,14 +386,16 @@ async def delete_consent(consent_id: str, request: Request, db: Session = Depend
 # ---------------------------------------------------------------------------
 @router.get("/keys")
 async def list_keys(db: Session = Depends(get_db), _: AdminUser = Depends(get_current_user)):
-    """Signing keys published in JWKS, with the active one marked."""
+    """Every signing key, with the active one marked and `published` telling whether it is still in the JWKS (a
+    retired key leaves it once nothing it signed can still be valid)."""
     keys = OAuthKeyAdapter.list_all(db)
-    return {"keys": [k.to_dict() for k in keys], "total": len(keys)}
+    return {"keys": [{**k.to_dict(), "published": signing_keys.is_published(db, k)} for k in keys],
+            "total": len(keys)}
 
 
 @router.post("/keys/rotate")
 async def rotate_key(request: Request, db: Session = Depends(get_db), user: AdminUser = Depends(get_current_user)):
-    """Create a new active signing key. Old keys stay in JWKS so existing tokens keep verifying."""
+    """Create a new active signing key. The old key stays in JWKS while tokens it signed can still be valid."""
     key = signing_keys.rotate_signing_key(db)
     _audit(db, request, user, AuditAction.OAUTH_KEY_ROTATE, ResourceType.SYSTEM, key.kid)
     return key.to_dict()

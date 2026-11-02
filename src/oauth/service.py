@@ -673,16 +673,17 @@ def issue_refresh_token(
     return token, rec
 
 
-def verify_jwt(db: Session, token: str, *, expect_use: Optional[str] = None) -> dict:
+def verify_jwt(db: Session, token: str, *, expect_use: Optional[str] = None, published_only: bool = False) -> dict:
     """Look up the public key by the header kid, then verify signature + iss + exp; aud is not enforced here (the
-    resource server verifies it itself)."""
+    resource server verifies it itself). ``published_only`` accepts only keys still in the JWKS (what a resource
+    server would accept); refresh tokens are verified against any key MCP Gate still holds."""
     try:
         header = unverified_header(token)
     except JWTVerifyError as e:
         raise OAuthError("invalid_grant", str(e))
     kid = header.get("kid")
     key = signing_keys.get_key_by_kid(db, kid) if kid else None
-    if not key:
+    if not key or (published_only and not signing_keys.is_published(db, key)):
         raise OAuthError("invalid_grant", "unknown signing key")
     try:
         claims = decode_rs256(token, signing_keys.public_jwk_of(key), issuer=issuer())
@@ -701,6 +702,16 @@ def _active_service_for(db: Session, audience: Optional[str]) -> Optional[Servic
     if service is None:
         raise OAuthError("invalid_grant", "the server this grant was issued for is disabled or no longer registered")
     return service
+
+
+def _signed_by_published_key(db: Session, token: str) -> bool:
+    """For a token whose signature already verified: is its key still in the JWKS?"""
+    try:
+        kid = unverified_header(token).get("kid")
+    except JWTVerifyError:
+        return False
+    key = signing_keys.get_key_by_kid(db, kid) if kid else None
+    return key is not None and signing_keys.is_published(db, key)
 
 
 def _token_response(access_token: str, expires_in: int, scope: str, refresh_token: Optional[str] = None) -> dict:
@@ -869,6 +880,8 @@ def introspect_token(db: Session, token: str, *, caller: OAuthClient, ip: Option
         claims = verify_jwt(db, token)
     except OAuthError:
         return inactive
+    if claims.get("token_use") != "refresh" and not _signed_by_published_key(db, token):
+        return inactive  # a resource server would no longer accept it either
     is_owner = claims.get("client_id") == caller.client_id
     if not is_owner:
         rs_audience = resource_server_audience(caller)
@@ -878,6 +891,8 @@ def introspect_token(db: Session, token: str, *, caller: OAuthClient, ip: Option
         if not isinstance(aud, str) or normalize_audience(aud) != rs_audience:
             return inactive
     rec = OAuthTokenAdapter.get(db, claims.get("jti", ""))
+    if rec is None and claims.get("token_use") == "refresh":
+        return inactive  # every refresh token MCP Gate issues is recorded; one without a record is not ours
     if rec is not None:
         if rec.is_revoked or rec.is_expired:
             return inactive

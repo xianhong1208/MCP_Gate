@@ -1,6 +1,6 @@
 """Configuration model definitions."""
 
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel
 
@@ -52,6 +52,10 @@ class OAuthConfig(BaseModel):
     # Dynamically registered clients that never obtained a token are deleted this many days after registration
     # (anyone can register one, so they would otherwise pile up). 0 disables the purge.
     dcr_unused_client_days: int = 30
+    # How long (minutes) a rotated-out signing key stays in the published JWKS after rotation. Unset = the access
+    # token lifetime plus 5 minutes of clock skew. A retired key also stays published while any live access token
+    # or PAT it signed is still recorded (PATs can outlive this by months).
+    retired_key_publish_minutes: Optional[int] = None
 
 
 class OAuthLoginProviderConfig(BaseModel):

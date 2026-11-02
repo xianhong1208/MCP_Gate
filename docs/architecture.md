@@ -58,7 +58,7 @@ Confidential clients exchange `client_id` + secret for an access token whose `su
 
 ## Keys and secrets
 
-- Signing keys are RSA-2048 by default. The private PEM is encrypted with AES-256-GCM (`ENCRYPTION_KEY`) before it is stored; `kid` is the RFC 7638 thumbprint. Rotation creates a new active key and keeps old ones in JWKS so existing tokens still verify.
+- Signing keys are RSA-2048 by default. The private PEM is encrypted with AES-256-GCM (`ENCRYPTION_KEY`) before it is stored; `kid` is the RFC 7638 thumbprint. Rotation creates a new active key; the old one stays in JWKS for the access-token lifetime plus 5 minutes (`oauth.retired_key_publish_minutes`), and beyond that only while a live access token or PAT it signed is still recorded. Once dropped from JWKS, tokens it signed are inactive on introspection too; MCP Gate keeps the key to verify refresh tokens it signed.
 - `ENCRYPTION_KEY` and `SESSION_SECRET_KEY` come from the environment or from `data/secrets.json` (created on first start, mode `0600`).
 - Console sessions are HS256 JWTs in an HttpOnly cookie, signed with `SESSION_SECRET_KEY`, and rejected if issued before the user's last password change.
 

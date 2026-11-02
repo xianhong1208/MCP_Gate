@@ -97,7 +97,7 @@ async def authorization_server_metadata(db: Session = Depends(get_db)):
 
 @router.get("/.well-known/jwks.json")
 async def jwks(db: Session = Depends(get_db)):
-    """Public signing keys (JWKS). MCP servers fetch these to verify tokens offline; includes retired keys so older tokens still verify. Public."""
+    """Public signing keys (JWKS). MCP servers fetch these to verify tokens offline; a rotated-out key stays published while tokens it signed can still be valid. Public."""
     return JSONResponse(content=get_jwks(db), headers={"Cache-Control": "public, max-age=300"})
 
 

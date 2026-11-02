@@ -12,7 +12,7 @@ Only the latest release on the `main` branch receives fixes.
 
 | Asset | Protection |
 |---|---|
-| RS256 signing private keys | Encrypted at rest with AES-256-GCM using `ENCRYPTION_KEY`; only public keys are ever served (`/.well-known/jwks.json`). |
+| RS256 signing private keys | Encrypted at rest with AES-256-GCM using `ENCRYPTION_KEY`; only public keys are ever served (`/.well-known/jwks.json`). After a rotation the old public key leaves the JWKS once nothing it signed can still be valid (the access-token lifetime, or longer while a PAT it signed is live), so rotating answers a key compromise: revoke the PATs signed before the rotation and the old key stops being accepted. |
 | Stored secrets (service bearer tokens, container environment variables) | Same AES-256-GCM encryption. The console never returns them; environment values are write-only. |
 | `ENCRYPTION_KEY`, `SESSION_SECRET_KEY` | Read from the environment, or generated on first start and written to `data/secrets.json` with mode `0600`. Rotating `ENCRYPTION_KEY` makes existing private keys and secrets unreadable. |
 | Owner password | bcrypt (12 rounds). Changing it invalidates every existing console session. |
