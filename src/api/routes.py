@@ -21,7 +21,7 @@ from src.api.schemas import (
     ServiceInfo, ServiceListResponse, ServiceUpdateRequest,
 )
 from src.audit import ActorType, AuditAction, AuditService, AuditStatus, ResourceType
-from src.identity import get_current_user
+from src.identity import get_current_user, get_optional_current_user
 from src.logging import get_logger
 from src.scheduler import get_scheduler
 from src.utils.crypto import encrypt_token
@@ -84,8 +84,10 @@ async def health_check():
 
 
 @router.get("/api/system/version", tags=["System"])
-async def get_version():
-    """Version and build information. Public."""
+def get_version(user: Optional[AdminUser] = Depends(get_optional_current_user)):
+    """Version and build information. The app version is public; build, Python and OS details need a session."""
+    if user is None:
+        return {"version": __version__}
     return {
         "version": __version__, "build_time": __build_time__, "build_commit": __build_commit__,
         "python_version": platform.python_version(), "platform": platform.system(),
