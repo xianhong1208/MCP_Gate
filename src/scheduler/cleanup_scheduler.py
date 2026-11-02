@@ -82,62 +82,77 @@ class CleanupScheduler:
         return self._is_running
 
     async def run_all_cleanup_now(self) -> dict:
-        return {
-            "expired_oauth": await self._cleanup_oauth(),
-            "old_usage": await self._cleanup_old_usage(),
-            "old_audit_logs": await self._cleanup_old_audit_logs(),
-        }
+        """Run every clean-up job now. Returns {"results": {job: deleted | None}, "errors": {job: error type}};
+        a failed job is reported, not counted as 0 (#23)."""
+        results, errors = {}, {}
+        for name, purge in self._purge_jobs():
+            try:
+                results[name] = self._run_purge(purge)
+            except Exception as e:
+                logger.error(f"Cleanup job {name} failed: {e}")
+                results[name] = None
+                errors[name] = type(e).__name__
+        return {"results": results, "errors": errors}
+
+    def _purge_jobs(self):
+        return (("expired_oauth", self._purge_oauth), ("old_usage", self._purge_old_usage),
+                ("old_audit_logs", self._purge_old_audit_logs))
+
+    @staticmethod
+    def _run_purge(purge) -> int:
+        """Run one purge in its own session; raises on failure (after rolling back)."""
+        db: Session = database.make_session()
+        try:
+            return purge(db)
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+
+    def _scheduled(self, name: str, purge) -> int:
+        """Scheduled runs have nobody to report to: log the failure and carry on."""
+        try:
+            return self._run_purge(purge)
+        except Exception as e:
+            logger.error(f"Cleanup job {name} failed: {e}")
+            return 0
 
     async def _cleanup_oauth(self) -> int:
-        db: Session = database.make_session()
-        try:
-            n = OAuthAuthRequestAdapter.delete_expired(db)
-            n += OAuthCodeAdapter.delete_expired(db)
-            n += OAuthTokenAdapter.delete_expired(db)
-            n += AdminSessionAdapter.delete_expired(db)
-            unused_days = Config.get_oauth_config().dcr_unused_client_days
-            if unused_days and unused_days > 0:
-                n += OAuthClientAdapter.delete_unused_dcr(db, older_than=timedelta(days=unused_days))
-            if n:
-                logger.info(f"Cleaned up {n} expired OAuth records")
-            record_scheduled_purge(db, "expired_oauth", n)
-            return n
-        except Exception as e:
-            db.rollback()
-            logger.error(f"Error cleaning up OAuth records: {e}")
-            return 0
-        finally:
-            db.close()
+        return self._scheduled("expired_oauth", self._purge_oauth)
 
     async def _cleanup_old_usage(self) -> int:
-        db: Session = database.make_session()
-        try:
-            deleted = TokenUsageAdapter.delete_older_than(db, local_now() - timedelta(days=self.usage_retention_days))
-            if deleted:
-                logger.info(f"Cleaned up {deleted} old token events")
-            record_scheduled_purge(db, "old_usage", deleted, {"retention_days": self.usage_retention_days})
-            return deleted
-        except Exception as e:
-            db.rollback()
-            logger.error(f"Error cleaning up token events: {e}")
-            return 0
-        finally:
-            db.close()
+        return self._scheduled("old_usage", self._purge_old_usage)
 
     async def _cleanup_old_audit_logs(self) -> int:
-        db: Session = database.make_session()
-        try:
-            deleted = AuditLogAdapter.delete_older_than(db, local_now() - timedelta(days=self.audit_retention_days))
-            if deleted:
-                logger.info(f"Cleaned up {deleted} old audit logs")
-            record_scheduled_purge(db, "old_audit_logs", deleted, {"retention_days": self.audit_retention_days})
-            return deleted
-        except Exception as e:
-            db.rollback()
-            logger.error(f"Error cleaning up audit logs: {e}")
-            return 0
-        finally:
-            db.close()
+        return self._scheduled("old_audit_logs", self._purge_old_audit_logs)
+
+    def _purge_oauth(self, db: Session) -> int:
+        n = OAuthAuthRequestAdapter.delete_expired(db)
+        n += OAuthCodeAdapter.delete_expired(db)
+        n += OAuthTokenAdapter.delete_expired(db)
+        n += AdminSessionAdapter.delete_expired(db)
+        unused_days = Config.get_oauth_config().dcr_unused_client_days
+        if unused_days and unused_days > 0:
+            n += OAuthClientAdapter.delete_unused_dcr(db, older_than=timedelta(days=unused_days))
+        if n:
+            logger.info(f"Cleaned up {n} expired OAuth records")
+        record_scheduled_purge(db, "expired_oauth", n)
+        return n
+
+    def _purge_old_usage(self, db: Session) -> int:
+        deleted = TokenUsageAdapter.delete_older_than(db, local_now() - timedelta(days=self.usage_retention_days))
+        if deleted:
+            logger.info(f"Cleaned up {deleted} old token events")
+        record_scheduled_purge(db, "old_usage", deleted, {"retention_days": self.usage_retention_days})
+        return deleted
+
+    def _purge_old_audit_logs(self, db: Session) -> int:
+        deleted = AuditLogAdapter.delete_older_than(db, local_now() - timedelta(days=self.audit_retention_days))
+        if deleted:
+            logger.info(f"Cleaned up {deleted} old audit logs")
+        record_scheduled_purge(db, "old_audit_logs", deleted, {"retention_days": self.audit_retention_days})
+        return deleted
 
     async def _health_check_task(self) -> dict:
         from src.discovery.health_monitor import resolve_service_auth_token

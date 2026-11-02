@@ -437,7 +437,17 @@ async def get_dashboard_overview(db: Session = Depends(get_db), _: AdminUser = D
 async def run_cleanup_now(http_request: Request, db: Session = Depends(get_db),
                           user: AdminUser = Depends(get_current_user)):
     """Run the retention clean-up jobs now."""
-    results = await get_scheduler().run_all_cleanup_now()
+    report = await get_scheduler().run_all_cleanup_now()
+    results, errors = report["results"], report["errors"]
+    if errors:
+        # A failed job used to be counted as 0 and reported as success (#23)
+        _audit(db, http_request, user, AuditAction.CLEANUP_EXPIRED, ResourceType.SYSTEM, None,
+               {"results": results, "errors": errors}, status=AuditStatus.FAILURE)
+        jobs = ", ".join(sorted(errors))
+        raise HTTPException(status_code=500, detail={
+            "error": "system.cleanup_failed", "params": {"jobs": jobs}, "results": results, "errors": errors,
+            "fallback": f"Cleanup failed for: {jobs}. See the server log.",
+        })
     _audit(db, http_request, user, AuditAction.CLEANUP_EXPIRED, ResourceType.SYSTEM, None, results)
     return {"message": "Cleanup completed", "results": results}
 

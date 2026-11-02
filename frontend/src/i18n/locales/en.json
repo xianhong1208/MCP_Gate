@@ -1111,6 +1111,9 @@
       "definition_in_use": "This definition still has a deployed instance. Uninstall it before deleting",
       "unknown_env_vars": "Environment variables not declared in the definition: {{extras}}"
     },
+    "system": {
+      "cleanup_failed": "Cleanup failed for: {{jobs}}. See the server log."
+    },
     "generic": {
       "serverError": "An unexpected error occurred. Please try again.",
       "networkError": "Network error. Please check your connection.",

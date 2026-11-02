@@ -1111,6 +1111,9 @@
       "definition_in_use": "此定義仍有已部署的實例,請先解除安裝後再刪除",
       "unknown_env_vars": "含有定義中未宣告的環境變數:{{extras}}"
     },
+    "system": {
+      "cleanup_failed": "清理工作失敗：{{jobs}}。詳情請見伺服器日誌。"
+    },
     "generic": {
       "serverError": "發生未預期的錯誤,請稍後再試",
       "networkError": "網路錯誤,請檢查您的連線",
