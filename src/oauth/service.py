@@ -15,7 +15,7 @@ import hashlib
 import json
 import secrets
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Iterable, Optional
 from urllib.parse import urlencode, urlparse
 
@@ -800,15 +800,15 @@ def revoked_feed(db: Session, *, caller: OAuthClient, since: Optional[float] = N
     since_dt = None
     if since is not None:
         try:
-            since_dt = datetime.fromtimestamp(float(since), tz=timezone.utc).replace(tzinfo=None)
+            since_dt = datetime.fromtimestamp(float(since))  # stored times are naive local time (local_now)
         except (TypeError, ValueError, OverflowError):
             raise OAuthError("invalid_request", "since must be a unix timestamp")
     now = local_now()
     rows = OAuthTokenAdapter.list_revoked_unexpired(db, since=since_dt)
     return {
-        "revoked": [{"jti": t.jti, "revoked_at": int(t.revoked_at.replace(tzinfo=timezone.utc).timestamp()),
-                     "exp": int(t.expires_at.replace(tzinfo=timezone.utc).timestamp())} for t in rows],
-        "now": int(now.replace(tzinfo=timezone.utc).timestamp()),
+        "revoked": [{"jti": t.jti, "revoked_at": int(t.revoked_at.timestamp()),
+                     "exp": int(t.expires_at.timestamp())} for t in rows],
+        "now": int(now.timestamp()),
     }
 
 
@@ -836,7 +836,7 @@ def report_usage(db: Session, *, caller: OAuthClient, events, ip: Optional[str] 
         last_seen = None
         if ev.get("last_seen") is not None:
             try:
-                last_seen = datetime.fromtimestamp(float(ev["last_seen"]), tz=timezone.utc).replace(tzinfo=None)
+                last_seen = datetime.fromtimestamp(float(ev["last_seen"]))  # naive local, like local_now()
             except (TypeError, ValueError, OverflowError):
                 raise OAuthError("invalid_request", "last_seen must be a unix timestamp")
         rec = OAuthTokenAdapter.get(db, ev["jti"])
