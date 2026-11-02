@@ -206,6 +206,13 @@
       "hint": "動態註冊的 client 在核准前無法取得 token。",
       "review": "前往審核"
     },
+    "weakSecrets": {
+      "title": "伺服器密鑰強度不足",
+      "reasonPlaceholder": "是常見的預設佔位值",
+      "reasonTooShort": "短於 32 個字元",
+      "reasonLowVariety": "使用的不同字元太少",
+      "fix": "請改成至少 32 個隨機字元（python -c \"import secrets; print(secrets.token_urlsafe(32))\"）後重新啟動。更換 SESSION_SECRET_KEY 只會讓所有人重新登入；更換 ENCRYPTION_KEY 會讓已儲存的私鑰無法解密，輪替前請先閱讀 SECURITY.md。"
+    },
     "issuerMismatch": {
       "title": "{{n}} 個 host 在存取 OAuth 端點時與 OAUTH_ISSUER({{issuer}})不一致",
       "hint": "Token 的 iss 與 discovery 公告的網址都是上面的 issuer,透過以下位址存取的 client 會驗證失敗或連到錯的端點:",

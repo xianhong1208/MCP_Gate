@@ -206,6 +206,13 @@
       "hint": "Dynamically registered clients cannot obtain tokens until approved.",
       "review": "Review"
     },
+    "weakSecrets": {
+      "title": "A server secret is weak",
+      "reasonPlaceholder": "is a known placeholder value",
+      "reasonTooShort": "is shorter than 32 characters",
+      "reasonLowVariety": "uses too few distinct characters",
+      "fix": "Set it to at least 32 random characters (python -c \"import secrets; print(secrets.token_urlsafe(32))\") and restart. Changing SESSION_SECRET_KEY only signs everyone out; changing ENCRYPTION_KEY makes the stored private keys unreadable, so read SECURITY.md before you rotate it."
+    },
     "issuerMismatch": {
       "title": "{{n}} host(s) reached the OAuth endpoints without matching OAUTH_ISSUER ({{issuer}})",
       "hint": "Tokens carry the issuer above and discovery advertises its URLs, so clients using these addresses will fail verification or reach the wrong endpoints:",

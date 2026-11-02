@@ -222,6 +222,11 @@ def init_database(*, run_migrations: bool = True) -> dict:
     identity = Config.get_identity_config()
     db = make_session()
     try:
+        # Weak SESSION_SECRET_KEY / ENCRYPTION_KEY: warned always, refused only while the install is new (no
+        # signing key yet, so nothing is encrypted with it); see src/utils/secret_policy.py
+        from src.adapters import OAuthKeyAdapter
+        from src.utils.secret_policy import check_startup_secrets
+        check_startup_secrets(fresh_install=not OAuthKeyAdapter.list_all(db))
         summary = seed_database(db, bootstrap_email=identity.bootstrap_admin_email,
                                 bootstrap_password=identity.bootstrap_admin_password)
         from src.oauth.signing_keys import ensure_active_signing_key
@@ -253,8 +258,12 @@ def main():
         ensure_database_ready(Config.get_database_config().url, logger)
         sys.exit(0 if run_migration_command(args.migrate_only, args.message, args.revision) else 1)
 
+    from src.utils.secret_policy import WeakSecretError
     try:
         summary = init_database(run_migrations=not args.no_migrate)
+    except WeakSecretError as e:
+        logger.error(str(e))
+        sys.exit(1)
     except Exception as e:
         logger.error(f"Failed to initialize database: {e}")
         sys.exit(1)
