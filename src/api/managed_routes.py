@@ -63,6 +63,7 @@ from src.identity import get_current_user
 from src.logging import get_logger
 from src.marketplace.loader import get_catalog_loader
 from src.marketplace.schema import CatalogEntry
+from src.marketplace.secret_mask import mask_argv
 from src.orchestrator.launch_spec import MCP_RUNTIME_IMAGE, is_user_source, user_source_id
 from src.orchestrator.manager import OrchestratorError, RuntimeUnavailable, error_text, get_orchestrator
 from src.orchestrator.progress import catalog_key, get_progress_registry
@@ -440,6 +441,11 @@ async def get_managed_logs(
 # Equivalent to authorising arbitrary container execution -- only the logged-in owner may use it
 # (see docs/design/byo-mcp-launch.md).
 
+def _byo_info(d) -> ByoDefinitionInfo:
+    """API view of a BYO definition: secrets in args are masked (the stored argv keeps them for launching)."""
+    return ByoDefinitionInfo(**dict(d.to_dict(), args=mask_argv(d.get_args())))
+
+
 @router.post("/api/byo-mcp", response_model=ByoDefinitionInfo, tags=["Managed MCP"])
 async def create_byo_definition(
     request: ByoCreateRequest,
@@ -475,9 +481,9 @@ async def create_byo_definition(
         actor_id=str(current_user.id),
         actor_name=current_user.audit_name,
         details={"action": "create_byo_definition", "name": d.name,
-                 "command": d.command, "args": d.get_args()},
+                 "command": d.command, "args": mask_argv(d.get_args())},
     )
-    return ByoDefinitionInfo(**d.to_dict())
+    return _byo_info(d)
 
 
 @router.get("/api/byo-mcp", response_model=ByoListResponse, tags=["Managed MCP"])
@@ -488,7 +494,7 @@ async def list_byo_definitions(
     """List all BYO definitions."""
     defs = BYODefinitionAdapter.list_all(db)
     return ByoListResponse(
-        definitions=[ByoDefinitionInfo(**d.to_dict()) for d in defs],
+        definitions=[_byo_info(d) for d in defs],
         total_count=len(defs),
     )
 
