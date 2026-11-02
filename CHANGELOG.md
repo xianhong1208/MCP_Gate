@@ -8,6 +8,9 @@ All notable changes to MCP Gate (formerly MCP Center) are documented here. The f
 - **Renamed MCP Center to MCP Gate.** The console, docs, package (`mcp-gate`), repository (`MCP_Gate`) and code identifiers follow the new name: `examples/mcp_center_hooks.py` is now `examples/mcp_gate_hooks.py` with `MCPGateVerifier`, and the exception base classes are `MCPGateError` / `MCPGateHTTPException`. The environment variables are now `MCP_GATE_CONFIG` and `MCP_GATE_SECRETS_FILE`; the old `MCP_CENTER_*` names are still read as a fallback.
 - Identifiers that live in existing data keep their old spelling so nothing has to migrate: the built-in client ids `mcp-center-console` / `mcp-center-scanner` (stored in the database and carried in issued tokens) and the default database `data/mcp_center.db`. Tokens already issued stay valid — the issuer is the URL, not the name.
 
+### Security
+- **Dependencies with known advisories upgraded** (`pip-audit` / `npm audit --omit=dev` now clean): pyjwt 2.15, cryptography 50, starlette 1.10 / fastapi 0.162, aiohttp 3.14, urllib3 2.8, anyio, multidict, idna, certifi, python-dotenv, mako, pygments, dnspython; dev-only fastmcp 3.4.10 / mcp 1.30 / authlib / joserfc. The console moves to react-router 7, which fixes open-redirect advisories in v6. Minimum versions of pyjwt, cryptography and aiohttp are raised in `pyproject.toml`. (#32)
+
 ## [1.1.0] — 2026-09-18
 
 ### Added
