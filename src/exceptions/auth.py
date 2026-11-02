@@ -1,10 +1,10 @@
 """Authentication and Authorization Exceptions"""
 
 from typing import Optional
-from src.exceptions.base import MCPCenterHTTPException
+from src.exceptions.base import MCPGateHTTPException
 
 
-class AuthenticationError(MCPCenterHTTPException):
+class AuthenticationError(MCPGateHTTPException):
     """Base authentication error"""
 
     code = "AUTHENTICATION_ERROR"
@@ -12,7 +12,7 @@ class AuthenticationError(MCPCenterHTTPException):
     status_code = 401
 
 
-class TokenNotFoundError(MCPCenterHTTPException):
+class TokenNotFoundError(MCPGateHTTPException):
     """Token does not exist"""
 
     code = "TOKEN_NOT_FOUND"
@@ -30,7 +30,7 @@ class TokenNotFoundError(MCPCenterHTTPException):
         super().__init__(details=details, **kwargs)
 
 
-class TokenExpiredError(MCPCenterHTTPException):
+class TokenExpiredError(MCPGateHTTPException):
     """Token has expired"""
 
     code = "TOKEN_EXPIRED"
@@ -48,7 +48,7 @@ class TokenExpiredError(MCPCenterHTTPException):
         super().__init__(details=details, **kwargs)
 
 
-class TokenRevokedError(MCPCenterHTTPException):
+class TokenRevokedError(MCPGateHTTPException):
     """Token has been revoked"""
 
     code = "TOKEN_REVOKED"
@@ -66,7 +66,7 @@ class TokenRevokedError(MCPCenterHTTPException):
         super().__init__(details=details, **kwargs)
 
 
-class InvalidTokenError(MCPCenterHTTPException):
+class InvalidTokenError(MCPGateHTTPException):
     """Token is malformed or invalid"""
 
     code = "INVALID_TOKEN"
@@ -84,7 +84,7 @@ class InvalidTokenError(MCPCenterHTTPException):
         super().__init__(details=details, **kwargs)
 
 
-class InvalidCredentialsError(MCPCenterHTTPException):
+class InvalidCredentialsError(MCPGateHTTPException):
     """Invalid username or password"""
 
     code = "INVALID_CREDENTIALS"
@@ -92,7 +92,7 @@ class InvalidCredentialsError(MCPCenterHTTPException):
     status_code = 401
 
 
-class InsufficientScopeError(MCPCenterHTTPException):
+class InsufficientScopeError(MCPGateHTTPException):
     """Token lacks required scopes"""
 
     code = "INSUFFICIENT_SCOPE"
@@ -113,7 +113,7 @@ class InsufficientScopeError(MCPCenterHTTPException):
         super().__init__(details=details, **kwargs)
 
 
-class ServiceMismatchError(MCPCenterHTTPException):
+class ServiceMismatchError(MCPGateHTTPException):
     """Token does not belong to the requested service"""
 
     code = "SERVICE_MISMATCH"

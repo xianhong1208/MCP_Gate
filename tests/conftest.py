@@ -16,7 +16,7 @@ sys.path.insert(0, str(project_root))
 # Tests do not read .env / data/secrets.json: fixed keys and a separate secrets file
 os.environ.setdefault("ENCRYPTION_KEY", "test-encryption-key-not-for-production")
 os.environ.setdefault("SESSION_SECRET_KEY", "test-session-secret-key-not-for-production")
-os.environ["MCP_CENTER_SECRETS_FILE"] = os.path.join(tempfile.gettempdir(), "mcp-center-test-secrets.json")
+os.environ["MCP_GATE_SECRETS_FILE"] = os.path.join(tempfile.gettempdir(), "mcp-gate-test-secrets.json")
 
 OWNER_EMAIL = "owner@example.com"
 OWNER_PASSWORD = "owner-password-123"

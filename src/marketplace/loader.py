@@ -5,7 +5,7 @@ Scans catalog/*.yaml, loads everything and caches it. Every YAML file goes throu
 Error-handling strategy: **skip broken files, never take down the whole marketplace**.
 When a single catalog YAML fails validation, only logger.error is emitted and the file is skipped;
 the error is kept in `errors` for debugging and the remaining entries are served as usual. Rationale:
-MCP Center's primary job is issuing tokens, and a typo in one optional catalog file must not make
+MCP Gate's primary job is issuing tokens, and a typo in one optional catalog file must not make
 /auth/marketplace return 500 (or even block startup). main.py calls load_all() eagerly at startup, so
 the problem shows up in the startup log instead of being discovered only when an admin opens the marketplace.
 

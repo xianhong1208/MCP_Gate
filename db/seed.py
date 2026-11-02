@@ -26,12 +26,12 @@ SCANNER_CLIENT_ID = "mcp-center-scanner"
 SYSTEM_CLIENTS: List[Dict] = [
     {
         "client_id": CONSOLE_CLIENT_ID,
-        "client_name": "MCP Center Console",
+        "client_name": "MCP Gate Console",
         "grant_types": '["personal_access_token"]',
     },
     {
         "client_id": SCANNER_CLIENT_ID,
-        "client_name": "MCP Center Scanner",
+        "client_name": "MCP Gate Scanner",
         "grant_types": '["internal"]',
     },
 ]

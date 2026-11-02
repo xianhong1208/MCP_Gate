@@ -1,10 +1,10 @@
 """Service-related Exceptions"""
 
 from typing import Optional
-from src.exceptions.base import MCPCenterHTTPException
+from src.exceptions.base import MCPGateHTTPException
 
 
-class ServiceError(MCPCenterHTTPException):
+class ServiceError(MCPGateHTTPException):
     """Base service error"""
 
     code = "SERVICE_ERROR"
@@ -12,7 +12,7 @@ class ServiceError(MCPCenterHTTPException):
     status_code = 400
 
 
-class ServiceNotFoundError(MCPCenterHTTPException):
+class ServiceNotFoundError(MCPGateHTTPException):
     """Service does not exist"""
 
     code = "SERVICE_NOT_FOUND"
@@ -30,7 +30,7 @@ class ServiceNotFoundError(MCPCenterHTTPException):
         super().__init__(details=details, **kwargs)
 
 
-class ServiceAlreadyExistsError(MCPCenterHTTPException):
+class ServiceAlreadyExistsError(MCPGateHTTPException):
     """Service already exists"""
 
     code = "SERVICE_ALREADY_EXISTS"

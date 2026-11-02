@@ -36,7 +36,7 @@ Stop flow (stop):
   3. Update the DB: actual_state=stopped, container_id=NULL
 
 Design trade-offs:
-  - The in-memory set is lost when MCP Center restarts; reconcile() asks the runtime
+  - The in-memory set is lost when MCP Gate restarts; reconcile() asks the runtime
     which desired_state=running processes are still alive, adopts those and restarts the
     rest (self-healing)
   - No background health-check loop here (the existing health_monitor handles it via
@@ -100,7 +100,7 @@ class Orchestrator:
     def __init__(self, port_allocator: Optional[PortAllocator] = None, runtime: Optional[Runtime] = None):
         self.port_allocator = port_allocator or PortAllocator()
         self.runtime: Runtime = runtime or select_runtime()
-        # process ids this MCP Center instance has started (or adopted at reconcile) since it came up
+        # process ids this MCP Gate instance has started (or adopted at reconcile) since it came up
         self._active: Set[str] = set()
         self._lock = Lock()
 
@@ -146,7 +146,7 @@ class Orchestrator:
 
     def is_running(self, process_id: str) -> bool:
         """Whether the instance is really running, asked of the runtime rather than remembered in memory:
-        memory is lost when MCP Center restarts while the container / process lives on."""
+        memory is lost when MCP Gate restarts while the container / process lives on."""
         with self._lock:
             return bool(self.runtime.instance_id(_container_name(process_id), running_only=True))
 
@@ -167,7 +167,7 @@ class Orchestrator:
             cid = self.runtime.instance_id(container_name, running_only=True)
 
             if cid:
-                # (a) still alive; only the in-memory state was lost on MCP Center restart
+                # (a) still alive; only the in-memory state was lost on MCP Gate restart
                 with self._lock:
                     self._active.add(process_id)
                 logger.info(
@@ -295,7 +295,7 @@ class Orchestrator:
             host_port=port, container_port=container_port,
             # the stdio bridge (supergateway) can die on an upstream bug; let the runtime bring it back
             restart_on_failure=(transport == "stdio"),
-            labels={"mcp-center.process": process_id, "mcp-center.name": process.name},
+            labels={"mcp-gate.process": process_id, "mcp-gate.name": process.name},
         )
         try:
             self.runtime.launch(request, lambda stage, detail=None: progress.stage(pkey, stage, detail))
@@ -384,7 +384,7 @@ class Orchestrator:
             "jsonrpc": "2.0", "id": 1, "method": "initialize",
             "params": {
                 "protocolVersion": "2024-11-05", "capabilities": {},
-                "clientInfo": {"name": "mcp-center-warmup", "version": "1.0.0"},
+                "clientInfo": {"name": "mcp-gate-warmup", "version": "1.0.0"},
             },
         })
         req = (
@@ -475,7 +475,7 @@ class Orchestrator:
 
         The Service has host=127.0.0.1, port=<bridge port>, requires_auth=False,
         source="managed". Downstream agents connect directly to 127.0.0.1:port (because
-        MCP Center runs with --network host, 127.0.0.1 is the host loopback).
+        MCP Gate runs with --network host, 127.0.0.1 is the host loopback).
 
         mcp_path is chosen by the caller based on transport -- http images ship /mcp;
         stdio goes through supergateway whose endpoint is /sse. Hard-coding a single path

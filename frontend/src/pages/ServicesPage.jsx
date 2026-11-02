@@ -22,7 +22,7 @@ import {
   Dialog, DialogBody, DialogFooter, Field, Input, Radio as RadioInput, CheckRow,
 } from '../components/ui'
 
-// Tools modal (for services protected by MCP Center the backend self-signs a token to fetch tools; no token to pick)
+// Tools modal (for services protected by MCP Gate the backend self-signs a token to fetch tools; no token to pick)
 function ToolsModal({ service, onClose }) {
   const { t } = useTranslation()
   const [tools, setTools] = useState([])

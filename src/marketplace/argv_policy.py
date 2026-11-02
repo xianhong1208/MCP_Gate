@@ -41,7 +41,7 @@ _ALLOWED_BYO_COMMANDS = frozenset({"npx", "node", "uvx", "python", "python3"})
 # Flags that take exactly one value -> the value format for each flag.
 _ALLOWED_VALUE_FLAGS = {
     # host is deliberately not allowed: it removes network isolation and lets the container
-    # reach the MCP Center admin API on the host (127.0.0.1) directly.
+    # reach the MCP Gate admin API on the host (127.0.0.1) directly.
     "--network": re.compile(r"(bridge|none)"),
     "--pull": re.compile(r"(always|missing|never)"),
     "--memory": re.compile(r"\d+[bkmg]?"),

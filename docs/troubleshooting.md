@@ -5,7 +5,7 @@ Symptoms are listed as you would see them in a client, a server log or the conso
 ## Client cannot connect
 
 **`invalid_target: unknown resource: http://…/mcp`** (in the client, or as `error=invalid_target` on the redirect)
-MCP Center only issues tokens for servers it knows. Register the server in **Services** and make sure its audience — `oauth_audience`, or the MCP URL if unset — matches what the client sent as `resource`. Trailing slashes and `localhost` vs `127.0.0.1` count as different audiences.
+MCP Gate only issues tokens for servers it knows. Register the server in **Services** and make sure its audience — `oauth_audience`, or the MCP URL if unset — matches what the client sent as `resource`. Trailing slashes and `localhost` vs `127.0.0.1` count as different audiences.
 
 **`unauthorized_client: client is pending approval`**
 `OAUTH_DCR_AUTO_APPROVE=false` and the client has not been approved. Open **OAuth Clients → Pending** and approve it, or set the variable to `true`.
@@ -17,7 +17,7 @@ The client is reusing a stale `client_id` whose redirect URIs changed. Delete th
 The browser cannot reach `OAUTH_ISSUER`. Check that the issuer is the address your browser can open, not an internal one, and that `/oauth/authorize` is proxied.
 
 **`401` from the MCP server after a successful login**
-The server's `JWTVerifier` settings do not match MCP Center: `issuer` must equal `OAUTH_ISSUER` exactly, `audience` must equal the audience shown on the service page, and `jwks_uri` must be reachable from the server. Compare with the **Integration** panel.
+The server's `JWTVerifier` settings do not match MCP Gate: `issuer` must equal `OAUTH_ISSUER` exactly, `audience` must equal the audience shown on the service page, and `jwks_uri` must be reachable from the server. Compare with the **Integration** panel.
 
 ## Console
 
@@ -40,13 +40,13 @@ EOF
 The console bundle is missing. Run `cd frontend && npm install && npm run build`, then restart.
 
 **Scan does not find a server that is clearly running**
-The scanner sends a JSON-RPC `initialize` to `/mcp`. A server that answers `401` with `WWW-Authenticate: Bearer …` (any FastMCP server with `RemoteAuthProvider`) is recognised as MCP behind OAuth; if it trusts this MCP Center, the scanner mints a short-lived token for `http://<host>:<port>/mcp` and reads the real name and tools. That token only matches when the host you scan is exactly the one the server uses as its audience (`127.0.0.1` vs `localhost` matters). Servers protected by a different authorization server, or by a static bearer token, show up as *requires authentication* — register them and add the token on the service page. A `401` without a Bearer challenge or JSON-RPC body is not treated as MCP.
+The scanner sends a JSON-RPC `initialize` to `/mcp`. A server that answers `401` with `WWW-Authenticate: Bearer …` (any FastMCP server with `RemoteAuthProvider`) is recognised as MCP behind OAuth; if it trusts this MCP Gate, the scanner mints a short-lived token for `http://<host>:<port>/mcp` and reads the real name and tools. That token only matches when the host you scan is exactly the one the server uses as its audience (`127.0.0.1` vs `localhost` matters). Servers protected by a different authorization server, or by a static bearer token, show up as *requires authentication* — register them and add the token on the service page. A `401` without a Bearer challenge or JSON-RPC body is not treated as MCP.
 
 **A platform's OAuth module demands a client secret, or fails with `PKCE code_challenge (S256) is required` / `invalid_target`**
 The platform runs a classic OAuth 2.0 flow (client_id + client_secret, no PKCE, no `resource`). Register it in **OAuth Clients → Register trusted client** with a client-secret auth method and tick **Classic OAuth client**; pick the server it should get tokens for as the **default resource**. Fill its `client_id` / `client_secret` into the platform, with `<issuer>/oauth/authorize`, `<issuer>/oauth/token` and the scopes you want. Everything else (Claude Code, Cursor, FastMCP) should keep using PKCE and dynamic registration.
 
 **The scanned server logs `Invalid HTTP request received`**
-That was the scanner's HTTPS probe hitting a plain-HTTP port; since 1.0.0 it is skipped whenever the HTTP probe got any answer. Update MCP Center if you still see it.
+That was the scanner's HTTPS probe hitting a plain-HTTP port; since 1.0.0 it is skipped whenever the HTTP probe got any answer. Update MCP Gate if you still see it.
 
 **Signed out unexpectedly**
 Sessions expire after 12 hours, after 30 minutes idle in the UI, and immediately when the password changes. Behind HTTPS, `SECURE_COOKIE=true` is required or the cookie is dropped.
@@ -55,7 +55,7 @@ Sessions expire after 12 hours, after 30 minutes idle in the UI, and immediately
 
 ### "OAuth request to … arrived via X but OAUTH_ISSUER is Y"
 
-MCP Center writes `OAUTH_ISSUER` into every token's `iss` claim and into the discovery document, so clients and MCP servers treat it as this server's identity. The warning means a request to `/.well-known/*` or `/oauth/*` came in through a different scheme, host or port than the issuer says. It is logged once per distinct host, and the console's `GET /api/oauth/overview` lists them under `issuer_mismatches`.
+MCP Gate writes `OAUTH_ISSUER` into every token's `iss` claim and into the discovery document, so clients and MCP servers treat it as this server's identity. The warning means a request to `/.well-known/*` or `/oauth/*` came in through a different scheme, host or port than the issuer says. It is logged once per distinct host, and the console's `GET /api/oauth/overview` lists them under `issuer_mismatches`.
 
 Typical causes and fixes:
 

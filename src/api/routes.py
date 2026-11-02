@@ -65,7 +65,7 @@ def _audit(db, request, user, action, resource_type, resource_id, details=None, 
 @router.get("/health", response_model=HealthResponse, tags=["Health"])
 async def health_check():
     """Liveness probe. Public."""
-    return HealthResponse(status="ok", service="mcp-center")
+    return HealthResponse(status="ok", service="mcp-gate")
 
 
 @router.get("/api/system/version", tags=["System"])
@@ -176,7 +176,7 @@ async def refresh_service_tools(service_id: str, http_request: Request, body: Op
                                 db: Session = Depends(get_db), user: AdminUser = Depends(get_current_user)):
     """Connect to the service, fetch its tools list and sync it.
 
-    By default services protected by MCP Center OAuth are inspected with the anonymous scanner token. A server
+    By default services protected by MCP Gate OAuth are inspected with the anonymous scanner token. A server
     that shows different tools per caller can be inspected as one of its issued tokens (`identity=token` +
     `jti`): a short-lived copy of that token's claims is signed and presented.
     """

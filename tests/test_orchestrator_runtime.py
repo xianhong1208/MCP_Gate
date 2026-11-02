@@ -139,7 +139,7 @@ def test_byo_deploy_start_stop_through_runtime(owner_client, fake_orchestrator):
     req = launches[0][1]
     assert req.transport == "stdio" and req.stdio_command == ["npx", "-y", "@example/echo"]
     assert req.host_port == info["port"] and req.name.startswith("mcp-managed-")
-    assert req.restart_on_failure is True and req.labels["mcp-center.process"] == pid
+    assert req.restart_on_failure is True and req.labels["mcp-gate.process"] == pid
     assert orch.is_running(pid)
 
     # a Service row was registered at 127.0.0.1:<port>/mcp
@@ -177,9 +177,9 @@ def test_reconcile_adopts_live_and_restarts_dead(owner_client, fake_orchestrator
     orch, rt = fake_orchestrator
     a = _deploy_byo(owner_client, "a")
     b = _deploy_byo(owner_client, "b")
-    # simulate an MCP Center restart: memory gone, instance a alive, instance b dead
+    # simulate an MCP Gate restart: memory gone, instance a alive, instance b dead
     orch._active.clear()
-    name_b = next(c[1].name for c in rt.calls if c[0] == "launch" and c[1].labels["mcp-center.process"] == b["id"])
+    name_b = next(c[1].name for c in rt.calls if c[0] == "launch" and c[1].labels["mcp-gate.process"] == b["id"])
     rt.running.pop(name_b).close()
     launches_before = len([c for c in rt.calls if c[0] == "launch"])
 
@@ -253,7 +253,7 @@ def test_process_runtime_runs_and_stops_a_byo_server(tmp_path, fake_supergateway
     log = rt.logs("mcp-managed-test")
     assert "[process status: running]" in log and f"up on {port}" in log and "npx -y @example/echo" in log
 
-    # a second runtime instance (MCP Center restarted) finds it through the pid file
+    # a second runtime instance (MCP Gate restarted) finds it through the pid file
     rt2 = ProcessRuntime(state_dir=str(tmp_path / "state"), supergateway_bin=fake_supergateway)
     assert rt2.instance_id("mcp-managed-test", running_only=True) == pid
 

@@ -3,10 +3,10 @@
 ## Roles
 
 ```
-MCP client ──OAuth 2.1──▶ MCP Center (authorization server) ──JWKS──▶ MCP server (resource server)
+MCP client ──OAuth 2.1──▶ MCP Gate (authorization server) ──JWKS──▶ MCP server (resource server)
 ```
 
-- **MCP Center** issues tokens, publishes its public keys and hosts the console. It is never on the request path between a client and an MCP server.
+- **MCP Gate** issues tokens, publishes its public keys and hosts the console. It is never on the request path between a client and an MCP server.
 - **MCP servers** verify tokens locally with the public key. They hold no user or client state.
 - **The console** is a single-tenant admin UI: whoever signs in owns the instance.
 

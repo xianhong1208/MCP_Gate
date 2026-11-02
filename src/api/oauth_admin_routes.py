@@ -262,7 +262,7 @@ class PersonalTokenRequest(BaseModel):
 async def list_tokens(kind: Optional[str] = None, service_id: Optional[str] = None, client_id: Optional[str] = None,
                       include_inactive: bool = False, limit: int = Query(200, ge=1, le=1000),
                       db: Session = Depends(get_db), _: AdminUser = Depends(get_current_user)):
-    """Tokens issued by MCP Center. Filter by kind (access | refresh | pat), service, client; `include_inactive` adds revoked and expired ones."""
+    """Tokens issued by MCP Gate. Filter by kind (access | refresh | pat), service, client; `include_inactive` adds revoked and expired ones."""
     tokens = OAuthTokenAdapter.list_all(db, kind=kind, service_id=service_id, client_id=client_id,
                                         include_inactive=include_inactive, limit=limit)
     return {"tokens": [t.to_dict() for t in tokens], "total": len(tokens)}
@@ -425,16 +425,16 @@ if __name__ == "__main__":
     mcp.run(transport="http", host="{service.host or '127.0.0.1'}", port={service.port or 8000})
 '''
     fastmcp_hooks = f'''# Same server, but revocations take effect within seconds and usage shows up in the console.
-# Copy examples/mcp_center_hooks.py from the MCP Center repository next to this file, and register a
+# Copy examples/mcp_gate_hooks.py from the MCP Gate repository next to this file, and register a
 # confidential client in the console (OAuth Clients -> Register trusted client, client secret or
-# private_key_jwt) whose credentials this server uses to talk back to MCP Center.
+# private_key_jwt) whose credentials this server uses to talk back to MCP Gate.
 from fastmcp import FastMCP
 from fastmcp.server.auth import RemoteAuthProvider
-from mcp_center_hooks import MCPCenterVerifier
+from mcp_gate_hooks import MCPGateVerifier
 from pydantic import AnyHttpUrl
 
 auth = RemoteAuthProvider(
-    token_verifier=MCPCenterVerifier(
+    token_verifier=MCPGateVerifier(
         jwks_uri="{base}/.well-known/jwks.json",
         issuer="{base}",
         audience="{audience}",

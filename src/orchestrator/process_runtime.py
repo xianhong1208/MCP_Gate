@@ -5,7 +5,7 @@ host, exactly as it does inside ``mcp-runtime:1`` under the Docker runtime, so s
 clients see the same 127.0.0.1:<port>/mcp endpoint. Catalog entries are images and cannot run here.
 
 Each instance gets a pid file and a log file under ``MCP_PROCESS_LOG_DIR`` (default ``data/managed``),
-so a restarted MCP Center can find, read and stop instances it did not start itself. The child is put in
+so a restarted MCP Gate can find, read and stop instances it did not start itself. The child is put in
 its own session so stopping it also stops whatever the bridge spawned.
 """
 

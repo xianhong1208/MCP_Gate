@@ -128,7 +128,7 @@ def _process_to_info(db: Session, p) -> ManagedProcessInfo:
     catalog = get_catalog_loader().get(p.catalog_id)
     catalog_name = catalog.name if catalog else None
 
-    # Connection URL for the vendor agent (MCP Center runs on the host network, so 127.0.0.1 = host)
+    # Connection URL for the vendor agent (MCP Gate runs on the host network, so 127.0.0.1 = host)
     connection_url = (
         f"http://127.0.0.1:{p.port}/mcp" if p.port and p.actual_state == "running"
         else None

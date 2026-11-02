@@ -4,8 +4,8 @@ from typing import Optional, Any
 from fastapi import HTTPException
 
 
-class MCPCenterError(Exception):
-    """Base exception for all MCP Center errors
+class MCPGateError(Exception):
+    """Base exception for all MCP Gate errors
 
     Attributes:
         code: Error code for programmatic handling
@@ -46,7 +46,7 @@ class MCPCenterError(Exception):
         )
 
 
-class MCPCenterHTTPException(MCPCenterError):
+class MCPGateHTTPException(MCPGateError):
     """Base exception that can be directly raised as HTTP response"""
 
     def __init__(

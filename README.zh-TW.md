@@ -1,8 +1,8 @@
-# MCP Center
+# MCP Gate
 
 **開源的 OAuth 2.1 授權伺服器與 Model Context Protocol server 管理台。**
 
-MCP Center 把標準化的身分驗證放在你每一台 MCP server 前面。[FastMCP](https://github.com/PrefectHQ/fastmcp) server 只要一個 `RemoteAuthProvider` 就受到保護;Claude Code、Claude Desktop、Cursor 這類 MCP client 則直接用它們內建的 OAuth 流程連上——不用自訂 token、不用驗證回呼、不用在每台 server 各寫一套驗證。
+MCP Gate 把標準化的身分驗證放在你每一台 MCP server 前面。[FastMCP](https://github.com/PrefectHQ/fastmcp) server 只要一個 `RemoteAuthProvider` 就受到保護;Claude Code、Claude Desktop、Cursor 這類 MCP client 則直接用它們內建的 OAuth 流程連上——不用自訂 token、不用驗證回呼、不用在每台 server 各寫一套驗證。
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-green.svg)](pyproject.toml)
@@ -22,7 +22,7 @@ MCP Center 把標準化的身分驗證放在你每一台 MCP server 前面。[Fa
            │ ③ authorize(PKCE)→ 同意頁 → code → token                         │    之後離線驗簽
            ▼                                                                 ▼
 ┌──────────────────────────────────────────────────────────────────────────────────────────┐
-│  MCP Center — OAuth 2.1 授權伺服器 + 管理台                                                │
+│  MCP Gate — OAuth 2.1 授權伺服器 + 管理台                                                │
 │  /.well-known/oauth-authorization-server   /.well-known/jwks.json                        │
 │  /oauth/register  /oauth/authorize  /oauth/token  /oauth/revoke  /oauth/introspect       │
 └──────────────────────────────────────────────────────────────────────────────────────────┘
@@ -31,15 +31,15 @@ MCP Center 把標準化的身分驗證放在你每一台 MCP server 前面。[Fa
 ## 主要特色
 
 - **標準化的授權伺服器。** 涵蓋 [MCP 規範(2025-06-18)](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization)的授權要求:RFC 8414 metadata、RFC 7591 動態註冊、authorization code + PKCE(S256)、refresh token 輪替與重放偵測、RFC 7009 撤銷、RFC 7662 內省、RFC 8707 resource indicator、RFC 9207 `iss` 回應。
-- **非對稱簽章、離線驗證。** RS256 金鑰,公開 JWKS、可輪替。MCP server 用公鑰在本地驗 token;MCP Center 不在請求路徑上。
+- **非對稱簽章、離線驗證。** RS256 金鑰,公開 JWKS、可輪替。MCP server 用公鑰在本地驗 token;MCP Gate 不在請求路徑上。
 - **一段設定接上 FastMCP。** `RemoteAuthProvider` + `JWTVerifier(jwks_uri, issuer, audience)` 就完成保護。token 綁定每台 server 的 audience,給 A 的 token 永遠不能打 B。
 - **同意頁。** 動態註冊的 client 第一次連線要請擁有者按「允許」;可依 client + server 記住。你自己登記的 client 免同意。
 - **Personal access token(PAT)。** 從管理台簽長效 bearer token 給腳本、CI 與不會走 OAuth 的 client,附上可直接貼的 `claude mcp add` 與 `mcpServers` 片段。
 - **服務登錄與健康監控。** 手動登記或自動掃描 MCP server、同步 tools 列表、每 30 秒健康檢查、狀態變更經 WebSocket 即時推播。
-- **Marketplace 與 orchestrator。** 從 catalog 一鍵部署 MCP server;或貼一段標準的 `{command, args, env}`,由 MCP Center 掛上 HTTP bridge 執行,可以跑在 Docker 容器裡,也可以直接跑成本機行程(`MCP_RUNTIME=process`)。
+- **Marketplace 與 orchestrator。** 從 catalog 一鍵部署 MCP server;或貼一段標準的 `{command, args, env}`,由 MCP Gate 掛上 HTTP bridge 執行,可以跑在 Docker 容器裡,也可以直接跑成本機行程(`MCP_RUNTIME=process`)。
 - **零設定啟動。** 預設 SQLite、首次啟動自動產生密鑰、瀏覽器內的擁有者帳號設定精靈。PostgreSQL 與 GitHub / Google 登入只差幾個環境變數。
 
-## 安裝 MCP Center
+## 安裝 MCP Gate
 
 前置需求:
 
@@ -48,8 +48,8 @@ MCP Center 把標準化的身分驗證放在你每一台 MCP server 前面。[Fa
 - Node.js 18 以上——只有要改管理台前端時才需要。
 
 ```bash
-git clone https://github.com/xianhong1208/MCP_Center.git
-cd MCP_Center
+git clone https://github.com/xianhong1208/MCP_Gate.git
+cd MCP_Gate
 uv sync
 cp .env.example .env      # 可省略:所有設定都有可用的預設值
 uv run python main.py
@@ -59,7 +59,7 @@ uv run python main.py
 
 ```
 ╔══════════════════════════════════════════════════════╗
-║   MCP Center — OAuth 2.1 AS for your MCP servers     ║
+║   MCP Gate — OAuth 2.1 AS for your MCP servers     ║
 ╚══════════════════════════════════════════════════════╝
   Version:    1.0.0
   Address:    http://0.0.0.0:4568
@@ -76,7 +76,7 @@ uv run python main.py
 
 ## 快速開始
 
-順序很重要:**先登記 server**。MCP Center 只替它認得的 audience 簽 token;client 要求一台未登記的 server 會得到 `invalid_target`。
+順序很重要:**先登記 server**。MCP Gate 只替它認得的 audience 簽 token;client 要求一台未登記的 server 會得到 `invalid_target`。
 
 ### 1. 在管理台登記 server
 
@@ -111,7 +111,7 @@ def hello(name: str) -> str:
 mcp.run(transport="http", host="127.0.0.1", port=8000)
 ```
 
-FastMCP 會自動提供 `/.well-known/oauth-protected-resource`,把 client 指向 MCP Center。完整可執行的版本——含回傳 token 內容的 `whoami` 工具——在 [`examples/fastmcp_server.py`](examples/fastmcp_server.py)。
+FastMCP 會自動提供 `/.well-known/oauth-protected-resource`,把 client 指向 MCP Gate。完整可執行的版本——含回傳 token 內容的 `whoami` 工具——在 [`examples/fastmcp_server.py`](examples/fastmcp_server.py)。
 
 ### 3. 連上 client
 
@@ -121,7 +121,7 @@ FastMCP 會自動提供 `/.well-known/oauth-protected-resource`,把 client 指�
 claude mcp add --transport http demo http://127.0.0.1:8000/mcp
 ```
 
-第一次使用時 client 會自己向 MCP Center 註冊,並在瀏覽器開啟同意頁。頁面顯示 client 名稱、目標 server、要求的 scope(預設 `mcp:tools:read`、`mcp:tools:invoke`、`mcp:resources:read`、`mcp:prompts:read`)與「記住這個決定」核取方塊。按 **Allow**,client 就拿到 token,之後自己 refresh。
+第一次使用時 client 會自己向 MCP Gate 註冊,並在瀏覽器開啟同意頁。頁面顯示 client 名稱、目標 server、要求的 scope(預設 `mcp:tools:read`、`mcp:tools:invoke`、`mcp:resources:read`、`mcp:prompts:read`)與「記住這個決定」核取方塊。按 **Allow**,client 就拿到 token,之後自己 refresh。
 
 ```python
 from fastmcp import Client
@@ -160,14 +160,14 @@ claude mcp list          # 預期:  demo: http://127.0.0.1:8000/mcp (HTTP) - ✓
 
 ## 運作原理
 
-MCP Center 扮演 MCP 規範中的 **authorization server**;你的 MCP server 是 **resource server**,從不簽發、也不儲存 token。
+MCP Gate 扮演 MCP 規範中的 **authorization server**;你的 MCP server 是 **resource server**,從不簽發、也不儲存 token。
 
 | 步驟 | 誰 | 發生什麼事 |
 |---|---|---|
-| Discovery | client → server → MCP Center | server 回 `401` 並在 `WWW-Authenticate` 指向它的 protected-resource metadata,裡面寫著 MCP Center 是授權伺服器;client 再抓 `/.well-known/oauth-authorization-server`。 |
-| 註冊 | client → MCP Center | client 動態註冊(`POST /oauth/register`)拿到 `client_id`。public client 用 PKCE;confidential client 拿到 secret,或登記公鑰後以簽章 JWT 認證(`private_key_jwt`,RFC 7523)。 |
-| 授權 | 瀏覽器 → MCP Center | `/oauth/authorize` 驗證請求、用 `resource` 參數綁定目標 server,顯示同意頁(記住過或受信任的 client 直接略過)。 |
-| Token | client → MCP Center | `/oauth/token` 用授權碼——檢查 PKCE、redirect URI、resource——換出 RS256 access token 與 refresh token。 |
+| Discovery | client → server → MCP Gate | server 回 `401` 並在 `WWW-Authenticate` 指向它的 protected-resource metadata,裡面寫著 MCP Gate 是授權伺服器;client 再抓 `/.well-known/oauth-authorization-server`。 |
+| 註冊 | client → MCP Gate | client 動態註冊(`POST /oauth/register`)拿到 `client_id`。public client 用 PKCE;confidential client 拿到 secret,或登記公鑰後以簽章 JWT 認證(`private_key_jwt`,RFC 7523)。 |
+| 授權 | 瀏覽器 → MCP Gate | `/oauth/authorize` 驗證請求、用 `resource` 參數綁定目標 server,顯示同意頁(記住過或受信任的 client 直接略過)。 |
+| Token | client → MCP Gate | `/oauth/token` 用授權碼——檢查 PKCE、redirect URI、resource——換出 RS256 access token 與 refresh token。 |
 | 驗證 | server | server 抓一次 JWKS,之後在本地驗簽章、issuer、audience、有效期與 scope。 |
 | 撤銷 | 管理台或 client | 撤銷 refresh token 會讓整條鏈失效,`POST /oauth/introspect` 立刻回 `active: false`。離線驗簽的 access token 會撐到過期,所以請保持短效(預設 60 分鐘),需要即時撤銷的 server 改用 FastMCP 的 `IntrospectionTokenVerifier`。 |
 
@@ -179,7 +179,7 @@ Access token 的 claim:`iss`、`sub`、`aud`、`scope`、`client_id`、`jti`、`
 
 | 名詞 | 意思 |
 |---|---|
-| Issuer | MCP Center 的公開網址(`OAUTH_ISSUER`)。寫進每個 token 的 `iss`;client 與 server 用它做 discovery。 |
+| Issuer | MCP Gate 的公開網址(`OAUTH_ISSUER`)。寫進每個 token 的 `iss`;client 與 server 用它做 discovery。 |
 | Classic client | 在管理台手動登記、允許不用 PKCE 並套用預設 resource 的機密 client;給 OAuth 模組只認 client_id / client_secret 的平台用。 |
 | private_key_jwt | 不用共享 secret 的 client 認證:client 登記 JWKS(直接貼上或提供 `jwks_uri`),每次向 token 端點請求時簽一個短效 JWT。適合 CI 工作、後端服務等機器對機器的 client。 |
 | Audience | token 對哪個 MCP URL 有效(`aud` claim)。在管理台逐台設定;server 的 `JWTVerifier(audience=…)` 必須一致。 |
@@ -194,7 +194,7 @@ Access token 的 claim:`iss`、`sub`、`aud`、`scope`、`client_id`、`jti`、`
 
 | 變數 | 預設 | 用途 |
 |---|---|---|
-| `OAUTH_ISSUER` | `http://localhost:4568` | MCP Center 的公開網址,同時決定 MCP Center bind 的 port。**非本機部署一定要改。** |
+| `OAUTH_ISSUER` | `http://localhost:4568` | MCP Gate 的公開網址,同時決定 MCP Gate bind 的 port。**非本機部署一定要改。** |
 | `DATABASE_URL` | `sqlite:///data/mcp_center.db` | 指向 `postgresql://…` 即改用 PostgreSQL(`uv sync --extra postgres`)。 |
 | `SESSION_SECRET_KEY`、`ENCRYPTION_KEY` | 自動產生 | 未設定時存在 `data/secrets.json`。`ENCRYPTION_KEY` 保護私鑰與儲存的 secret;更換會讓它們無法解密。 |
 | `ADMIN_EMAIL`、`ADMIN_PASSWORD` | — | 首次啟動直接建立擁有者帳號,不用走 `/setup`。 |
@@ -212,7 +212,7 @@ Access token 的 claim:`iss`、`sub`、`aud`、`scope`、`client_id`、`jti`、`
 |---|---|
 | **Dashboard** | 服務健康、token 活動、最近事件、系統狀態。 |
 | **Services** | 登記或掃描 MCP server、設定 audience 與允許的 scope、宣告 server 專屬 scope、更新 tools、執行健康檢查、複製接入片段。 |
-| **Tokens · Issue Token** | MCP Center 簽發過的所有 token——OAuth 授權與 PAT——含撤銷、到期與最後使用資訊。 |
+| **Tokens · Issue Token** | MCP Gate 簽發過的所有 token——OAuth 授權與 PAT——含撤銷、到期與最後使用資訊。 |
 | **OAuth Clients** | 動態註冊與受信任的 client:核准、撤銷、刪除;scope 註冊表;簽章金鑰輪替。 |
 | **Marketplace** | 從 catalog 部署 MCP server,或自帶 `{command, args, env}`。 |
 | **Audit Logs** | 誰、何時、從哪裡、做了什麼。 |

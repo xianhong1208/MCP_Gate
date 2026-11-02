@@ -56,7 +56,7 @@ export function parseMcpConfigJson(text) {
  * Services that require auth get an explicit placeholder reminding the user to create a token on the Tokens page,
  * rather than copying a config that looks complete but cannot connect.
  */
-export const TOKEN_PLACEHOLDER = '<YOUR_MCP_CENTER_TOKEN>'
+export const TOKEN_PLACEHOLDER = '<YOUR_MCP_GATE_TOKEN>'
 
 export function buildAgentConfig({ name, url, requiresAuth = false }) {
   const server = { type: 'http', url }

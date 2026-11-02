@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""MCP Center startup script.
+"""MCP Gate startup script.
 
 OAuth 2.1 Authorization Server + MCP server admin console.
 
@@ -80,7 +80,7 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     enable_docs = os.environ.get("ENABLE_API_DOCS", "").lower() == "true"
     app = FastAPI(
-        title="MCP Center",
+        title="MCP Gate",
         description="OAuth 2.1 Authorization Server and control plane for MCP servers",
         version=__version__,
         docs_url="/docs" if enable_docs else None,
@@ -173,7 +173,7 @@ def _mount_spa(app: FastAPI) -> None:
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="MCP Center")
+    parser = argparse.ArgumentParser(description="MCP Gate")
     parser.add_argument("--config", type=str, default="config/config.yaml")
     parser.add_argument("--host", type=str)
     parser.add_argument("--port", type=int)
@@ -242,7 +242,7 @@ def main():
 
     logger.info("")
     logger.info("╔══════════════════════════════════════════════════════╗")
-    logger.info("║   MCP Center — OAuth 2.1 AS for your MCP servers     ║")
+    logger.info("║   MCP Gate — OAuth 2.1 AS for your MCP servers     ║")
     logger.info("╚══════════════════════════════════════════════════════╝")
     logger.info(f"  Version:    {__version__} ({__build_commit__}, {__build_time__})")
     logger.info(f"  Address:    http://{host}:{port}")

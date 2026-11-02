@@ -23,7 +23,7 @@ except ImportError:
 from src.config import Config
 
 # Try to load config if not already loaded
-config_path = os.environ.get("MCP_CENTER_CONFIG", "config/config.yaml")
+config_path = os.environ.get("MCP_GATE_CONFIG") or os.environ.get("MCP_CENTER_CONFIG", "config/config.yaml")
 try:
     Config.set_config(config_path)
 except Exception:
