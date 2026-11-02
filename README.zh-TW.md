@@ -202,6 +202,7 @@ Access token 的 claim:`iss`、`sub`、`aud`、`scope`、`client_id`、`jti`、`
 | `GITHUB_CLIENT_ID/_SECRET`、`GOOGLE_CLIENT_ID/_SECRET` | — | 啟用管理台的 GitHub / Google 登入(實驗性——已實作但尚未用真實帳號驗證)。Callback:`<issuer>/api/session/oauth/<provider>/callback`。 |
 | `SECURE_COOKIE` | `false` | 走 HTTPS 時設 `true`。 |
 | `CORS_ALLOWED_ORIGINS` | — | 以逗號分隔、可帶 cookie 存取管理台 API 的額外 origin。除非有其他網站必須呼叫它，否則請留空；Vite 開發伺服器不需要設定。 |
+| `ALLOWED_HOSTS` | — | 以逗號分隔、除 `OAUTH_ISSUER` 的 host、`localhost` 與 IP 位址外也要回應的主機名稱（例如容器的 service 名稱）；可用 `*.suffix` 萬用字元，`*` 會關閉此檢查。其他名稱一律回 421。 |
 | `ENABLE_API_DOCS` | — | `true` 會在 `/docs` 開放 OpenAPI。只讀環境變數,不在 `config.yaml` 內。 |
 
 進階:`SERVER_HOST` / `SERVER_PORT` 可覆寫 bind 位址,只在它必須和 issuer 不同時使用(例如反向代理後面只聽 `127.0.0.1`)。完整的反向代理與 HTTPS 步驟見[部署](docs/deploy.md)。

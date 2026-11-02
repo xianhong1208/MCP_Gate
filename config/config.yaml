@@ -79,6 +79,9 @@ security:
   # Set to true when deploying over HTTPS
   secure_cookie: ${SECURE_COOKIE:-false}
   cookie_samesite: "${COOKIE_SAMESITE:-lax}"
+  # Host names to answer to besides the OAUTH_ISSUER host, localhost and IP addresses (DNS-rebinding protection):
+  # comma-separated, e.g. ALLOWED_HOSTS=mcp-gate,*.internal.example for container service names; "*" turns it off.
+  allowed_hosts: "${ALLOWED_HOSTS:-}"
 
 cors:
   # Origins (besides the console's own) allowed credentialed access to the admin API: comma-separated, e.g.

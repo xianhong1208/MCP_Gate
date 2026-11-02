@@ -85,6 +85,16 @@ headers when the proxy is listed in `security.trusted_proxies`. A proxy that rew
 upstream address without sending `X-Forwarded-Host` makes every console change fail with 403
 `auth.csrf_origin_denied`.
 
+MCP Gate only answers requests whose `Host` is the `OAUTH_ISSUER` host, `localhost` / `*.localhost`, or an IP
+address (protection against DNS rebinding); anything else gets 421 `http.host_not_allowed` and one warning in the
+log. A proxy that keeps `Host` (both examples above) or rewrites it to `127.0.0.1:4568` needs nothing. If MCP Gate is
+also reached under another name — a Docker Compose service name such as `http://mcp-gate:4568` used by resource
+servers to fetch the JWKS, an internal DNS alias — list it:
+
+```bash
+ALLOWED_HOSTS=mcp-gate,*.internal.example   # exact names or *.suffix; "*" turns the check off
+```
+
 ### Local use without a proxy
 
 Running on `http://localhost:4568` is fine for one person on one machine, but the browser shares the console's

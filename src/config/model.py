@@ -84,11 +84,26 @@ class RateLimitConfig(BaseModel):
     path_limits: Dict[str, int] = {}
 
 
+def _split_list(value):
+    """Accept a YAML list or one comma-separated string (``"${VAR:-}"`` in config.yaml)."""
+    if isinstance(value, str):
+        return [v.strip() for v in value.split(",") if v.strip()]
+    return value
+
+
 class SecurityConfig(BaseModel):
     trusted_proxies: List[str] = ["127.0.0.1", "::1"]
+    # Host names MCP Gate answers to besides the OAUTH_ISSUER host, localhost / *.localhost and IP literals
+    # (DNS-rebinding protection, see src/middleware/trusted_host.py). Exact names, "*.suffix", or "*" for any.
+    allowed_hosts: List[str] = []
     # Secure flag on cookies; set to true when deploying over HTTPS
     secure_cookie: bool = False
     cookie_samesite: str = "lax"
+
+    @field_validator("allowed_hosts", mode="before")
+    @classmethod
+    def _split_hosts(cls, value):
+        return _split_list(value)
 
 
 class CORSConfig(BaseModel):
@@ -103,9 +118,7 @@ class CORSConfig(BaseModel):
     @field_validator("allowed_origins", mode="before")
     @classmethod
     def _split_origins(cls, value):
-        if isinstance(value, str):
-            return [o.strip() for o in value.split(",") if o.strip()]
-        return value
+        return _split_list(value)
 
 
 class LoggingConfig(BaseModel):

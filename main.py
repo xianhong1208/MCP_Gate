@@ -35,7 +35,7 @@ from src.exceptions.handlers import register_exception_handlers  # noqa: E402
 from src.logging import RequestLoggingMiddleware, get_logger, setup_logging  # noqa: E402
 from src.middleware import (  # noqa: E402
     CSRFOriginMiddleware, IssuerMismatchMiddleware, PublicOAuthCORSMiddleware, RateLimitConfig, RateLimitMiddleware,
-    SecurityHeadersMiddleware,
+    SecurityHeadersMiddleware, TrustedHostMiddleware,
 )
 from src.scheduler import get_scheduler  # noqa: E402
 from src.version import __build_commit__, __build_time__, __version__  # noqa: E402
@@ -106,6 +106,9 @@ def create_app() -> FastAPI:
     # Warn (once per host) when OAuth requests arrive through a host that is not OAUTH_ISSUER
     app.add_middleware(IssuerMismatchMiddleware, issuer=Config.get_oauth_config().issuer,
                        trusted_proxies=sec.trusted_proxies)
+    # DNS rebinding: refuse foreign Host names before anything else looks at the request (outside the issuer check,
+    # so a rebinding name is never recorded as an "issuer mismatch" or suggested as OAUTH_ISSUER)
+    app.add_middleware(TrustedHostMiddleware)
     app.add_middleware(RateLimitMiddleware, config=RateLimitConfig(
         enabled=rl.enabled, requests_per_minute=rl.requests_per_minute, requests_per_hour=rl.requests_per_hour,
         whitelist=rl.whitelist, path_limits=rl.path_limits, trusted_proxies=sec.trusted_proxies,

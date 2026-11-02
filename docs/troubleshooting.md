@@ -52,7 +52,13 @@ The platform runs a classic OAuth 2.0 flow (client_id + client_secret, no PKCE, 
 That was the scanner's HTTPS probe hitting a plain-HTTP port; since 1.0.0 it is skipped whenever the HTTP probe got any answer. Update MCP Gate if you still see it.
 
 **Signed out unexpectedly**
-Sessions expire after 12 hours, after 30 minutes idle in the UI, and immediately when the password changes. Behind HTTPS, `SECURE_COOKIE=true` is required or the cookie is dropped.
+Sessions expire after 12 hours, after 30 minutes idle in the UI, and immediately on logout or when the password changes. Behind HTTPS, `SECURE_COOKIE=true` is required or the cookie is dropped. Each session also needs the binding secret the console keeps in the browser's `localStorage` for that exact origin: clearing site data, a private window that was closed, or opening the console under another address (`127.0.0.1` instead of `localhost`, a different port) means signing in again there. Upgrading from a version without server-side sessions signs everyone out once.
+
+**Every change fails with `403 auth.csrf_origin_denied`**
+The request's `Origin` is not the address the server sees. Behind a reverse proxy, keep `Host` (or send `X-Forwarded-Host`) and list the proxy in `security.trusted_proxies` (see [deploy.md](deploy.md#3-reverse-proxy)). If another site is meant to call the console API, add its origin to `CORS_ALLOWED_ORIGINS`.
+
+**`421 http.host_not_allowed`**
+The request used a host name MCP Gate does not answer to (DNS-rebinding protection): only the `OAUTH_ISSUER` host, `localhost`, `*.localhost` and IP addresses are served by default. Add other names (a container service name, an internal alias) to `ALLOWED_HOSTS`; the log names the refused host once.
 
 ## Server
 
