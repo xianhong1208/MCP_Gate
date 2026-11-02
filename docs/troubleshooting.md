@@ -71,6 +71,9 @@ Typical causes and fixes:
 - **Reached by IP or another hostname** (`http://192.168.1.20:4568` while the issuer is `http://localhost:4568`): pick the address clients will actually use and set `OAUTH_ISSUER` to it. Tokens issued under the old issuer stop verifying, so do this before clients are configured.
 - **Behind a reverse proxy** (`http://127.0.0.1:4568` while the issuer is `https://auth.example.com`): the proxy must send `X-Forwarded-Proto` and `X-Forwarded-Host`, and its IP must be listed in `security.trusted_proxies` in `config/config.yaml`; forwarded headers from any other peer are ignored on purpose. See [deploy.md](deploy.md).
 - **`localhost` versus `127.0.0.1`**: browsers and MCP clients treat them as different origins. Use one consistently in the issuer, the client configuration and the service audiences.
+- **"OAuth request to … from <ip> named host X, which is not OAUTH_ISSUER"**: the request came straight from an internet address, so the `Host` header is whatever that client chose. Unless your clients really use X, ignore it. These hosts carry `plausible: false` in `issuer_mismatches`, get no "set OAUTH_ISSUER to …" advice, and their warnings are capped at 20 an hour.
+
+The list keeps at most 20 hosts (internet-named ones are dropped first, then the least recently seen), forgets a host 24 hours after it was last seen, and ignores values that are not a valid `host[:port]`.
 
 
 **`Address already in use`**
