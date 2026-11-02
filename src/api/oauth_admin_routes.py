@@ -27,6 +27,7 @@ from src.oauth import service as oauth
 from src.oauth import signing_keys
 from src.oauth.errors import OAuthError
 from src.utils.field_limits import FieldTooLongError, check_max_length, column_limit
+from src.utils.snippets import py_str, shell_command, snippet_server_name
 
 router = APIRouter(prefix="/api/oauth", tags=["OAuth Admin"])
 
@@ -452,21 +453,27 @@ async def integration_snippets(service_id: str, db: Session = Depends(get_db),
     base = oauth.issuer()
     audience = service.effective_audience or "<your-mcp-server-url>"
     mcp_url = service.get_mcp_url() or audience
+    # Every interpolated value is quoted for the language it lands in (H-08): the service name may be a
+    # scanned server's self-chosen serverInfo.name.
+    q_base, q_audience, q_url = py_str(base), py_str(audience), py_str(mcp_url)
+    q_name, q_host = py_str(service.name), py_str(service.host or "127.0.0.1")
+    port = int(service.port or 8000)
+    cli_name = snippet_server_name(service.name)
     fastmcp_server = f'''from fastmcp import FastMCP
 from fastmcp.server.auth import RemoteAuthProvider
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 
 auth = RemoteAuthProvider(
     token_verifier=JWTVerifier(
-        jwks_uri="{base}/.well-known/jwks.json",
-        issuer="{base}",
-        audience="{audience}",
+        jwks_uri={py_str(base + "/.well-known/jwks.json")},
+        issuer={q_base},
+        audience={q_audience},
     ),
-    authorization_servers=["{base}"],
-    base_url="{audience}",
+    authorization_servers=[{q_base}],
+    base_url={q_audience},
 )
 
-mcp = FastMCP(name="{service.name}", auth=auth)
+mcp = FastMCP(name={q_name}, auth=auth)
 
 
 @mcp.tool
@@ -475,7 +482,7 @@ def hello(name: str) -> str:
 
 
 if __name__ == "__main__":
-    mcp.run(transport="http", host="{service.host or '127.0.0.1'}", port={service.port or 8000})
+    mcp.run(transport="http", host={q_host}, port={port})
 '''
     fastmcp_hooks = f'''# Same server, but revocations take effect within seconds and usage shows up in the console.
 # Copy examples/mcp_gate_hooks.py from the MCP Gate repository next to this file, and register a
@@ -489,29 +496,29 @@ from mcp_gate_hooks import MCPGateVerifier
 
 auth = RemoteAuthProvider(
     token_verifier=MCPGateVerifier(
-        jwks_uri="{base}/.well-known/jwks.json",
-        issuer="{base}",
-        audience="{audience}",
+        jwks_uri={py_str(base + "/.well-known/jwks.json")},
+        issuer={q_base},
+        audience={q_audience},
         client_id="<CONFIDENTIAL_CLIENT_ID>",
         client_secret="<CLIENT_SECRET>",          # or private_key_pem=open("client.pem").read(), kid="..."
         poll_interval=15,                         # seconds between revocation-feed polls
         flush_interval=30,                        # seconds between usage reports
     ),
-    authorization_servers=["{base}"],
-    base_url="{audience}",
+    authorization_servers=[{q_base}],
+    base_url={q_audience},
 )
 
-mcp = FastMCP(name="{service.name}", auth=auth)
+mcp = FastMCP(name={q_name}, auth=auth)
 '''
-    claude_code = f'claude mcp add --transport http {service.name} {mcp_url}'
-    claude_code_pat = (f'claude mcp add --transport http {service.name} {mcp_url} '
-                       f'--header "Authorization: Bearer <PERSONAL_ACCESS_TOKEN>"')
-    mcp_json = {"mcpServers": {service.name: {"type": "http", "url": mcp_url}}}
-    mcp_json_pat = {"mcpServers": {service.name: {"type": "http", "url": mcp_url,
-                                                   "headers": {"Authorization": "Bearer <PERSONAL_ACCESS_TOKEN>"}}}}
+    claude_code = shell_command("claude", "mcp", "add", "--transport", "http", cli_name, mcp_url)
+    claude_code_pat = (shell_command("claude", "mcp", "add", "--transport", "http", cli_name, mcp_url)
+                       + ' --header "Authorization: Bearer <PERSONAL_ACCESS_TOKEN>"')
+    mcp_json = {"mcpServers": {cli_name: {"type": "http", "url": mcp_url}}}
+    mcp_json_pat = {"mcpServers": {cli_name: {"type": "http", "url": mcp_url,
+                                              "headers": {"Authorization": "Bearer <PERSONAL_ACCESS_TOKEN>"}}}}
     fastmcp_client = f'''from fastmcp import Client
 
-async with Client("{mcp_url}", auth="oauth") as client:
+async with Client({q_url}, auth="oauth") as client:
     print(await client.list_tools())
 '''
     return {

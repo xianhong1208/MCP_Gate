@@ -7,6 +7,7 @@ import { oauthApi, servicesApi } from '../services/api'
 import { useToast } from '../contexts/ToastContext'
 import CodeBlock from '../components/CodeBlock'
 import { describeScope } from '../utils/scopes'
+import { tokenSnippets } from '../utils/snippets'
 import clsx from 'clsx'
 import {
   PageHeader, Button, Badge, Card, CardHeader, Alert, Field, Input, Select, SectionLabel, DescriptionList,
@@ -119,8 +120,8 @@ export default function CreateTokenPage() {
   if (result) {
     const mcpUrl = service?.mcp_url || service?.effective_audience || '<your-mcp-server-url>'
     const name = service?.name || result.service_name || 'mcp-server'
-    const claudeCmd = `claude mcp add --transport http ${name} ${mcpUrl} --header "Authorization: Bearer ${result.access_token}"`
-    const mcpJson = { mcpServers: { [name]: { type: 'http', url: mcpUrl, headers: { Authorization: `Bearer ${result.access_token}` } } } }
+    // Quoted for the shell: the service name may be a scanned server's self-chosen serverInfo.name (H-08)
+    const { claudeCmd, mcpJson } = tokenSnippets({ name, mcpUrl, token: result.access_token })
 
     return (
       <div className="mx-auto max-w-3xl space-y-8">

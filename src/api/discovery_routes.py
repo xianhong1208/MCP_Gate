@@ -125,7 +125,8 @@ async def scan_services(request: ScanRequest, http_request: Request, db: Session
                 if request.service_name:
                     service_name = request.service_name
                 elif vr and vr.server_name and vr.server_name != "(requires auth)":
-                    service_name = sanitize_server_name(vr.server_name)
+                    service_name = (sanitize_server_name(vr.server_name)
+                                    or fallback_service_name(svc.host, svc.port))
                 else:
                     service_name = fallback_service_name(svc.host, svc.port)
 

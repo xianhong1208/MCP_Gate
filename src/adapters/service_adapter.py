@@ -1,5 +1,6 @@
 """Service domain adapter."""
 
+import re
 from typing import Optional
 
 from db.crud import ServiceCRUD, normalize_audience, normalize_service_host
@@ -15,9 +16,17 @@ def fallback_service_name(host: str, port: int) -> str:
     return f"mcp-{normalize_service_host(host).replace('.', '-')}-{port}"
 
 
+_UNSAFE_NAME_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
+
+
 def sanitize_server_name(server_name: str) -> str:
-    """Turn an MCP serverInfo.name into a service name (no spaces or slashes, cut to fit the column)."""
-    return server_name.replace(" ", "-").replace("/", "-")[:column_limit(Service.name)]
+    """Turn an MCP serverInfo.name into a service name: ASCII letters, digits, '.', '_' and '-' only.
+
+    The name is chosen by the remote server and ends up in copy-paste shell snippets (H-08), so anything else
+    (spaces, ';', '$', quotes, newlines, non-ASCII) becomes '-'. Returns "" when nothing usable is left; the
+    caller then falls back to the generated name.
+    """
+    return _UNSAFE_NAME_CHARS.sub("-", server_name or "").strip("-.")[:column_limit(Service.name)].strip("-.")
 
 
 def fallback_service_description(host: str, port: int) -> str:
