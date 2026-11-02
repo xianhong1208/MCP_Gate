@@ -375,8 +375,32 @@ def authenticate_client(db: Session, *, authorization_header: str, form: dict) -
     return client
 
 
+LOOPBACK_IPS = ("127.0.0.1", "::1")
+
+
+def _loopback_ip_key(uri: str) -> Optional[tuple]:
+    """For an http redirect URI on a loopback IP literal, everything but the port; None for any other URI."""
+    try:
+        p = urlparse(uri)
+        host = p.hostname
+        p.port  # noqa: B018 -- raises on a malformed port
+    except ValueError:
+        return None
+    if p.scheme != "http" or host not in LOOPBACK_IPS or p.username or p.password:
+        return None
+    return (p.scheme, host, p.path, p.params, p.query, p.fragment)
+
+
 def validate_redirect_uri(client: OAuthClient, redirect_uri: str) -> bool:
-    return redirect_uri in client.redirect_uri_list()
+    """Exact match against the registered list, except that a loopback IP literal redirect URI
+    (http://127.0.0.1/... or http://[::1]/...) matches on any port, as RFC 8252 §7.3 requires for native apps that
+    bind an ephemeral port. `localhost` is not covered (§8.3 calls it NOT RECOMMENDED; §7.3 frees the port for IP
+    literals only), so it still has to match exactly."""
+    registered = client.redirect_uri_list()
+    if redirect_uri in registered:
+        return True
+    key = _loopback_ip_key(redirect_uri)
+    return key is not None and any(_loopback_ip_key(r) == key for r in registered)
 
 
 # ---------------------------------------------------------------------------
@@ -749,19 +773,24 @@ def authorization_code_grant(
         raise OAuthError("invalid_grant", "authorization code already used")
     if rec.expires_at < local_now():
         raise OAuthError("invalid_grant", "authorization code expired")
+    # Any failed check below burns the code (OAuth 2.1 §4.1.3): a code that met a wrong verifier, client or
+    # redirect URI may be in an attacker's hands, so it must not stay redeemable for the rest of its lifetime.
+    failure: Optional[OAuthError] = None
     if rec.client_id != client.client_id:
-        raise OAuthError("invalid_grant", "authorization code was issued to another client")
-    if rec.redirect_uri != redirect_uri:
-        raise OAuthError("invalid_grant", "redirect_uri mismatch")
-    if rec.code_challenge:
+        failure = OAuthError("invalid_grant", "authorization code was issued to another client")
+    elif rec.redirect_uri != redirect_uri:
+        failure = OAuthError("invalid_grant", "redirect_uri mismatch")
+    elif rec.code_challenge:
         if not verify_pkce(code_verifier, rec.code_challenge, rec.code_challenge_method):
-            raise OAuthError("invalid_grant", "PKCE verification failed")
+            failure = OAuthError("invalid_grant", "PKCE verification failed")
     elif client.require_pkce or not client.client_secret_hash:
         # A code issued without PKCE can only be redeemed by an authenticated classic client
-        raise OAuthError("invalid_grant", "PKCE verification failed")
-    if resource and normalize_audience(resource) != (rec.resource or None):
-        raise OAuthError("invalid_target", "resource does not match the authorization request")
+        failure = OAuthError("invalid_grant", "PKCE verification failed")
+    if failure is None and resource and normalize_audience(resource) != (rec.resource or None):
+        failure = OAuthError("invalid_target", "resource does not match the authorization request")
     OAuthCodeAdapter.mark_used(db, rec)
+    if failure is not None:
+        raise failure
 
     user = rec.user
     if user is None or not user.is_active:
