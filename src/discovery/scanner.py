@@ -641,6 +641,7 @@ class MCPScanner:
         get_tools: bool = True,
         auth_token: Optional[str] = None,
         token_factory: Optional[TokenFactory] = None,
+        host_errors: Optional[List[dict]] = None,
     ) -> List[DiscoveredService]:
         """Discover MCP services.
 
@@ -652,6 +653,8 @@ class MCPScanner:
             auth_token: Bearer token (optional, for MCP services that require authentication)
             token_factory: Mints a token for a peer's MCP URL so servers protected by MCP Gate itself
                 can be inspected without the caller supplying a token
+            host_errors: When given, a host that may not be scanned (it resolves to a blocked address) is
+                appended here as {host, error, params, fallback} and the scan goes on with the other hosts
 
         Returns:
             List of DiscoveredService
@@ -659,8 +662,18 @@ class MCPScanner:
         discovered = []
 
         for host in hosts:
-            # Scan for open ports
-            open_ports = await self.scan_ports(host, ports)
+            # Scan for open ports. A blocked host (link-local / metadata address) is skipped, not fatal:
+            # one bad entry must not fail the scan of every other host (#16).
+            try:
+                open_ports = await self.scan_ports(host, ports)
+            except ScannerSSRFError as e:
+                logger.warning(f"Scan of {host} skipped: {e}")
+                if host_errors is not None:
+                    host_errors.append({
+                        "host": host, "error": "discovery.address_blocked", "params": {"host": host},
+                        "fallback": f"{host} resolves to a blocked address (link-local or cloud metadata); skipped.",
+                    })
+                continue
             logger.info(f"Found {len(open_ports)} open ports on {host}: {open_ports}")
 
             # Verify each open port

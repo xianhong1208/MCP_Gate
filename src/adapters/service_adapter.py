@@ -6,6 +6,7 @@ from typing import Optional
 from db.crud import ServiceCRUD, normalize_audience, normalize_service_host
 from db.models import Service
 from src.adapters.exceptions import ConflictError, NotFoundError, ValidationFailedError
+from src.logging import get_logger
 from src.utils import public_cache
 from src.utils.field_limits import FieldTooLongError, check_max_length, column_limit
 from src.utils.mcp_target import InvalidTargetError, validate_host, validate_mcp_path, validate_port, validate_protocol
@@ -15,6 +16,8 @@ def fallback_service_name(host: str, port: int) -> str:
     """Name given to a scanned server whose real name could not be read (e.g. it was locked)."""
     return f"mcp-{normalize_service_host(host).replace('.', '-')}-{port}"
 
+
+_logger = get_logger("services")
 
 _UNSAFE_NAME_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
 
@@ -140,6 +143,34 @@ class ServiceAdapter(ServiceCRUD):
             return None
         cls.update(db, str(service.id), description=desc)
         return desc
+
+    @classmethod
+    def register_discovered(cls, db, *, tools: list, response_time_ms=None, **fields):
+        """Register one scanned server with its tools and an `online` health stamp, all or nothing (#20).
+
+        The CRUD steps commit separately, so a failure after the service row was written is undone by
+        deleting that row again (tools cascade). The error is re-raised for the caller to report per server.
+        """
+        from src.adapters.managed_adapter import MCPToolAdapter
+
+        created_id = None
+        try:
+            service = cls.create(db=db, **fields)
+            created_id = str(service.id)
+            if tools:
+                MCPToolAdapter.sync_tools(db, created_id, tools)
+            cls.update_health(db=db, service_id=created_id, status="online", response_time_ms=response_time_ms,
+                              reset_fail_count=True)
+            return service
+        except Exception:
+            db.rollback()
+            if created_id is not None:
+                try:
+                    cls.delete(db, created_id)
+                except Exception as cleanup_error:  # leave the original error in charge
+                    db.rollback()
+                    _logger.error(f"Could not remove half-registered service {created_id}: {cleanup_error}")
+            raise
 
     @classmethod
     def create_checked(cls, db, **kwargs):

@@ -535,6 +535,8 @@
       "toolsCount": "{{n}} tools",
       "registered": "Registered",
       "alreadyExists": "Already exists",
+      "registerFailed": "Not registered",
+      "skippedHosts": "Skipped hosts",
       "protectedLabel": "protected by MCP Gate"
     },
     "detail": {
@@ -1080,7 +1082,9 @@
       "invalid_port": "Port {{port}} is out of range (1-65535).",
       "invalid_port_range": "The port range must satisfy 1 ≤ start ≤ end ≤ 65535.",
       "too_many_probes": "Scan too large: {{hosts}} hosts × {{ports}} ports exceeds the limit of {{limit}} probes.",
-      "invalid_host": "\"{{host}}\" is not a bare host name or IP address."
+      "invalid_host": "\"{{host}}\" is not a bare host name or IP address.",
+      "address_blocked": "{{host}} resolves to a blocked address (link-local or cloud metadata) and was skipped.",
+      "register_failed": "This server could not be registered; see the server log."
     },
     "managed": {
       "env_vars_unknown": "Unknown env vars for {{catalog_id}}: {{extras}}",
