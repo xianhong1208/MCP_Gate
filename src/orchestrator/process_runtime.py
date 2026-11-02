@@ -7,6 +7,12 @@ clients see the same 127.0.0.1:<port>/mcp endpoint. Catalog entries are images a
 Each instance gets a pid file and a log file under ``MCP_PROCESS_LOG_DIR`` (default ``data/managed``),
 so a restarted MCP Gate can find, read and stop instances it did not start itself. The child is put in
 its own session so stopping it also stops whatever the bridge spawned.
+
+The bridge must be reachable on 127.0.0.1 only (N2): MCP Gate's OAuth sits in front of the service, so a
+bridge listening on the LAN address would serve the MCP server to anyone, unauthenticated. supergateway listens
+on every interface by default and only >= 4.2.0 has ``--host``; so the runtime passes ``--host 127.0.0.1`` and
+also preloads a tiny Node module (``NODE_OPTIONS=--require``) that rewrites every wildcard ``listen()`` to
+127.0.0.1, which works whatever supergateway version is installed.
 """
 
 from __future__ import annotations
@@ -30,6 +36,44 @@ from src.orchestrator.runtime import (
 )
 
 logger = logging.getLogger(__name__)
+
+LOOPBACK_HOST = "127.0.0.1"
+_PRELOAD_NAME = "loopback-preload.cjs"
+_PRELOAD_SOURCE = """'use strict'
+// Written by MCP Gate's process runtime: pin every listen() without an explicit address (or with a
+// wildcard one) to 127.0.0.1, so the supergateway bridge is not reachable from the network.
+const net = require('net')
+const LOOPBACK = '127.0.0.1'
+const WILDCARD = new Set([undefined, null, '', '0.0.0.0', '::', '[::]', '::0'])
+const listen = net.Server.prototype.listen
+net.Server.prototype.listen = function (...args) {
+  const first = args[0]
+  if (args.length === 0 || typeof first === 'function') {
+    args.unshift(0, LOOPBACK)
+  } else if (first !== null && typeof first === 'object' && !Array.isArray(first)) {
+    if (first.path === undefined && first.fd === undefined && first.handle === undefined && first._handle === undefined
+        && WILDCARD.has(first.host)) {
+      args[0] = Object.assign({}, first, { host: LOOPBACK })
+    }
+  } else if (typeof first === 'number' || (typeof first === 'string' && /^\\d+$/.test(first))) {
+    if (typeof args[1] === 'string') {
+      if (WILDCARD.has(args[1])) args[1] = LOOPBACK
+    } else {
+      args.splice(1, 0, LOOPBACK)
+    }
+  }
+  return listen.apply(this, args)
+}
+"""
+
+
+def write_loopback_preload(directory) -> Path:
+    """Write the Node preload that pins wildcard listens to 127.0.0.1; returns its path."""
+    path = Path(directory) / _PRELOAD_NAME
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists() or path.read_text() != _PRELOAD_SOURCE:
+        path.write_text(_PRELOAD_SOURCE)
+    return path.resolve()
 
 _LABEL_ENV = "MCP_MANAGED_INSTANCE"          # marks our children so a recycled pid is not mistaken for one
 _BASE_ENV_KEYS = ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "TEMP", "TMP", "SYSTEMROOT", "USERPROFILE",
@@ -110,13 +154,15 @@ class ProcessRuntime(Runtime):
         self.stop(request.name)
         self.remove(request.name)
 
-        argv = bridge_argv(request.stdio_command, request.host_port)
+        argv = bridge_argv(request.stdio_command, request.host_port, host=LOOPBACK_HOST)
         argv[0] = shutil.which(self.supergateway_bin) or self.supergateway_bin
         env = {k: v for k, v in os.environ.items() if k in _BASE_ENV_KEYS}
         env.update(request.env)
         env[_LABEL_ENV] = request.name
 
         self.state_dir.mkdir(parents=True, exist_ok=True)
+        preload = write_loopback_preload(self.state_dir)
+        env["NODE_OPTIONS"] = f'{env.get("NODE_OPTIONS", "")} --require "{preload}"'.strip()
         progress("starting_process", request.name)
         log = open(self._log_file(request.name), "ab")
         try:
