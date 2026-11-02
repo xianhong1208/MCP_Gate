@@ -34,7 +34,8 @@ from src.discovery.websocket_manager import get_ws_manager  # noqa: E402
 from src.exceptions.handlers import register_exception_handlers  # noqa: E402
 from src.logging import RequestLoggingMiddleware, get_logger, setup_logging  # noqa: E402
 from src.middleware import (  # noqa: E402
-    IssuerMismatchMiddleware, PublicOAuthCORSMiddleware, RateLimitConfig, RateLimitMiddleware, SecurityHeadersMiddleware,
+    CSRFOriginMiddleware, IssuerMismatchMiddleware, PublicOAuthCORSMiddleware, RateLimitConfig, RateLimitMiddleware,
+    SecurityHeadersMiddleware,
 )
 from src.scheduler import get_scheduler  # noqa: E402
 from src.version import __build_commit__, __build_time__, __version__  # noqa: E402
@@ -97,6 +98,8 @@ def create_app() -> FastAPI:
     # Added after the console policy so it runs outside it: the OAuth protocol surface
     # (discovery, registration, token) is open to any origin, without credentials.
     app.add_middleware(PublicOAuthCORSMiddleware)
+    # Cookie-authenticated state changes must come from the console's own origin (CSRF); see middleware/csrf.py
+    app.add_middleware(CSRFOriginMiddleware)
 
     rl = Config.get_rate_limit_config()
     sec = Config.get_security_config()

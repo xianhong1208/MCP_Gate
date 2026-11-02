@@ -78,9 +78,12 @@ server {
 }
 ```
 
-Keep `Host` and `X-Forwarded-Proto` as shown: the console's WebSocket only accepts handshakes whose
-`Origin` is the address the browser used (or `OAUTH_ISSUER`, or an entry in `cors.allowed_origins`), and
-it reads that address from these headers when the proxy is listed in `security.trusted_proxies`.
+Keep `Host` and `X-Forwarded-Proto` as shown: the console's WebSocket, and every console `POST` / `PUT` /
+`PATCH` / `DELETE`, is only accepted when its `Origin` (or else `Referer`) is the address the browser used
+(or `OAUTH_ISSUER`, or an entry in `cors.allowed_origins`), and MCP Gate reads that address from these
+headers when the proxy is listed in `security.trusted_proxies`. A proxy that rewrites `Host` to the
+upstream address without sending `X-Forwarded-Host` makes every console change fail with 403
+`auth.csrf_origin_denied`.
 
 ## 4. Run as a service
 

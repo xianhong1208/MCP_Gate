@@ -1013,7 +1013,8 @@
       "validation_password_short": "Password must be at least 8 characters",
       "validation_password_too_long": "Password is too long (max 72 bytes, about 24 Chinese characters)",
       "authentication_required": "Please sign in",
-      "session_expired": "Your session has expired. Please sign in again."
+      "session_expired": "Your session has expired. Please sign in again.",
+      "csrf_origin_denied": "Request refused: it did not come from this console. Reload the page and try again."
     },
     "oauth": {
       "consent_not_found": "Consent record not found",

@@ -1013,7 +1013,8 @@
       "validation_password_short": "密碼至少需要 8 個字元",
       "validation_password_too_long": "密碼太長（上限 72 bytes，約 24 個中文字）",
       "authentication_required": "請先登入",
-      "session_expired": "登入已逾時,請重新登入。"
+      "session_expired": "登入已逾時,請重新登入。",
+      "csrf_origin_denied": "請求被拒絕：它不是從此主控台發出的。請重新整理頁面後再試一次。"
     },
     "oauth": {
       "consent_not_found": "找不到同意紀錄",
