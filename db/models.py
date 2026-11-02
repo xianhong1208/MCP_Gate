@@ -9,7 +9,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
-    Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, Uuid,
+    Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, Uuid, true as sa_true,
 )
 from sqlalchemy.orm import relationship
 
@@ -245,7 +245,7 @@ class OAuthClient(Base):
     jwks_uri = Column(String(512), nullable=True)
     # Classic-client compatibility (manually registered confidential clients only): PKCE may be skipped and
     # a default resource is assumed when the client sends none. MCP clients never need either.
-    require_pkce = Column(Boolean, default=True, nullable=False)
+    require_pkce = Column(Boolean, default=True, server_default=sa_true(), nullable=False)
     default_resource = Column(String(512), nullable=True)
     created_via = Column(String(16), default="manual", nullable=False)
     is_approved = Column(Boolean, default=True, nullable=False, index=True)

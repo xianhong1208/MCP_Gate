@@ -9,7 +9,9 @@ problem at the moment it happens: one warning per distinct observed base URL, ne
 
 Forwarded headers (``X-Forwarded-Proto`` / ``X-Forwarded-Host``) are honoured only when the direct
 peer is a trusted proxy, exactly like the rate limiter treats ``X-Forwarded-For``; anyone else could
-otherwise silence or fake the warning.
+otherwise silence or fake the warning. When a header carries a comma-separated list, the rightmost
+value is used: it is the one written by the trusted proxy we are talking to, whereas the leftmost
+one may have come from the client.
 """
 
 from __future__ import annotations
@@ -21,8 +23,9 @@ from urllib.parse import urlsplit
 
 from loguru import logger
 
+from src.utils.client_ip import is_ip_in_whitelist
+
 from .public_cors import is_public_oauth_path
-from .rate_limiter import is_ip_in_whitelist
 
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 
@@ -61,9 +64,9 @@ def external_base_url(scope: dict, trusted_proxies: Iterable[str]) -> str:
         forwarded_proto = headers.get("x-forwarded-proto")
         forwarded_host = headers.get("x-forwarded-host")
         if forwarded_proto:
-            scheme = forwarded_proto.split(",")[0].strip()
+            scheme = forwarded_proto.split(",")[-1].strip()
         if forwarded_host:
-            host = forwarded_host.split(",")[0].strip()
+            host = forwarded_host.split(",")[-1].strip()
     return normalize_base_url(scheme, host)
 
 

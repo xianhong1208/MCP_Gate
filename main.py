@@ -89,8 +89,6 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    app.add_middleware(SecurityHeadersMiddleware)
-
     cors = Config.get_cors_config()
     app.add_middleware(
         CORSMiddleware, allow_origins=cors.allowed_origins, allow_methods=cors.allow_methods,
@@ -110,6 +108,8 @@ def create_app() -> FastAPI:
         whitelist=rl.whitelist, path_limits=rl.path_limits, trusted_proxies=sec.trusted_proxies,
     ))
     app.add_middleware(RequestLoggingMiddleware, exclude_paths=["/health", "/docs", "/redoc", "/openapi.json"])
+    # Added last = outermost, so 429s from the rate limiter and CORS preflight answers get the headers too
+    app.add_middleware(SecurityHeadersMiddleware)
 
     register_exception_handlers(app)
 
@@ -172,6 +172,26 @@ def _mount_spa(app: FastAPI) -> None:
         return _serve_index(request)
 
 
+def warn_if_multiple_workers(env=None) -> bool:
+    """MCP Gate must run as a single process: the rate limiter counts in memory and APScheduler runs the purge
+    and health-check jobs in-process. Warn when the environment asks for more workers. Returns True if warned."""
+    env = os.environ if env is None else env
+    for name in ("WEB_CONCURRENCY", "UVICORN_WORKERS"):
+        raw = (env.get(name) or "").strip()
+        try:
+            workers = int(raw)
+        except ValueError:
+            continue
+        if workers > 1:
+            logger.warning(
+                f"{name}={workers}, but MCP Gate supports a single process only: the rate limiter keeps its counters "
+                "in memory and the scheduler runs in-process, so extra workers would multiply the rate limit and run "
+                "every scheduled job once per worker. Run one process."
+            )
+            return True
+    return False
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="MCP Gate")
     parser.add_argument("--config", type=str, default="config/config.yaml")
@@ -222,6 +242,7 @@ def main():
     setup_logging(level=log_config.level, format_type=log_config.format, log_dir=log_config.log_dir,
                   rotation=log_config.rotation, rotation_max_size=log_config.rotation_max_size,
                   retention=log_config.retention, compression=log_config.compression)
+    warn_if_multiple_workers()
 
     if args.migrate_only:
         from db.migrate import run_migration_command
@@ -259,9 +280,12 @@ def main():
     logger.info("")
 
     if args.reload:
-        uvicorn.run("main:create_app", host=host, port=port, reload=True, factory=True, log_config=None)
+        uvicorn.run("main:create_app", host=host, port=port, reload=True, factory=True, log_config=None,
+                    access_log=False)
     else:
-        uvicorn.run(app, host=host, port=port, log_config=None)
+        # log_config=None: uvicorn's loggers propagate to the loguru InterceptHandler installed by setup_logging.
+        # access_log=False: RequestLoggingMiddleware already logs every request.
+        uvicorn.run(app, host=host, port=port, log_config=None, access_log=False)
 
 
 if __name__ == "__main__":
