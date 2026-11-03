@@ -115,6 +115,7 @@
     "title": "{{name}} 想要存取你的 MCP server",
     "subtitle": "目前登入身分:{{email}}",
     "viaDcr": "動態註冊的 client",
+    "viaCimd": "以中繼資料網址識別",
     "viaManual": "受信任的 client",
     "viaSystem": "內建 client",
     "targetService": "目標服務",
@@ -130,6 +131,8 @@
     "deciding": "處理中...",
     "redirectTitle": "完成後將回到",
     "loopbackWarning": "此應用程式能接收授權的位址全都在這台電腦上({{host}})。只有在你剛剛親自在這裡啟動了它時才核准:本機上任何監聽該連接埠的程式都會收到這份授權。",
+    "cimdIdentity": "此應用程式僅以 {{host}} 識別",
+    "cimdNotice": "它並未在此註冊:名稱與其他資訊來自上方網址所發布的文件,MCP Gate 未加驗證。只有在你信任 {{host}} 且是你親自啟動此應用程式時才核准。",
     "expiresAt": "此請求於 {{time}} 逾時",
     "missingRid": "缺少授權請求編號,請從你的 MCP client 重新發起授權。",
     "loadFailed": "這個授權請求已逾時或已處理完畢。",
@@ -678,6 +681,7 @@
     },
     "via": {
       "dcr": "動態註冊",
+      "cimd": "中繼資料文件",
       "manual": "手動登記",
       "system": "內建"
     },

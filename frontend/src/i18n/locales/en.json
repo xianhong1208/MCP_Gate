@@ -115,6 +115,7 @@
     "title": "{{name}} wants to access your MCP server",
     "subtitle": "Signed in as {{email}}",
     "viaDcr": "Dynamically registered client",
+    "viaCimd": "Identified by its metadata URL",
     "viaManual": "Trusted client",
     "viaSystem": "Built-in client",
     "targetService": "Target service",
@@ -130,6 +131,8 @@
     "deciding": "Working...",
     "redirectTitle": "Sends you back to",
     "loopbackWarning": "Every address this app can receive the authorization on is on this computer ({{host}}). Approve only if you started this app here yourself just now: any program listening on that port receives the authorization.",
+    "cimdIdentity": "This app is identified only by {{host}}",
+    "cimdNotice": "It did not register here: its name and details come from a document published at the address above and are not verified by MCP Gate. Approve only if you trust {{host}} and started this app yourself.",
     "expiresAt": "Request expires at {{time}}",
     "missingRid": "Missing authorization request id. Start the flow again from your MCP client.",
     "loadFailed": "This authorization request has expired or was already decided.",
@@ -678,6 +681,7 @@
     },
     "via": {
       "dcr": "Dynamic registration",
+      "cimd": "Metadata document",
       "manual": "Registered here",
       "system": "Built-in"
     },
