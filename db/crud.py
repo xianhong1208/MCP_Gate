@@ -247,12 +247,6 @@ class MCPToolCRUD:
         return db.query(MCPTool).filter(MCPTool.service_id == _uuid(service_id), MCPTool.name == name).first()
 
     @staticmethod
-    def delete_by_service(db: Session, service_id: str) -> int:
-        count = db.query(MCPTool).filter(MCPTool.service_id == _uuid(service_id)).delete()
-        db.commit()
-        return count
-
-    @staticmethod
     def sync_tools(db: Session, service_id: str, tools: List[dict]) -> List[MCPTool]:
         sid = _uuid(service_id)
         db.query(MCPTool).filter(MCPTool.service_id == sid).delete()
@@ -1048,18 +1042,6 @@ class ManagedMcpProcessCRUD:
         if not process:
             return None
         process.desired_state = desired_state
-        db.commit()
-        db.refresh(process)
-        return process
-
-    @staticmethod
-    def append_log_lines(db: Session, process_id: str, new_lines: List[str],
-                         max_lines: int = 200) -> Optional[ManagedMcpProcess]:
-        process = ManagedMcpProcessCRUD.get_by_id(db, process_id)
-        if not process:
-            return None
-        existing = process.last_log_lines.split("\n") if process.last_log_lines else []
-        process.last_log_lines = "\n".join((existing + new_lines)[-max_lines:])
         db.commit()
         db.refresh(process)
         return process

@@ -213,10 +213,6 @@ export const servicesApi = {
     })
   },
 
-  async getHealth(id) {
-    return request(`/api/services/${encodeURIComponent(id)}/health`)
-  },
-
   async checkHealth(id) {
     return request(`/api/services/${encodeURIComponent(id)}/health-check`, { method: 'POST' })
   },
@@ -243,13 +239,6 @@ export const discoveryApi = {
       }),
     })
   },
-
-  async verify({ host, port, protocol, mcpPath, authToken }) {
-    return request('/api/discovery/verify', {
-      method: 'POST',
-      body: JSON.stringify({ host, port, protocol, mcp_path: mcpPath, auth_token: authToken }),
-    })
-  },
 }
 
 // ==================== Stats ====================
@@ -258,10 +247,6 @@ export const statsApi = {
   /** Daily token event stats; returns {stats: [{date,total,success,failed}], total, days} */
   async daily(days = 7, serviceId = null, event = null) {
     return request(`/api/stats/daily${qs({ days, service_id: serviceId, event })}`)
-  },
-
-  async hourly(hours = 24, serviceId = null, event = null) {
-    return request(`/api/stats/hourly${qs({ hours, service_id: serviceId, event })}`)
   },
 
   async services(days = 7) {
@@ -281,14 +266,6 @@ export const auditApi = {
       action, resource_type: resourceType, actor_name: actorName, status, page, page_size: pageSize,
     })}`)
   },
-
-  async getStats(days = 7) {
-    return request(`/api/audit/stats?days=${days}`)
-  },
-
-  async cleanup(days = 90) {
-    return request(`/api/audit/cleanup?days=${days}`, { method: 'DELETE' })
-  },
 }
 
 // ==================== System ====================
@@ -300,14 +277,6 @@ export const systemApi = {
 
   async getDashboardOverview() {
     return request('/api/system/dashboard')
-  },
-
-  async getSchedulerStatus() {
-    return request('/api/system/scheduler/status')
-  },
-
-  async runCleanup() {
-    return request('/api/system/cleanup/run', { method: 'POST' })
   },
 }
 
@@ -538,13 +507,6 @@ export const managedApi = {
 
   async stop(processId) {
     return request(`/api/managed/${encodeURIComponent(processId)}/stop`, { method: 'POST' })
-  },
-
-  async updateEnvVars(processId, envVars) {
-    return request(`/api/managed/${encodeURIComponent(processId)}/env-vars`, {
-      method: 'PUT',
-      body: JSON.stringify({ env_vars: envVars }),
-    })
   },
 
   async uninstall(processId) {

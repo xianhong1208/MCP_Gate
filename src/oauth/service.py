@@ -61,10 +61,6 @@ def _now_ts() -> int:
     return int(local_now().timestamp())
 
 
-def _exp_to_dt(exp: Optional[int]) -> datetime:
-    return datetime.fromtimestamp(exp) if exp else local_now()
-
-
 def _valid_redirect_uri(uri: str) -> bool:
     """Must be an absolute URL; http is only allowed for loopback (native / dev clients), everything else must be
     https or a custom scheme."""
@@ -324,10 +320,6 @@ def resource_server_audience(client: OAuthClient) -> Optional[str]:
     if client.created_via != "manual" or client.token_endpoint_auth_method == "none":
         return None
     return client.resource_audience or None
-
-
-def is_resource_server(client: OAuthClient) -> bool:
-    return resource_server_audience(client) is not None
 
 
 def verify_client_secret(client: OAuthClient, secret: Optional[str]) -> bool:

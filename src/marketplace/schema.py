@@ -159,8 +159,3 @@ class CatalogEntry(BaseModel):
         instead of blowing up with a 500 in image_tar_name() only when the marketplace listing is requested."""
         self.image_tar_name()
         return self
-
-    def public_dict(self) -> dict:
-        """Used by the API to return the entry to the frontend; currently identical to model_dump().
-        Adjust here if internal fields ever need to be hidden"""
-        return self.model_dump()

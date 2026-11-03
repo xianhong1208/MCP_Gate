@@ -41,10 +41,3 @@ def decode_rs256(token: str, public_jwk: dict, *, issuer: Optional[str] = None,
         raise JWTVerifyError("token expired")
     except jwt.InvalidTokenError as e:
         raise JWTVerifyError(f"invalid token: {e}")
-
-
-def unverified_claims(token: str) -> dict:
-    try:
-        return jwt.decode(token, options={"verify_signature": False})
-    except jwt.InvalidTokenError:
-        return {}
