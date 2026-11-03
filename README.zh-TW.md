@@ -168,7 +168,7 @@ MCP Gate 扮演 MCP 規範中的 **authorization server**;你的 MCP server 是 
 | 授權 | 瀏覽器 → MCP Gate | `/oauth/authorize` 驗證請求、用 `resource` 參數綁定目標 server,顯示同意頁(記住過或受信任的 client 直接略過)。 |
 | Token | client → MCP Gate | `/oauth/token` 用授權碼——檢查 PKCE、redirect URI、resource——換出 RS256 access token 與 refresh token。 |
 | 驗證 | server | server 抓一次 JWKS,之後在本地驗簽章、issuer、audience、有效期與 scope。 |
-| 撤銷 | 管理台或 client | 撤銷 refresh token 會讓整條鏈失效,`POST /oauth/introspect` 立刻回 `active: false`。離線驗簽的 access token 會撐到過期,所以請保持短效(預設 60 分鐘),需要即時撤銷的 server 改用 FastMCP 的 `IntrospectionTokenVerifier`。 |
+| 撤銷 | 管理台或 client | 撤銷 refresh token 會讓整條鏈失效,`POST /oauth/introspect` 立刻回 `active: false`。離線驗簽的 token 會撐到過期——access token 撐滿其有效期(預設 60 分鐘),personal access token 最長可達 `pat_max_days`——除非 server 輪詢撤銷清單(`POST /oauth/revoked`,見 `examples/mcp_gate_hooks.py` 的 `MCPGateVerifier`)或改用 FastMCP 的 `IntrospectionTokenVerifier`。 |
 
 Access token 的 claim:`iss`、`sub`、`aud`、`scope`、`client_id`、`jti`、`iat`、`exp`、`token_use`,以及——簽給已登入擁有者的 token——`email` 與 `name`。
 

@@ -168,7 +168,7 @@ MCP Gate plays the **authorization server** role from the MCP specification. You
 | Authorization | browser → MCP Gate | `/oauth/authorize` validates the request, binds it to the target server through the `resource` parameter, and shows the consent screen (or skips it for remembered or trusted clients). |
 | Token | client → MCP Gate | `/oauth/token` exchanges the code — checking PKCE, redirect URI and resource — for an RS256 access token plus a refresh token. |
 | Verification | server | The server fetches JWKS once, then verifies signature, issuer, audience, expiry and scopes locally. |
-| Revocation | console or client | Revoking a refresh token invalidates its whole family, and `POST /oauth/introspect` reports `active: false` immediately. Access tokens verified offline stay valid until they expire, so keep them short (60 minutes by default) or use FastMCP's `IntrospectionTokenVerifier` on servers that need instant revocation. |
+| Revocation | console or client | Revoking a refresh token invalidates its whole family, and `POST /oauth/introspect` reports `active: false` immediately. Tokens verified offline stay valid until they expire — an access token for its lifetime (60 minutes by default), a personal access token for up to `pat_max_days` — unless the server polls the revocation feed (`POST /oauth/revoked`, see `MCPGateVerifier` in `examples/mcp_gate_hooks.py`) or uses FastMCP's `IntrospectionTokenVerifier`. |
 
 Access-token claims: `iss`, `sub`, `aud`, `scope`, `client_id`, `jti`, `iat`, `exp`, `token_use`, and — for tokens issued to a signed-in owner — `email` and `name`.
 
