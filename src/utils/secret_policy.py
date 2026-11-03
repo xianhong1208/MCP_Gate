@@ -24,7 +24,6 @@ from src.logging import get_logger
 
 logger = get_logger("secret_policy")
 
-SECRET_NAMES = ("SESSION_SECRET_KEY", "ENCRYPTION_KEY")
 MIN_LENGTH = 32
 MIN_DISTINCT = 10
 TRIVIAL_LENGTH = 16

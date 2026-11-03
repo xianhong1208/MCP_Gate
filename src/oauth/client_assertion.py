@@ -145,9 +145,9 @@ def fetch_jwks(jwks_uri: str, *, force: bool = False, allow_loopback: bool = Fal
         logger.warning("jwks_uri {uri} refused at fetch time: {err}", uri=jwks_uri, err=e.description)
         raise OAuthError("invalid_client", "client keys could not be fetched", 401)
     try:
-        r = _get_pinned(jwks_uri, address)
-        r.raise_for_status()
-        doc = validate_jwks_document(r.json())
+        response = _get_pinned(jwks_uri, address)
+        response.raise_for_status()
+        doc = validate_jwks_document(response.json())
     except OAuthError:
         raise
     except Exception as e:  # network, TLS, JSON
@@ -171,8 +171,8 @@ def _remember_jti(client_id: str, jti: str, exp: float) -> bool:
     """False when the jti was already used by this client (replay)."""
     now = time.time()
     with _lock:
-        for key, until in [(k, v) for k, v in _seen_jti.items() if v < now]:
-            _seen_jti.pop(key, None)
+        for expired_key in [k for k, expires_at in _seen_jti.items() if expires_at < now]:
+            _seen_jti.pop(expired_key, None)
         key = (client_id, jti)
         if key in _seen_jti:
             return False

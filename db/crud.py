@@ -247,12 +247,6 @@ class MCPToolCRUD:
         return db.query(MCPTool).filter(MCPTool.service_id == _uuid(service_id), MCPTool.name == name).first()
 
     @staticmethod
-    def delete_by_service(db: Session, service_id: str) -> int:
-        count = db.query(MCPTool).filter(MCPTool.service_id == _uuid(service_id)).delete()
-        db.commit()
-        return count
-
-    @staticmethod
     def sync_tools(db: Session, service_id: str, tools: List[dict]) -> List[MCPTool]:
         sid = _uuid(service_id)
         db.query(MCPTool).filter(MCPTool.service_id == sid).delete()
@@ -313,16 +307,16 @@ class TokenUsageCRUD:
         buckets: dict = {}
         for row in TokenUsageCRUD._query(db, start, service_id, audience, event).all():
             key = row.used_at.strftime("%Y-%m-%d")
-            b = buckets.setdefault(key, {"total": 0, "success": 0})
-            b["total"] += row.count
-            b["success"] += row.count if row.success else 0
+            bucket = buckets.setdefault(key, {"total": 0, "success": 0})
+            bucket["total"] += row.count
+            bucket["success"] += row.count if row.success else 0
         stats = []
         current = start.date()
         while current <= end.date():
             key = current.strftime("%Y-%m-%d")
-            b = buckets.get(key, {"total": 0, "success": 0})
-            stats.append({"date": key, "total": b["total"], "success": b["success"],
-                          "failed": b["total"] - b["success"]})
+            bucket = buckets.get(key, {"total": 0, "success": 0})
+            stats.append({"date": key, "total": bucket["total"], "success": bucket["success"],
+                          "failed": bucket["total"] - bucket["success"]})
             current += timedelta(days=1)
         return stats
 
@@ -349,13 +343,13 @@ class TokenUsageCRUD:
         buckets: dict = {}
         for row in TokenUsageCRUD._query(db, start).all():
             key = row.audience or "-"
-            b = buckets.setdefault(key, {"total": 0, "success": 0, "clients": set(), "service_id": None})
-            b["total"] += row.count
-            b["success"] += row.count if row.success else 0
+            bucket = buckets.setdefault(key, {"total": 0, "success": 0, "clients": set(), "service_id": None})
+            bucket["total"] += row.count
+            bucket["success"] += row.count if row.success else 0
             if row.client_id:
-                b["clients"].add(row.client_id)
+                bucket["clients"].add(row.client_id)
             if row.service_id:
-                b["service_id"] = str(row.service_id)
+                bucket["service_id"] = str(row.service_id)
         return [
             {"audience": k, "service_id": v["service_id"], "total": v["total"], "success": v["success"],
              "failed": v["total"] - v["success"], "clients": len(v["clients"])}
@@ -411,22 +405,22 @@ class AdminSessionCRUD:
 
     @staticmethod
     def delete(db: Session, session_id: str) -> int:
-        n = db.query(AdminSession).filter(AdminSession.id == session_id).delete(synchronize_session=False)
+        deleted = db.query(AdminSession).filter(AdminSession.id == session_id).delete(synchronize_session=False)
         db.commit()
-        return n
+        return deleted
 
     @staticmethod
     def delete_for_user(db: Session, user_id) -> int:
-        n = db.query(AdminSession).filter(AdminSession.user_id == _uuid(user_id)).delete(
+        deleted = db.query(AdminSession).filter(AdminSession.user_id == _uuid(user_id)).delete(
             synchronize_session=False)
         db.commit()
-        return n
+        return deleted
 
     @staticmethod
     def delete_expired(db: Session) -> int:
-        n = db.query(AdminSession).filter(AdminSession.expires_at < utc_now()).delete(synchronize_session=False)
+        deleted = db.query(AdminSession).filter(AdminSession.expires_at < utc_now()).delete(synchronize_session=False)
         db.commit()
-        return n
+        return deleted
 
 
 class AdminUserCRUD:
@@ -1048,18 +1042,6 @@ class ManagedMcpProcessCRUD:
         if not process:
             return None
         process.desired_state = desired_state
-        db.commit()
-        db.refresh(process)
-        return process
-
-    @staticmethod
-    def append_log_lines(db: Session, process_id: str, new_lines: List[str],
-                         max_lines: int = 200) -> Optional[ManagedMcpProcess]:
-        process = ManagedMcpProcessCRUD.get_by_id(db, process_id)
-        if not process:
-            return None
-        existing = process.last_log_lines.split("\n") if process.last_log_lines else []
-        process.last_log_lines = "\n".join((existing + new_lines)[-max_lines:])
         db.commit()
         db.refresh(process)
         return process

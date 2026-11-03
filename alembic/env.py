@@ -11,8 +11,9 @@ from alembic import context
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-# Load .env so DATABASE_URL etc. are available when running alembic CLI directly
-# (mirrors the load_dotenv call in main.py)
+# Load .env so DATABASE_URL etc. are available however migrations are started: from main.py
+# on boot or from `python -m db.migrate`. There is no alembic.ini, so the bare `alembic` CLI
+# is not supported (see db/migrate.py).
 try:
     from dotenv import load_dotenv
     load_dotenv(project_root / ".env")

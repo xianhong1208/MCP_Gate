@@ -1,11 +1,11 @@
 """Marketplace catalog Pydantic schema
 
 Each catalog/*.yaml file maps to one CatalogEntry describing an MCP service template that
-can be installed from the MCP Gate UI. The "Install" form the vendor sees is generated
+can be installed from the MCP Gate console. The console's "Install" form is generated
 dynamically from this schema.
 
 Design principles:
-  - extra='forbid' -- unknown fields raise immediately, so a vendor's typo in a field name never fails silently
+  - extra='forbid' -- unknown fields raise immediately, so a typo in a catalog field name never fails silently
   - the secret + required flags tell the UI how to render the field (password / plain input)
   - docker.tag should be pinned by us to a verified version; shipping with latest is not recommended
 """
@@ -159,8 +159,3 @@ class CatalogEntry(BaseModel):
         instead of blowing up with a 500 in image_tar_name() only when the marketplace listing is requested."""
         self.image_tar_name()
         return self
-
-    def public_dict(self) -> dict:
-        """Used by the API to return the entry to the frontend; currently identical to model_dump().
-        Adjust here if internal fields ever need to be hidden"""
-        return self.model_dump()

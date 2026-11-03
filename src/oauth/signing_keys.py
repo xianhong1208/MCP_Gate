@@ -59,11 +59,11 @@ def generate_key_material(bits: Optional[int] = None, alg: str = DEFAULT_ALG) ->
 
 
 def create_signing_key(db: Session, make_active: bool = True) -> OAuthSigningKey:
-    m = generate_key_material()
+    material = generate_key_material()
     return OAuthKeyAdapter.create(
-        db, kid=m["kid"], alg=m["alg"],
-        public_jwk=json.dumps(m["public_jwk"], separators=(",", ":")),
-        private_pem_enc=m["private_pem_enc"], make_active=make_active,
+        db, kid=material["kid"], alg=material["alg"],
+        public_jwk=json.dumps(material["public_jwk"], separators=(",", ":")),
+        private_pem_enc=material["private_pem_enc"], make_active=make_active,
     )
 
 

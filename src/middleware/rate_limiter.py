@@ -23,7 +23,6 @@ class RateLimitConfig:
     """Rate limit configuration"""
     requests_per_minute: int = 60  # Maximum requests per minute
     requests_per_hour: int = 1000  # Maximum requests per hour
-    burst_size: int = 10  # Allowed burst size
     enabled: bool = True
     # Whitelisted IPs (not rate limited)
     whitelist: list = field(default_factory=lambda: ["127.0.0.1", "localhost"])

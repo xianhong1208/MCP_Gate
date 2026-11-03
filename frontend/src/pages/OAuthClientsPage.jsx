@@ -463,11 +463,11 @@ export default function OAuthClientsPage() {
 
   const visible = clients.filter((c) => clientStatus(c) === tab)
 
-  const run = async (client, fn, successMsg) => {
+  const runClientAction = async (client, action, successMsg) => {
     setBusy(client.client_id)
     try {
-      const r = await fn()
-      toast.success(successMsg(r))
+      const result = await action()
+      toast.success(successMsg(result))
       await load({ silent: true })
     } catch (err) {
       toast.error(err.message || t('clients.actionFailed'))
@@ -476,7 +476,7 @@ export default function OAuthClientsPage() {
     }
   }
 
-  const approve = (c) => run(c, () => oauthApi.clients.approve(c.client_id), () => t('clients.toast.approved', { name: c.client_name }))
+  const approve = (c) => runClientAction(c, () => oauthApi.clients.approve(c.client_id), () => t('clients.toast.approved', { name: c.client_name }))
   const revoke = async (c) => {
     const ok = await confirm({
       title: t('clients.revokeConfirmTitle'),
@@ -485,12 +485,12 @@ export default function OAuthClientsPage() {
       type: 'revoke',
     })
     if (!ok) return
-    run(c, () => oauthApi.clients.revoke(c.client_id), (r) => t('clients.toast.revoked', { name: c.client_name, n: r?.tokens_revoked ?? 0 }))
+    runClientAction(c, () => oauthApi.clients.revoke(c.client_id), (r) => t('clients.toast.revoked', { name: c.client_name, n: r?.tokens_revoked ?? 0 }))
   }
   const remove = async (c) => {
     const ok = await confirmDelete(t('clients.deleteTarget', { name: c.client_name }))
     if (!ok) return
-    run(c, () => oauthApi.clients.delete(c.client_id), () => t('clients.toast.deleted', { name: c.client_name }))
+    runClientAction(c, () => oauthApi.clients.delete(c.client_id), () => t('clients.toast.deleted', { name: c.client_name }))
   }
 
   return (

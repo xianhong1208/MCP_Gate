@@ -17,11 +17,9 @@ from src.config.model import (
     CORSConfig,
     DatabaseConfig,
     IdentityConfig,
-    LoggingConfig,
     OAuthConfig,
     RateLimitConfig,
     SecurityConfig,
-    ServerConfig,
     SessionConfig,
 )
 
@@ -55,23 +53,19 @@ class Config:
     """Configuration manager (singleton). Provides built-in defaults until set_config is called, for tests and
     zero-config startup."""
 
-    _config_path: Optional[str] = None
     _config_model: Optional[ConfigModel] = None
 
     @classmethod
     def set_config(cls, config_path: str):
-        cls._config_path = config_path
         cls._config_model = cls._load_config(config_path)
 
     @classmethod
     def set_model(cls, model: ConfigModel):
         """Inject a config object directly (for tests)."""
-        cls._config_path = None
         cls._config_model = model
 
     @classmethod
     def reset(cls):
-        cls._config_path = None
         cls._config_model = None
 
     @classmethod
@@ -95,10 +89,6 @@ class Config:
         return cls.get_config_model().database
 
     @classmethod
-    def get_server_config(cls) -> ServerConfig:
-        return cls.get_config_model().server
-
-    @classmethod
     def get_session_config(cls) -> SessionConfig:
         return cls.get_config_model().session
 
@@ -109,10 +99,6 @@ class Config:
     @classmethod
     def get_identity_config(cls) -> IdentityConfig:
         return cls.get_config_model().identity
-
-    @classmethod
-    def get_logging_config(cls) -> LoggingConfig:
-        return cls.get_config_model().logging
 
     @classmethod
     def get_rate_limit_config(cls) -> RateLimitConfig:

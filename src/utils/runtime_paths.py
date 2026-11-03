@@ -76,12 +76,3 @@ def resolve_external_dir(name: str, dev_root: Path) -> Optional[Path]:
             return p
     return None
 
-
-def get_runtime_project_root() -> Path:
-    """Get the runtime "external resource root" -- same logic as the corresponding line in main.py
-
-    For cases that need a relative path but do not need the multi-directory search of `resolve_external_dir()`.
-    Correct for both dev and Nuitka; but it cannot handle a "binary in A, resources in B" deployment layout --
-    use `resolve_external_dir()` for that.
-    """
-    return Path(os.path.abspath(sys.argv[0])).parent

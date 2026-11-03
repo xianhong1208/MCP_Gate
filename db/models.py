@@ -33,10 +33,6 @@ def format_datetime(dt: datetime) -> str | None:
     return dt.astimezone().isoformat()
 
 
-# Backward-compatible alias for the old name
-format_utc_datetime = format_datetime
-
-
 def _json_list(raw: str | None) -> list:
     if not raw:
         return []

@@ -24,10 +24,6 @@ from src.marketplace.schema import CatalogEntry
 logger = logging.getLogger(__name__)
 
 
-class CatalogLoadError(Exception):
-    """Reading or validating a catalog YAML failed"""
-
-
 class CatalogLoader:
     def __init__(self, catalog_dir: Path):
         self.catalog_dir = catalog_dir
