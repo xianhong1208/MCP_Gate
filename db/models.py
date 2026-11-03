@@ -415,7 +415,8 @@ class OAuthToken(Base):
     service_id = Column(Uuid, ForeignKey("services.id", ondelete="SET NULL"), nullable=True, index=True)
     scope = Column(String(512), nullable=True)
     label = Column(String(128), nullable=True)
-    parent_jti = Column(String(64), nullable=True)
+    # revoke_family filters on parent_jti (OR jti): replay detection must not scan the whole table
+    parent_jti = Column(String(64), nullable=True, index=True)
     issued_at = Column(DateTime, default=local_now, nullable=False, index=True)
     expires_at = Column(DateTime, nullable=False, index=True)
     revoked_at = Column(DateTime, nullable=True, index=True)
