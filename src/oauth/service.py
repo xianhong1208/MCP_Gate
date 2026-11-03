@@ -27,6 +27,7 @@ from db.models import (
 )
 from db.database import make_session
 from db.seed import CONSOLE_CLIENT_ID, SCANNER_CLIENT_ID
+from src.audit import AuditAction, AuditStatus, ResourceType, record_oauth_event
 from src.adapters import (
     OAuthAuthRequestAdapter, OAuthClientAdapter, OAuthCodeAdapter, OAuthConsentAdapter, OAuthScopeAdapter,
     ServiceScopeAdapter,
@@ -751,6 +752,29 @@ def _record_event(db: Session, *, event: str, jti: Optional[str], grant_type: Op
         db.rollback()
 
 
+def _code_replayed(db: Session, rec: OAuthAuthorizationCode, client: OAuthClient, ip: Optional[str], *,
+                   concurrent: bool = False):
+    """A used code was presented again: revoke everything exchanged from it, audit it, refuse."""
+    revoked = OAuthTokenAdapter.revoke_family(db, rec.code_hash, reason="code_replay")
+    record_oauth_event(db, AuditAction.OAUTH_CODE_REPLAY, status=AuditStatus.FAILURE, resource_type=ResourceType.TOKEN,
+                       client_id=client.client_id, client_name=client.client_name, ip_address=ip,
+                       request_path="/oauth/token", error_message="authorization code already used",
+                       details={"revoked_tokens": revoked, "concurrent": concurrent,
+                                "user_id": str(rec.user_id) if rec.user_id else None, "resource": rec.resource})
+    raise OAuthError("invalid_grant", "authorization code already used")
+
+
+def _refresh_replayed(db: Session, rec: OAuthToken, client: OAuthClient, ip: Optional[str], *,
+                      concurrent: bool = False) -> None:
+    """A rotated refresh token was presented again: revoke its whole family and audit it."""
+    revoked = OAuthTokenAdapter.revoke_family(db, rec.parent_jti or rec.jti, reason="refresh_replay")
+    record_oauth_event(db, AuditAction.OAUTH_REFRESH_REPLAY, status=AuditStatus.FAILURE,
+                       resource_type=ResourceType.TOKEN, client_id=client.client_id, client_name=client.client_name,
+                       ip_address=ip, request_path="/oauth/token", error_message="refresh token reused",
+                       details={"jti": rec.jti, "revoked_tokens": revoked, "concurrent": concurrent,
+                                "resource": rec.audience})
+
+
 # ---------------------------------------------------------------------------
 # grants
 # ---------------------------------------------------------------------------
@@ -763,8 +787,7 @@ def authorization_code_grant(
         raise OAuthError("invalid_grant", "unknown authorization code")
     if rec.used_at is not None:
         # Authorization code replay -> possibly leaked; revoke every token previously exchanged from this code
-        OAuthTokenAdapter.revoke_family(db, rec.code_hash, reason="code_replay")
-        raise OAuthError("invalid_grant", "authorization code already used")
+        _code_replayed(db, rec, client, ip)
     if rec.expires_at < local_now():
         raise OAuthError("invalid_grant", "authorization code expired")
     # Any failed check below burns the code (OAuth 2.1 §4.1.3): a code that met a wrong verifier, client or
@@ -788,8 +811,7 @@ def authorization_code_grant(
     # conditional UPDATE, and it stays uncommitted (holding the row / write lock) until the tokens are recorded,
     # so the loser waits, finds the code used and revokes the tokens the winner issued -- a replay, as above.
     if not OAuthCodeAdapter.claim(db, rec.code_hash):
-        OAuthTokenAdapter.revoke_family(db, rec.code_hash, reason="code_replay")
-        raise OAuthError("invalid_grant", "authorization code already used")
+        _code_replayed(db, rec, client, ip, concurrent=True)
     try:
         if failure is not None:
             raise failure
@@ -832,7 +854,7 @@ def refresh_token_grant(db: Session, *, client: OAuthClient, refresh_token: str,
     if rec.is_revoked:
         # An already-rotated refresh token was used again -> replay; revoke the whole chain
         if rec.revoke_reason == "rotated":
-            OAuthTokenAdapter.revoke_family(db, rec.parent_jti or rec.jti, reason="refresh_replay")
+            _refresh_replayed(db, rec, client, ip)
         raise OAuthError("invalid_grant", "refresh token revoked")
 
     scope = rec.scope or ""
@@ -851,7 +873,7 @@ def refresh_token_grant(db: Session, *, client: OAuthClient, refresh_token: str,
     # Rotation is one conditional UPDATE, uncommitted until the new tokens are recorded: of two concurrent
     # refreshes with the same token one rotates it, the other waits, finds it rotated and treats it as a replay.
     if not OAuthTokenAdapter.rotate(db, rec.jti):
-        OAuthTokenAdapter.revoke_family(db, family, reason="refresh_replay")
+        _refresh_replayed(db, rec, client, ip, concurrent=True)
         raise OAuthError("invalid_grant", "refresh token revoked")
     access, expires_in, access_rec = issue_access_token(
         db, sub=rec.sub, client_id=client.client_id, scope=scope, audience=rec.audience,
