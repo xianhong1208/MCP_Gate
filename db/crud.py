@@ -670,9 +670,15 @@ class OAuthCodeCRUD:
                 .filter(OAuthAuthorizationCode.code_hash == code_hash).first())
 
     @staticmethod
-    def mark_used(db: Session, code: OAuthAuthorizationCode) -> None:
-        code.used_at = local_now()
-        db.commit()
+    def claim(db: Session, code_hash: str) -> bool:
+        """Mark a code used unless something already has: a conditional UPDATE (``WHERE used_at IS NULL``), so of
+        two concurrent redemptions exactly one gets True. Not committed: the winner commits once the tokens it
+        issues are in place (OAuthTokenCRUD.commit_grant), so a loser that waited on the row lock and then
+        revokes the family sees those tokens."""
+        claimed = db.query(OAuthAuthorizationCode).filter(
+            OAuthAuthorizationCode.code_hash == code_hash, OAuthAuthorizationCode.used_at.is_(None),
+        ).update({OAuthAuthorizationCode.used_at: local_now()}, synchronize_session=False)
+        return claimed == 1
 
     @staticmethod
     def delete_expired(db: Session) -> int:
@@ -763,16 +769,26 @@ class ServiceScopeCRUD:
 class OAuthTokenCRUD:
 
     @staticmethod
-    def create(db: Session, **fields) -> OAuthToken:
+    def create(db: Session, commit: bool = True, **fields) -> OAuthToken:
+        """Record an issued token. ``commit=False`` only flushes, for a grant that commits its tokens together
+        with the claim on the code / refresh token they were exchanged for (commit_grant)."""
         if fields.get("client_id") and not fields.get("client_name_snapshot"):
             client = db.query(OAuthClient).filter(OAuthClient.client_id == fields["client_id"]).first()
             if client:
                 fields["client_name_snapshot"] = client.client_name
         token = OAuthToken(**fields)
         db.add(token)
+        if not commit:
+            db.flush()
+            return token
         db.commit()
         db.refresh(token)
         return token
+
+    @staticmethod
+    def commit_grant(db: Session) -> None:
+        """Commit a redemption: the claim (OAuthCodeCRUD.claim / rotate) and the tokens issued for it."""
+        db.commit()
 
     @staticmethod
     def get(db: Session, jti: str) -> Optional[OAuthToken]:
@@ -844,6 +860,15 @@ class OAuthTokenCRUD:
             token.revoke_reason = reason
             db.commit()
         return token
+
+    @staticmethod
+    def rotate(db: Session, jti: str) -> bool:
+        """Revoke a refresh token as rotated unless it already is revoked: a conditional UPDATE
+        (``WHERE revoked_at IS NULL``), so of two concurrent refreshes with the same token exactly one gets True.
+        Not committed (see OAuthCodeCRUD.claim)."""
+        rotated = db.query(OAuthToken).filter(OAuthToken.jti == jti, OAuthToken.revoked_at.is_(None)).update(
+            {OAuthToken.revoked_at: local_now(), OAuthToken.revoke_reason: "rotated"}, synchronize_session=False)
+        return rotated == 1
 
     @staticmethod
     def revoke_family(db: Session, parent_jti: str, reason: str) -> int:

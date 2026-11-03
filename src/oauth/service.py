@@ -636,7 +636,7 @@ def issue_access_token(
     db: Session, *, sub: str, client_id: str, scope: str, audience: Optional[str],
     service: Optional[Service] = None, user: Optional[AdminUser] = None, kind: str = "access",
     ttl_seconds: Optional[int] = None, label: Optional[str] = None, parent_jti: Optional[str] = None,
-    record: bool = True,
+    record: bool = True, commit: bool = True,
 ) -> tuple[str, int, Optional[OAuthToken]]:
     cfg = Config.get_oauth_config()
     now = _now_ts()
@@ -657,7 +657,7 @@ def issue_access_token(
         rec = OAuthTokenAdapter.create(
             db, jti=jti, kind=kind, client_id=client_id, user_id=user.id if user else None, sub=sub,
             audience=audience, service_id=service.id if service else None, scope=scope, label=label,
-            parent_jti=parent_jti, expires_at=datetime.fromtimestamp(now + expires_in),
+            parent_jti=parent_jti, expires_at=datetime.fromtimestamp(now + expires_in), commit=commit,
         )
     return token, expires_in, rec
 
@@ -668,7 +668,7 @@ def refresh_token_audience() -> str:
 
 def issue_refresh_token(
     db: Session, *, sub: str, client_id: str, scope: str, audience: Optional[str],
-    service: Optional[Service], user: Optional[AdminUser], parent_jti: Optional[str] = None,
+    service: Optional[Service], user: Optional[AdminUser], parent_jti: Optional[str] = None, commit: bool = True,
 ) -> tuple[str, OAuthToken]:
     cfg = Config.get_oauth_config()
     now = _now_ts()
@@ -686,7 +686,7 @@ def issue_refresh_token(
     rec = OAuthTokenAdapter.create(
         db, jti=jti, kind="refresh", client_id=client_id, user_id=user.id if user else None, sub=sub,
         audience=audience, service_id=service.id if service else None, scope=scope,
-        parent_jti=parent_jti, expires_at=datetime.fromtimestamp(now + expires_in),
+        parent_jti=parent_jti, expires_at=datetime.fromtimestamp(now + expires_in), commit=commit,
     )
     return token, rec
 
@@ -782,25 +782,36 @@ def authorization_code_grant(
         failure = OAuthError("invalid_grant", "PKCE verification failed")
     if failure is None and resource and normalize_audience(resource) != (rec.resource or None):
         failure = OAuthError("invalid_target", "resource does not match the authorization request")
-    OAuthCodeAdapter.mark_used(db, rec)
-    if failure is not None:
-        raise failure
 
-    user = rec.user
-    if user is None or not user.is_active:
-        raise OAuthError("invalid_grant", "the user who granted this code is no longer active")
-    service = _active_service_for(db, rec.resource)
+    signing_keys.ensure_active_signing_key(db)  # may commit: must happen before the claim below
+    # Check-then-set would let two concurrent redemptions both pass the used_at check above: the claim is one
+    # conditional UPDATE, and it stays uncommitted (holding the row / write lock) until the tokens are recorded,
+    # so the loser waits, finds the code used and revokes the tokens the winner issued -- a replay, as above.
+    if not OAuthCodeAdapter.claim(db, rec.code_hash):
+        OAuthTokenAdapter.revoke_family(db, rec.code_hash, reason="code_replay")
+        raise OAuthError("invalid_grant", "authorization code already used")
+    try:
+        if failure is not None:
+            raise failure
+        user = rec.user
+        if user is None or not user.is_active:
+            raise OAuthError("invalid_grant", "the user who granted this code is no longer active")
+        service = _active_service_for(db, rec.resource)
+    except OAuthError:
+        OAuthTokenAdapter.commit_grant(db)  # the code stays burned
+        raise
     scope = rec.scope or ""
     access, expires_in, access_rec = issue_access_token(
         db, sub=str(user.id), client_id=client.client_id, scope=scope, audience=rec.resource,
-        service=service, user=user, parent_jti=rec.code_hash,
+        service=service, user=user, parent_jti=rec.code_hash, commit=False,
     )
     refresh = None
     if "refresh_token" in client.grant_type_list():
         refresh, _ = issue_refresh_token(
             db, sub=str(user.id), client_id=client.client_id, scope=scope, audience=rec.resource,
-            service=service, user=user, parent_jti=rec.code_hash,
+            service=service, user=user, parent_jti=rec.code_hash, commit=False,
         )
+    OAuthTokenAdapter.commit_grant(db)
     OAuthClientAdapter.touch(db, client)
     _record_event(db, event="issued", jti=access_rec.jti if access_rec else None, grant_type="authorization_code",
                   client_id=client.client_id, sub=str(user.id), audience=rec.resource, service=service, ip=ip)
@@ -835,16 +846,22 @@ def refresh_token_grant(db: Session, *, client: OAuthClient, refresh_token: str,
     if user is None or not user.is_active:
         raise OAuthError("invalid_grant", "the user who granted this token is no longer active")
     service = _active_service_for(db, rec.audience)  # before rotating: a refused refresh keeps the token usable
-    OAuthTokenAdapter.revoke(db, rec, reason="rotated")
     family = rec.parent_jti or rec.jti
+    signing_keys.ensure_active_signing_key(db)  # may commit: must happen before the rotation below
+    # Rotation is one conditional UPDATE, uncommitted until the new tokens are recorded: of two concurrent
+    # refreshes with the same token one rotates it, the other waits, finds it rotated and treats it as a replay.
+    if not OAuthTokenAdapter.rotate(db, rec.jti):
+        OAuthTokenAdapter.revoke_family(db, family, reason="refresh_replay")
+        raise OAuthError("invalid_grant", "refresh token revoked")
     access, expires_in, access_rec = issue_access_token(
         db, sub=rec.sub, client_id=client.client_id, scope=scope, audience=rec.audience,
-        service=service, user=user, parent_jti=family,
+        service=service, user=user, parent_jti=family, commit=False,
     )
     new_refresh, _ = issue_refresh_token(
         db, sub=rec.sub, client_id=client.client_id, scope=scope, audience=rec.audience,
-        service=service, user=user, parent_jti=family,
+        service=service, user=user, parent_jti=family, commit=False,
     )
+    OAuthTokenAdapter.commit_grant(db)
     OAuthClientAdapter.touch(db, client)
     _record_event(db, event="issued", jti=access_rec.jti if access_rec else None, grant_type="refresh_token",
                   client_id=client.client_id, sub=rec.sub, audience=rec.audience, service=service, ip=ip)
