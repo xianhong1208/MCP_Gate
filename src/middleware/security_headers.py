@@ -1,7 +1,7 @@
 """Security Headers Middleware
 
 Attaches security-related headers to every HTTP response to defend against Clickjacking, MIME sniffing, etc.
-Prevents Clickjacking / MIME sniffing (covers the common SAST finding "Legacy Browser Clickjacking").
+(covers the common SAST finding "Legacy Browser Clickjacking").
 
 Notes:
   - X-Frame-Options: DENY together with CSP frame-ancestors 'none' as a double defence:

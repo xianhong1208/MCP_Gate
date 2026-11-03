@@ -1,11 +1,11 @@
 """Marketplace catalog Pydantic schema
 
 Each catalog/*.yaml file maps to one CatalogEntry describing an MCP service template that
-can be installed from the MCP Gate UI. The "Install" form the vendor sees is generated
+can be installed from the MCP Gate console. The console's "Install" form is generated
 dynamically from this schema.
 
 Design principles:
-  - extra='forbid' -- unknown fields raise immediately, so a vendor's typo in a field name never fails silently
+  - extra='forbid' -- unknown fields raise immediately, so a typo in a catalog field name never fails silently
   - the secret + required flags tell the UI how to render the field (password / plain input)
   - docker.tag should be pinned by us to a verified version; shipping with latest is not recommended
 """

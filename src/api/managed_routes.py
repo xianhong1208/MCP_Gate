@@ -3,23 +3,30 @@
 Endpoints:
   GET  /api/marketplace                   List all catalog entries (with installed status)
   GET  /api/marketplace/{catalog_id}      Catalog details (used by the frontend install form)
+  POST /api/marketplace/{catalog_id}/install  Load the catalog entry's docker image from catalog/images/
   POST /api/managed                       Install from the catalog + (optionally) start immediately
   GET  /api/managed                       List installed Managed MCPs
+  GET  /api/managed/runtime               Which runtime is live (docker / process) and whether it is usable
   GET  /api/managed/progress              Current stage of in-flight long operations (for frontend polling)
   GET  /api/managed/{id}                  Details of a single Managed MCP
+  GET  /api/managed/{id}/logs             Container / process output (including exited instances)
   PUT  /api/managed/{id}/env-vars         Update env vars (auto-restarts while running; catalog and BYO)
   POST /api/managed/{id}/start            Start
   POST /api/managed/{id}/stop             Stop
   DELETE /api/managed/{id}                Uninstall (stop + delete row + delete Service; refused while the
                                           instance cannot be stopped)
+  POST /api/byo-mcp                       Create a BYO definition ({command, args, env})
+  GET  /api/byo-mcp                       List BYO definitions
+  DELETE /api/byo-mcp/{id}                Delete a BYO definition (refused while it is deployed)
+  POST /api/byo-mcp/{id}/deploy           Deploy a BYO definition as a managed process
 
 Runtime failures: when the runtime itself is unreachable (Docker daemon down, supergateway missing) the
 routes answer 503 managed.runtime_unavailable instead of a generic 500.
 
 All endpoints require login (session).
 
-Single-instance rule: currently only one process is allowed per catalog_id (checked at install time).
-To allow multiple instances, simply remove the 409 check inside install.
+Single-instance rule: currently only one process is allowed per catalog_id / BYO definition (409 from
+ManagedMcpProcessAdapter.assert_not_installed at install and deploy time).
 """
 
 from __future__ import annotations

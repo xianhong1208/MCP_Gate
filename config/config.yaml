@@ -1,4 +1,4 @@
-# MCP Center configuration file
+# MCP Gate configuration file
 #
 # Environment variable syntax:
 #   ${VAR_NAME}           required
