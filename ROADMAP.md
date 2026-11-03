@@ -6,7 +6,10 @@
 - Email/password sign-in with GitHub / Google provider hooks.
 - SQLite by default, single initial migration, secrets generated on first start.
 
+## Done (1.1.0)
+- **`private_key_jwt` client authentication (RFC 7523)** for machine-to-machine clients: a registered JWKS or `jwks_uri`, RS256 / ES256 assertions with `jti` replay protection.
+- **Orchestrator, steps 1–2:** the `Runtime` interface and a Docker-free process runtime (`MCP_RUNTIME=process`).
+
 ## Planned
 - **Verify GitHub / Google sign-in against live accounts.** The providers are implemented and unit-tested but have not been exercised with real OAuth apps.
-- **`private_key_jwt` client authentication (RFC 7523)** for machine-to-machine clients.
 - **Orchestrator:** multiple hosts (a host registry and a remote agent speaking the `Runtime` interface).
