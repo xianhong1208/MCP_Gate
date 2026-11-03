@@ -105,6 +105,18 @@ def _valid_info_uri(uri) -> bool:
     return p.scheme == "http" and host in LOOPBACK_HOSTS
 
 
+def _loopback_only(redirect_uris: list) -> bool:
+    """True when there is at least one redirect URI and every one is http(s) to a loopback host."""
+    hosts = []
+    for uri in redirect_uris:
+        try:
+            p = urlparse(uri)
+            hosts.append((p.scheme in ("http", "https"), (p.hostname or "").lower()))
+        except ValueError:
+            return False
+    return bool(hosts) and all(web and host in LOOPBACK_HOSTS for web, host in hosts)
+
+
 def redirect_with(base: str, params: dict) -> str:
     sep = "&" if "?" in base else "?"
     return f"{base}{sep}{urlencode({k: v for k, v in params.items() if v is not None})}"
@@ -572,6 +584,9 @@ def describe_request(db: Session, req: OAuthAuthorizationRequest, user: AdminUse
         "resource": req.resource,
         "service": {"id": str(service.id), "name": service.name} if service else None,
         "redirect_host": urlparse(req.redirect_uri).netloc or req.redirect_uri,
+        # Every registered redirect URI is on this machine: whatever listens on that port gets the code, so the
+        # consent page asks the owner to make sure they started the app themselves
+        "redirect_loopback_only": _loopback_only(req.client.redirect_uri_list()),
         "expires_at": format_datetime(req.expires_at),
         "can_skip": should_skip_consent(db, user, req.client, req.resource, scopes),
     }
