@@ -1,5 +1,6 @@
 """Scheduler: purge expired OAuth data, enforce event/audit retention, and run MCP service health checks."""
 
+import asyncio
 import logging
 from datetime import timedelta
 from typing import Optional
@@ -20,6 +21,9 @@ from src.config import Config
 
 logger = logging.getLogger(__name__)
 
+# Consecutive failed checks after which a service is "offline" rather than "error"
+OFFLINE_AFTER_FAILURES = 3
+
 
 class CleanupScheduler:
     """Cleanup scheduler and health monitor (singleton)."""
@@ -34,6 +38,9 @@ class CleanupScheduler:
         self.audit_retention_days = 90
         self.health_check_seconds = 30
         self.health_check_enabled = True
+        self.health_check_concurrency = 8
+        self.health_check_timeout_seconds = 10.0
+        self.health_write_interval_minutes = 5
         self._ws_manager = None
 
     @classmethod
@@ -155,24 +162,57 @@ class CleanupScheduler:
         return deleted
 
     async def _health_check_task(self) -> dict:
+        """One health round. The checks run concurrently (at most ``health_check_concurrency`` at a time, each cut
+        off after ``health_check_timeout_seconds``), so one slow or hanging server no longer delays every other
+        one; the results are then stored one by one in this session. A result is written only when it matters:
+        the status changes, a failure streak is still counting towards "offline", or the stored check is older
+        than ``health_write_interval_minutes`` (so "last checked" stays roughly current without a write per
+        service per round)."""
         from src.discovery.health_monitor import resolve_service_auth_token
-        from src.discovery.scanner import get_scanner
+        from src.discovery.scanner import MCPVerifyResult, get_scanner
 
         db: Session = database.make_session()
-        results = {"checked": 0, "online": 0, "offline": 0, "error": 0}
+        results = {"checked": 0, "online": 0, "offline": 0, "error": 0, "written": 0}
         try:
             services = ServiceAdapter.get_services_for_health_check(db)
             scanner = get_scanner()
+            semaphore = asyncio.Semaphore(max(1, int(self.health_check_concurrency)))
+            timeout = float(self.health_check_timeout_seconds)
+
+            async def verify(target: dict) -> MCPVerifyResult:
+                async with semaphore:
+                    try:
+                        return await asyncio.wait_for(scanner.verify_mcp_service(
+                            host=target["host"], port=target["port"], path=target["path"],
+                            protocol=target["protocol"], auth_token=target["auth_token"],
+                        ), timeout=timeout)
+                    except asyncio.TimeoutError:
+                        return MCPVerifyResult(success=False, error=f"health check timed out after {timeout:g} s",
+                                               response_time_ms=timeout * 1000)
+
             # Plain values captured up front: after a failed flush the ORM objects cannot be read until rollback
-            targets = [(service, service.name) for service in services]
-            for service, service_name in targets:
+            targets = []
+            for service in services:
                 try:
                     auth_token = resolve_service_auth_token(db, service)
-                    verify_result = await scanner.verify_mcp_service(
-                        host=service.host, port=service.port, path=service.mcp_path,
-                        protocol=service.protocol, auth_token=auth_token,
-                    )
-                    previous_status = service.health_status
+                except Exception as e:
+                    db.rollback()
+                    logger.error(f"Health check error for {service.name}: {e}")
+                    results["error"] += 1
+                    continue
+                targets.append({
+                    "service": service, "id": str(service.id), "name": service.name, "host": service.host,
+                    "port": service.port, "path": service.mcp_path, "protocol": service.protocol,
+                    "auth_token": auth_token, "previous": service.health_status,
+                    "fail_count": service.health_fail_count or 0, "last_checked": service.health_last_checked,
+                })
+            outcomes = await asyncio.gather(*(verify(t) for t in targets), return_exceptions=True)
+
+            for target, verify_result in zip(targets, outcomes):
+                service, service_name, previous_status = target["service"], target["name"], target["previous"]
+                try:
+                    if isinstance(verify_result, BaseException):
+                        raise verify_result
                     results["checked"] += 1
                     if verify_result.success:
                         new_status, error_msg, reset_fail, increment_fail = "online", None, True, False
@@ -184,18 +224,20 @@ class CleanupScheduler:
                             db.refresh(service)
                     else:
                         error_msg, reset_fail, increment_fail = verify_result.error, False, True
-                        fail_count = (service.health_fail_count or 0) + 1
-                        new_status = "offline" if fail_count >= 3 else "error"
-                    ServiceAdapter.update_health(
-                        db=db, service_id=str(service.id), status=new_status,
-                        response_time_ms=verify_result.response_time_ms, error_message=error_msg,
-                        reset_fail_count=reset_fail, increment_fail_count=increment_fail,
-                    )
+                        fail_count = target["fail_count"] + 1
+                        new_status = "offline" if fail_count >= OFFLINE_AFTER_FAILURES else "error"
+                    if self._health_write_due(target, new_status):
+                        ServiceAdapter.update_health(
+                            db=db, service_id=target["id"], status=new_status,
+                            response_time_ms=verify_result.response_time_ms, error_message=error_msg,
+                            reset_fail_count=reset_fail, increment_fail_count=increment_fail,
+                        )
+                        results["written"] += 1
                     results[new_status] += 1  # counted once stored, so a failed write is not also "online"
                     if new_status != previous_status and self._ws_manager:
                         try:
                             await self._ws_manager.broadcast_health_update(
-                                service_id=str(service.id), service_name=service.name,
+                                service_id=target["id"], service_name=service_name,
                                 health={"status": new_status, "previous_status": previous_status,
                                         "response_time_ms": verify_result.response_time_ms,
                                         "error_message": error_msg},
@@ -214,6 +256,14 @@ class CleanupScheduler:
             return results
         finally:
             db.close()
+
+    def _health_write_due(self, target: dict, new_status: str) -> bool:
+        if new_status != target["previous"]:
+            return True
+        if new_status != "online" and target["fail_count"] < OFFLINE_AFTER_FAILURES:
+            return True  # the failure streak decides when "error" becomes "offline": keep counting
+        last = target["last_checked"]
+        return last is None or local_now() - last >= timedelta(minutes=self.health_write_interval_minutes)
 
     async def run_health_check_now(self) -> dict:
         return await self._health_check_task()
