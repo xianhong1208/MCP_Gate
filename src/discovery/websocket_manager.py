@@ -43,9 +43,9 @@ class WSMessage:
 
     def to_json(self) -> str:
         """Convert to a JSON string."""
-        d = asdict(self)
-        d["type"] = self.type.value
-        return json.dumps(d)
+        payload = asdict(self)
+        payload["type"] = self.type.value
+        return json.dumps(payload)
 
 
 class WSManager:

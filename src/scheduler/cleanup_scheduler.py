@@ -128,17 +128,17 @@ class CleanupScheduler:
         return self._scheduled("old_audit_logs", self._purge_old_audit_logs)
 
     def _purge_oauth(self, db: Session) -> int:
-        n = OAuthAuthRequestAdapter.delete_expired(db)
-        n += OAuthCodeAdapter.delete_expired(db)
-        n += OAuthTokenAdapter.delete_expired(db)
-        n += AdminSessionAdapter.delete_expired(db)
+        purged = OAuthAuthRequestAdapter.delete_expired(db)
+        purged += OAuthCodeAdapter.delete_expired(db)
+        purged += OAuthTokenAdapter.delete_expired(db)
+        purged += AdminSessionAdapter.delete_expired(db)
         unused_days = Config.get_oauth_config().dcr_unused_client_days
         if unused_days and unused_days > 0:
-            n += OAuthClientAdapter.delete_unused_dcr(db, older_than=timedelta(days=unused_days))
-        if n:
-            logger.info(f"Cleaned up {n} expired OAuth records")
-        record_scheduled_purge(db, "expired_oauth", n)
-        return n
+            purged += OAuthClientAdapter.delete_unused_dcr(db, older_than=timedelta(days=unused_days))
+        if purged:
+            logger.info(f"Cleaned up {purged} expired OAuth records")
+        record_scheduled_purge(db, "expired_oauth", purged)
+        return purged
 
     def _purge_old_usage(self, db: Session) -> int:
         deleted = TokenUsageAdapter.delete_older_than(db, local_now() - timedelta(days=self.usage_retention_days))

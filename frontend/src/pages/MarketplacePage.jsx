@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import useVisiblePolling from '../hooks/usePolling'
+import useVisiblePolling from '../hooks/useVisiblePolling'
 import {
   Store,
   Search,

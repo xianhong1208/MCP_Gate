@@ -307,16 +307,16 @@ class TokenUsageCRUD:
         buckets: dict = {}
         for row in TokenUsageCRUD._query(db, start, service_id, audience, event).all():
             key = row.used_at.strftime("%Y-%m-%d")
-            b = buckets.setdefault(key, {"total": 0, "success": 0})
-            b["total"] += row.count
-            b["success"] += row.count if row.success else 0
+            bucket = buckets.setdefault(key, {"total": 0, "success": 0})
+            bucket["total"] += row.count
+            bucket["success"] += row.count if row.success else 0
         stats = []
         current = start.date()
         while current <= end.date():
             key = current.strftime("%Y-%m-%d")
-            b = buckets.get(key, {"total": 0, "success": 0})
-            stats.append({"date": key, "total": b["total"], "success": b["success"],
-                          "failed": b["total"] - b["success"]})
+            bucket = buckets.get(key, {"total": 0, "success": 0})
+            stats.append({"date": key, "total": bucket["total"], "success": bucket["success"],
+                          "failed": bucket["total"] - bucket["success"]})
             current += timedelta(days=1)
         return stats
 
@@ -343,13 +343,13 @@ class TokenUsageCRUD:
         buckets: dict = {}
         for row in TokenUsageCRUD._query(db, start).all():
             key = row.audience or "-"
-            b = buckets.setdefault(key, {"total": 0, "success": 0, "clients": set(), "service_id": None})
-            b["total"] += row.count
-            b["success"] += row.count if row.success else 0
+            bucket = buckets.setdefault(key, {"total": 0, "success": 0, "clients": set(), "service_id": None})
+            bucket["total"] += row.count
+            bucket["success"] += row.count if row.success else 0
             if row.client_id:
-                b["clients"].add(row.client_id)
+                bucket["clients"].add(row.client_id)
             if row.service_id:
-                b["service_id"] = str(row.service_id)
+                bucket["service_id"] = str(row.service_id)
         return [
             {"audience": k, "service_id": v["service_id"], "total": v["total"], "success": v["success"],
              "failed": v["total"] - v["success"], "clients": len(v["clients"])}
@@ -405,22 +405,22 @@ class AdminSessionCRUD:
 
     @staticmethod
     def delete(db: Session, session_id: str) -> int:
-        n = db.query(AdminSession).filter(AdminSession.id == session_id).delete(synchronize_session=False)
+        deleted = db.query(AdminSession).filter(AdminSession.id == session_id).delete(synchronize_session=False)
         db.commit()
-        return n
+        return deleted
 
     @staticmethod
     def delete_for_user(db: Session, user_id) -> int:
-        n = db.query(AdminSession).filter(AdminSession.user_id == _uuid(user_id)).delete(
+        deleted = db.query(AdminSession).filter(AdminSession.user_id == _uuid(user_id)).delete(
             synchronize_session=False)
         db.commit()
-        return n
+        return deleted
 
     @staticmethod
     def delete_expired(db: Session) -> int:
-        n = db.query(AdminSession).filter(AdminSession.expires_at < utc_now()).delete(synchronize_session=False)
+        deleted = db.query(AdminSession).filter(AdminSession.expires_at < utc_now()).delete(synchronize_session=False)
         db.commit()
-        return n
+        return deleted
 
 
 class AdminUserCRUD:
