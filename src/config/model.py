@@ -32,6 +32,43 @@ class SessionConfig(BaseModel):
     idle_timeout_minutes: int = 30
 
 
+def _split_list(value):
+    """Accept a YAML list or one comma-separated string (``"${VAR:-}"`` in config.yaml)."""
+    if isinstance(value, str):
+        return [v.strip() for v in value.split(",") if v.strip()]
+    return value
+
+
+class ClientMetadataConfig(BaseModel):
+    """Client ID Metadata Documents (draft-ietf-oauth-client-id-metadata-document, MCP authorization 2026-07-28):
+    a client uses an https URL as its client_id and MCP Gate fetches the client's metadata from that URL instead of
+    the client registering. Works alongside dynamic client registration."""
+    enabled: bool = True
+    # Whether a client first seen through its metadata document is usable without review (as dcr_auto_approve;
+    # the consent page is still shown for every authorization)
+    auto_approve: bool = True
+    # Trust policy: when non-empty, only client_id URLs on these hosts are accepted ("example.com" exact,
+    # "*.example.com" any subdomain). Empty = any public https host.
+    allowed_hosts: List[str] = []
+    # SSRF override for development / intranet clients: hosts whose metadata may be fetched although they resolve
+    # to a private address. Loopback is honoured only while the issuer itself is on loopback. Never for production.
+    private_network_hosts: List[str] = []
+    fetch_timeout_seconds: float = Field(5.0, gt=0, le=30)
+    # The draft recommends 5 KB; an inline jwks with a few keys still fits
+    max_document_bytes: int = Field(5120, ge=512, le=65536)
+    # Bounds on how long a fetched document is cached (HTTP Cache-Control max-age is honoured within them)
+    cache_min_seconds: int = Field(60, ge=0)
+    cache_max_seconds: int = Field(86400, ge=1)
+    # After a failed fetch the URL is not fetched again for this long (rate limit; the error itself is not cached
+    # as metadata). 0 disables.
+    failure_backoff_seconds: int = Field(30, ge=0)
+
+    @field_validator("allowed_hosts", "private_network_hosts", mode="before")
+    @classmethod
+    def _split_hosts(cls, value):
+        return [h.lower() for h in (_split_list(value) or [])]
+
+
 class OAuthConfig(BaseModel):
     """OAuth 2.1 Authorization Server settings.
 
@@ -52,13 +89,16 @@ class OAuthConfig(BaseModel):
     dcr_auto_approve: bool = True
     # Maximum lifetime (days) allowed for Personal Access Tokens issued directly from the admin console
     pat_max_days: int = 365
-    # Dynamically registered clients that never obtained a token are deleted this many days after registration
-    # (anyone can register one, so they would otherwise pile up). 0 disables the purge.
+    # Dynamically registered clients, and active clients first seen through their metadata document, that never
+    # obtained a token are deleted this many days after they were created (anyone can create one, so they would
+    # otherwise pile up). 0 disables the purge.
     dcr_unused_client_days: int = 30
     # How long (minutes) a rotated-out signing key stays in the published JWKS after rotation. Unset = the access
     # token lifetime plus 5 minutes of clock skew. A retired key also stays published while any live access token
     # or PAT it signed is still recorded (PATs can outlive this by months).
     retired_key_publish_minutes: Optional[int] = None
+    # Client ID Metadata Documents (an https URL as client_id, no registration)
+    cimd: ClientMetadataConfig = ClientMetadataConfig()
 
 
 class OAuthLoginProviderConfig(BaseModel):
@@ -85,13 +125,6 @@ class RateLimitConfig(BaseModel):
     requests_per_hour: int = 2000
     whitelist: List[str] = ["127.0.0.1", "localhost", "::1"]
     path_limits: Dict[str, int] = {}
-
-
-def _split_list(value):
-    """Accept a YAML list or one comma-separated string (``"${VAR:-}"`` in config.yaml)."""
-    if isinstance(value, str):
-        return [v.strip() for v in value.split(",") if v.strip()]
-    return value
 
 
 class SecurityConfig(BaseModel):

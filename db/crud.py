@@ -629,12 +629,46 @@ class OAuthClientCRUD:
         ).order_by(OAuthClient.created_at).all()
 
     @staticmethod
+    def upsert_metadata_client(db: Session, client_id: str, fields: dict, *, is_approved: bool) -> tuple:
+        """Create or refresh the row of a client identified by its metadata document (created_via = cimd) from
+        the document's validated ``fields``. A new row takes ``is_approved``; an existing one keeps its approval
+        and active state (a client the owner revoked stays revoked whatever its document says).
+
+        Returns (client, changed) where ``changed`` lists the fields whose stored value differed."""
+        now = local_now()
+        client = OAuthClientCRUD.get(db, client_id)
+        if client is None:
+            client = OAuthClient(client_id=client_id, created_via="cimd", is_approved=is_approved, is_active=True,
+                                 metadata_fetched_at=now, **fields)
+            db.add(client)
+            try:
+                db.commit()
+                db.refresh(client)
+                return client, []
+            except IntegrityError:  # created concurrently by another request: refresh that row instead
+                db.rollback()
+                client = OAuthClientCRUD.get(db, client_id)
+                if client is None:
+                    raise
+        changed = [name for name, value in fields.items() if getattr(client, name) != value]
+        for name in changed:
+            setattr(client, name, fields[name])
+        client.metadata_fetched_at = now
+        db.commit()
+        db.refresh(client)
+        return client, changed
+
+    @staticmethod
     def delete_unused_dcr(db: Session, older_than: timedelta) -> int:
-        """Delete dynamically registered clients that never obtained a token (no last use, no token record) and
-        were registered before ``older_than`` ago. Their pending requests, codes and consents go with them."""
+        """Delete clients nobody registered by hand that never obtained a token (no last use, no token record)
+        and were created before ``older_than`` ago: dynamically registered ones, and active clients first seen
+        through their metadata document (a revoked one is kept: it is how the owner blocks that URL). Their
+        pending requests, codes and consents go with them."""
         has_tokens = db.query(OAuthToken.jti).filter(OAuthToken.client_id == OAuthClient.client_id).exists()
+        unregistered = or_(OAuthClient.created_via == "dcr",
+                           (OAuthClient.created_via == "cimd") & OAuthClient.is_active.is_(True))
         stale = db.query(OAuthClient).filter(
-            OAuthClient.created_via == "dcr", OAuthClient.last_used_at.is_(None),
+            unregistered, OAuthClient.last_used_at.is_(None),
             OAuthClient.created_at < local_now() - older_than, ~has_tokens,
         ).all()
         for client in stale:
@@ -983,6 +1017,13 @@ class OAuthConsentCRUD:
         db.delete(consent)
         db.commit()
         return snapshot
+
+    @staticmethod
+    def delete_for_client(db: Session, client_id: str) -> int:
+        """Forget every remembered consent of one client (all users), e.g. after its metadata changed."""
+        deleted = db.query(OAuthConsent).filter(OAuthConsent.client_id == client_id).delete(synchronize_session=False)
+        db.commit()
+        return deleted
 
 
 # ==================== Managed / BYO MCP ====================

@@ -39,6 +39,22 @@ oauth:
   # real gate)
   dcr_auto_approve: ${OAUTH_DCR_AUTO_APPROVE:-true}
   pat_max_days: 365
+  # Client ID Metadata Documents (MCP authorization 2026-07-28): a client may use an https URL as its client_id;
+  # MCP Gate fetches the client's metadata from that URL instead of the client registering. DCR keeps working.
+  cimd:
+    enabled: ${OAUTH_CIMD_ENABLED:-true}
+    # Whether a client first seen through its metadata document is usable without review (consent still applies)
+    auto_approve: ${OAUTH_CIMD_AUTO_APPROVE:-true}
+    # Trust policy: only client_id URLs on these hosts ("example.com", "*.example.com"); empty = any public host
+    allowed_hosts: "${OAUTH_CIMD_ALLOWED_HOSTS:-}"
+    # Development / intranet only: hosts whose document may be fetched from a private address (loopback only
+    # while the issuer is on loopback). Every other host must resolve to public addresses.
+    private_network_hosts: "${OAUTH_CIMD_PRIVATE_NETWORK_HOSTS:-}"
+    fetch_timeout_seconds: 5
+    max_document_bytes: 5120          # the draft recommends 5 KB
+    cache_min_seconds: 60             # HTTP Cache-Control max-age is honoured within these bounds
+    cache_max_seconds: 86400
+    failure_backoff_seconds: 30       # a URL whose fetch failed is not fetched again for this long
 
 # Admin console authentication
 identity:
@@ -70,6 +86,7 @@ rate_limit:
   path_limits:
     "/oauth/token": 60
     "/oauth/register": 20
+    "/oauth/authorize": 60            # may fetch a client metadata document
     "/api/session/login": 20
     "/api/session/setup": 5
 

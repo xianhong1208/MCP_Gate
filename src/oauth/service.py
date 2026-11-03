@@ -1,6 +1,7 @@
 """OAuth 2.1 Authorization Server core logic (HTTP-agnostic).
 
-- client registration (RFC 7591) / authentication / redirect_uri allowlist
+- client registration (RFC 7591) / Client ID Metadata Documents (client_metadata.py) / authentication /
+  redirect_uri allowlist
 - resource (RFC 8707) -> audience binding to a registered MCP server
 - authorization request -> consent -> authorization code (stored hashed, single-use, short TTL, PKCE S256)
 - access / refresh token issuance (RS256, with iss/aud/scope/client_id/jti) and record keeping
@@ -17,7 +18,7 @@ import secrets
 import uuid
 from datetime import datetime, timedelta
 from typing import Iterable, Optional
-from urllib.parse import urlencode, urlparse
+from urllib.parse import urlencode, urlparse, urlsplit
 
 from sqlalchemy.orm import Session
 
@@ -34,7 +35,7 @@ from src.adapters import (
     OAuthTokenAdapter, ServiceAdapter, TokenUsageAdapter, normalize_audience,
 )
 from src.config import Config
-from src.oauth import client_assertion, signing_keys
+from src.oauth import client_assertion, client_metadata, signing_keys
 from src.oauth.consent_policy import should_skip_consent
 from src.oauth.errors import OAuthError
 from src.oauth.jwt_utils import JWTVerifyError, decode_rs256, sign_rs256, unverified_header
@@ -335,6 +336,18 @@ def resource_server_audience(client: OAuthClient) -> Optional[str]:
     return client.resource_audience or None
 
 
+def lookup_client(db: Session, client_id: str, *, for_token: bool = False) -> Optional[OAuthClient]:
+    """The client a request names. An https URL is a client identified by its metadata document: resolved
+    (fetched, validated, stored) through client_metadata; refused with invalid_client when that is disabled.
+    ``for_token``: the token / revoke / introspect endpoints, where a transient fetch failure falls back to the
+    stored document. Raises client_metadata.MetadataError (invalid_client)."""
+    if client_metadata.is_metadata_url(client_id):
+        if not client_metadata.enabled():
+            raise OAuthError("invalid_client", "client ID metadata documents are not supported by this server")
+        return client_metadata.resolve_client(db, client_id, stale_ok=for_token)
+    return OAuthClientAdapter.get(db, client_id)
+
+
 def verify_client_secret(client: OAuthClient, secret: Optional[str]) -> bool:
     if not client.client_secret_hash or not secret:
         return False
@@ -365,11 +378,21 @@ def authenticate_client(db: Session, *, authorization_header: str, form: dict) -
             raise OAuthError("invalid_client", "malformed Basic authorization", 401)
     if not client_id:
         raise OAuthError("invalid_client", "missing client_id", 401)
-    client = OAuthClientAdapter.get(db, client_id)
+    try:
+        client = lookup_client(db, client_id, for_token=True)
+    except client_metadata.MetadataError as e:
+        # draft-ietf-oauth-client-id-metadata-document §6.1: invalid_client, HTTP 503 when the failure is transient
+        raise OAuthError("invalid_client", e.description, 503 if e.transient else 401)
+    except OAuthError as e:
+        raise OAuthError(e.error, e.description, 401)
     if not client or not client.is_active:
         raise OAuthError("invalid_client", "unknown or revoked client", 401)
     if not client.is_approved:
         raise OAuthError("unauthorized_client", "client is pending approval", 403)
+    if (client.created_via == client_metadata.CREATED_VIA and client.token_endpoint_auth_method == "none"
+            and (client_secret or authorization_header.startswith("Basic "))):
+        # §5: a client whose document declares no authentication must not send credentials
+        raise OAuthError("invalid_client", "this client authenticates with none and must not send a secret", 401)
     if client.token_endpoint_auth_method == "private_key_jwt":
         if not assertion:
             raise OAuthError("invalid_client", "client_assertion required", 401)
@@ -504,7 +527,7 @@ def begin_authorization(
     Errors for an invalid client_id / redirect_uri use redirectable=False (never redirect to an unverified address);
     all other errors may be redirected back to redirect_uri with an error parameter.
     """
-    client = OAuthClientAdapter.get(db, client_id)
+    client = lookup_client(db, client_id)  # a metadata-document failure is never redirected to the client (§6.1)
     if not client or not client.is_active:
         raise OAuthError("invalid_client", "unknown or revoked client")
     if not client.is_approved:
@@ -571,6 +594,7 @@ def describe_request(db: Session, req: OAuthAuthorizationRequest, user: AdminUse
     scopes = req.scope.split() if req.scope else []
     service = ServiceAdapter.get_by_audience(db, req.resource) if req.resource else None
     registry = scope_registry(db, service)
+    metadata_document = req.client.created_via == client_metadata.CREATED_VIA
     return {
         "request_id": req.id,
         "client": {
@@ -579,6 +603,10 @@ def describe_request(db: Session, req: OAuthAuthorizationRequest, user: AdminUse
             "client_uri": req.client.client_uri,
             "logo_uri": req.client.logo_uri,
             "created_via": req.client.created_via,
+            # A client identified by its metadata document: name and links are whatever that URL serves, so the
+            # consent page names the host that vouches for them (draft §10.6)
+            "metadata_document": metadata_document,
+            "identity_host": urlsplit(req.client.client_id).hostname if metadata_document else None,
         },
         "scopes": [{"name": s, "description": registry[s].description if s in registry else None} for s in scopes],
         "resource": req.resource,
@@ -1243,6 +1271,8 @@ def build_metadata(db: Session) -> dict:
         "introspection_endpoint_auth_signing_alg_values_supported": ASSERTION_SIGNING_ALGS,
         "resource_parameter_supported": True,
         "authorization_response_iss_parameter_supported": True,
+        # draft-ietf-oauth-client-id-metadata-document §8; MCP authorization 2026-07-28 "Client Registration"
+        "client_id_metadata_document_supported": client_metadata.enabled(),
         # MCP Gate extensions for servers that verify tokens offline (see examples/mcp_gate_hooks.py)
         "revoked_tokens_endpoint": f"{base}/oauth/revoked",
         "usage_report_endpoint": f"{base}/oauth/usage",
