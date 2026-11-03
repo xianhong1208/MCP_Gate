@@ -13,6 +13,7 @@ import argparse
 import hashlib
 import os
 import sys
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -65,6 +66,20 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Marketplace catalog preload skipped: {e}")
 
+    # Off the startup path: reconcile restarts every dead managed server one after another (a stdio cold start can
+    # take up to 300 s each), and the authorization server must answer from the first second.
+    reconcile = start_managed_reconcile()
+
+    yield
+    scheduler.stop()
+    reconcile.join(timeout=RECONCILE_SHUTDOWN_WAIT_SECONDS)
+
+
+RECONCILE_SHUTDOWN_WAIT_SECONDS = 2
+
+
+def reconcile_managed_servers() -> None:
+    """Align managed servers with their desired state (src/orchestrator/manager.py reconcile). Never raises."""
     try:
         from src.orchestrator.manager import get_orchestrator
         db = make_session()
@@ -72,11 +87,17 @@ async def lifespan(app: FastAPI):
             get_orchestrator().reconcile(db)
         finally:
             db.close()
+        logger.info("Managed MCP reconcile finished")
     except Exception as e:
         logger.warning(f"Managed MCP reconcile skipped: {e}")
 
-    yield
-    scheduler.stop()
+
+def start_managed_reconcile() -> threading.Thread:
+    """Run reconcile_managed_servers in a daemon thread (it blocks on the runtime and the database, so not on the
+    event loop) and return the thread."""
+    thread = threading.Thread(target=reconcile_managed_servers, name="managed-reconcile", daemon=True)
+    thread.start()
+    return thread
 
 
 def create_app() -> FastAPI:
