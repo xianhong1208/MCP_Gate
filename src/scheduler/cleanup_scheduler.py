@@ -51,12 +51,17 @@ class CleanupScheduler:
 
     def configure(self, oauth_cleanup_hours: int = 6, usage_retention_days: int = 30,
                   audit_retention_days: int = 90, health_check_seconds: int = 30,
-                  health_check_enabled: bool = True):
+                  health_check_enabled: bool = True, health_check_concurrency: int = 8,
+                  health_check_timeout_seconds: float = 10.0, health_write_interval_minutes: int = 5):
+        """Apply the `scheduler` config section (call before start(); the intervals are fixed when jobs are added)."""
         self.oauth_cleanup_hours = oauth_cleanup_hours
         self.usage_retention_days = usage_retention_days
         self.audit_retention_days = audit_retention_days
         self.health_check_seconds = health_check_seconds
         self.health_check_enabled = health_check_enabled
+        self.health_check_concurrency = health_check_concurrency
+        self.health_check_timeout_seconds = health_check_timeout_seconds
+        self.health_write_interval_minutes = health_write_interval_minutes
 
     def set_ws_manager(self, ws_manager) -> None:
         self._ws_manager = ws_manager

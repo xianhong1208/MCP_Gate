@@ -53,6 +53,7 @@ API_PREFIXES = ("api/", "oauth/", ".well-known/", "ws/", "health", "docs", "redo
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     scheduler = get_scheduler()
+    scheduler.configure(**Config.get_scheduler_config().model_dump())
     scheduler.set_ws_manager(get_ws_manager())
     scheduler.start()
 

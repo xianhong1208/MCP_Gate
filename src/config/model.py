@@ -2,7 +2,7 @@
 
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 
 class DatabaseConfig(BaseModel):
@@ -131,6 +131,22 @@ class LoggingConfig(BaseModel):
     compression: str = "zip"
 
 
+class SchedulerConfig(BaseModel):
+    """In-process background jobs: expiry purges, retention, health checks (src/scheduler/cleanup_scheduler.py)."""
+    # Expired OAuth codes / requests / tokens and console sessions are purged this often
+    oauth_cleanup_hours: int = Field(6, ge=1)
+    # Token events (dashboard statistics) and audit log entries older than this are deleted daily
+    usage_retention_days: int = Field(30, ge=1)
+    audit_retention_days: int = Field(90, ge=1)
+    health_check_enabled: bool = True
+    health_check_seconds: int = Field(30, ge=5)
+    # Services checked at the same time, and how long one check may take before it counts as failed
+    health_check_concurrency: int = Field(8, ge=1, le=64)
+    health_check_timeout_seconds: float = Field(10.0, gt=0, le=300)
+    # A health row is rewritten when the status changes; otherwise at most this often
+    health_write_interval_minutes: int = Field(5, ge=1)
+
+
 DEFAULT_PORT = 4568
 
 
@@ -144,6 +160,7 @@ class ConfigModel(BaseModel):
     security: SecurityConfig = SecurityConfig()
     cors: CORSConfig = CORSConfig()
     logging: LoggingConfig = LoggingConfig()
+    scheduler: SchedulerConfig = SchedulerConfig()
 
     @property
     def effective_port(self) -> int:

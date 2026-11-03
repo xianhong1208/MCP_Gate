@@ -92,6 +92,17 @@ cors:
   allow_headers: ["Content-Type", "Authorization", "X-Requested-With", "X-Session-Binding"]
   allow_credentials: true
 
+# Background jobs (run inside the server process)
+scheduler:
+  oauth_cleanup_hours: 6              # purge expired OAuth codes / requests / tokens and console sessions
+  usage_retention_days: 30            # token events behind the dashboard statistics
+  audit_retention_days: ${AUDIT_RETENTION_DAYS:-90}
+  health_check_enabled: true
+  health_check_seconds: ${HEALTH_CHECK_SECONDS:-30}
+  health_check_concurrency: 8         # services checked at the same time
+  health_check_timeout_seconds: 10    # a check taking longer counts as failed
+  health_write_interval_minutes: 5    # an unchanged health status is rewritten at most this often
+
 logging:
   level: "${LOG_LEVEL:-INFO}"
   format: "colorized"
