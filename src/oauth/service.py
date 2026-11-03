@@ -798,6 +798,10 @@ def authorization_code_grant(
     elif rec.code_challenge:
         if not verify_pkce(code_verifier, rec.code_challenge, rec.code_challenge_method):
             failure = OAuthError("invalid_grant", "PKCE verification failed")
+    elif code_verifier:
+        # PKCE downgrade (RFC 9700 §4.8.2): a verifier for a request that carried no challenge means the
+        # authorization request was not the one this client started; refuse rather than ignore it
+        failure = OAuthError("invalid_grant", "code_verifier sent, but the authorization request had no code_challenge")
     elif client.require_pkce or not client.client_secret_hash:
         # A code issued without PKCE can only be redeemed by an authenticated classic client
         failure = OAuthError("invalid_grant", "PKCE verification failed")
