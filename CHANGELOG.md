@@ -12,6 +12,7 @@ All notable changes to MCP Gate (formerly MCP Center) are documented here. The f
 - **Schema drift test.** `tests/test_schema_drift.py` migrates an empty database to head (and back down and up again) and compares it with the models using Alembic's autogenerate comparison.
 
 ### Changed
+- **SQLite connections set `busy_timeout=5000` and `synchronous=NORMAL` explicitly** (with WAL, as before). A writer waits up to 5 s for another instead of failing with "database is locked", and WAL commits need far fewer fsyncs; only a power loss (not an application crash) can drop the last commits. PostgreSQL is unchanged.
 - **Renamed MCP Center to MCP Gate.** The console, docs, package (`mcp-gate`), repository (`MCP_Gate`) and code identifiers follow the new name: `examples/mcp_center_hooks.py` is now `examples/mcp_gate_hooks.py` with `MCPGateVerifier`, and the exception base classes are `MCPGateError` / `MCPGateHTTPException`. The environment variables are now `MCP_GATE_CONFIG` and `MCP_GATE_SECRETS_FILE`; the old `MCP_CENTER_*` names are still read as a fallback.
 - Identifiers that live in existing data keep their old spelling so nothing has to migrate: the built-in client ids `mcp-center-console` / `mcp-center-scanner` (stored in the database and carried in issued tokens) and the default database `data/mcp_center.db`. Tokens already issued stay valid — the issuer is the URL, not the name.
 
