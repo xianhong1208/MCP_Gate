@@ -370,32 +370,30 @@ def authenticate_client(db: Session, *, authorization_header: str, form: dict) -
     return client
 
 
-LOOPBACK_IPS = ("127.0.0.1", "::1")
-
-
-def _loopback_ip_key(uri: str) -> Optional[tuple]:
-    """For an http redirect URI on a loopback IP literal, everything but the port; None for any other URI."""
+def _loopback_key(uri: str) -> Optional[tuple]:
+    """For an http redirect URI on a loopback host (127.0.0.1, [::1] or localhost), everything but the port; None
+    for any other URI."""
     try:
         p = urlparse(uri)
         host = p.hostname
         p.port  # noqa: B018 -- raises on a malformed port
     except ValueError:
         return None
-    if p.scheme != "http" or host not in LOOPBACK_IPS or p.username or p.password:
+    if p.scheme != "http" or host not in LOOPBACK_HOSTS or p.username or p.password:
         return None
     return (p.scheme, host, p.path, p.params, p.query, p.fragment)
 
 
 def validate_redirect_uri(client: OAuthClient, redirect_uri: str) -> bool:
-    """Exact match against the registered list, except that a loopback IP literal redirect URI
-    (http://127.0.0.1/... or http://[::1]/...) matches on any port, as RFC 8252 §7.3 requires for native apps that
-    bind an ephemeral port. `localhost` is not covered (§8.3 calls it NOT RECOMMENDED; §7.3 frees the port for IP
-    literals only), so it still has to match exactly."""
+    """Exact match against the registered list, except that a loopback redirect URI (http://127.0.0.1/...,
+    http://[::1]/... or http://localhost/...) matches on any port: native apps and CLI MCP clients bind an
+    ephemeral port (RFC 8252 §7.3, RFC 9700 §2.1 and §4.1.3). Scheme, host, path and query must still match
+    exactly, so 127.0.0.1 and localhost are not interchangeable."""
     registered = client.redirect_uri_list()
     if redirect_uri in registered:
         return True
-    key = _loopback_ip_key(redirect_uri)
-    return key is not None and any(_loopback_ip_key(r) == key for r in registered)
+    key = _loopback_key(redirect_uri)
+    return key is not None and any(_loopback_key(r) == key for r in registered)
 
 
 # ---------------------------------------------------------------------------

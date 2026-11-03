@@ -23,7 +23,7 @@ Only the latest release on the `main` branch receives fixes.
 | Refresh tokens | Rotated on every use; presenting a rotated token revokes the whole family. Their audience is MCP Gate's own token endpoint, so a resource server that checks `aud` (every `JWTVerifier` configured with its audience) refuses them as Bearer tokens; `MCPGateVerifier` also requires `token_use: access`. |
 | Client secrets | Stored as SHA-256 hashes, compared in constant time, returned once at registration. |
 | GitHub / Google sign-in | An existing account is matched by provider account id, or by email only when the provider reports that email as verified (Google `email_verified`; GitHub primary entry of `/user/emails`); the same applies to auto-creating accounts from `identity.allowed_emails`. |
-| Redirect URIs | Exact-match against the registered list, except that a loopback IP literal (`http://127.0.0.1/…`, `http://[::1]/…`) matches on any port (RFC 8252 §7.3); `localhost` must match exactly. `http` is allowed only for loopback hosts. |
+| Redirect URIs | Exact-match against the registered list, except that a loopback redirect URI (`http://127.0.0.1/…`, `http://[::1]/…`, `http://localhost/…`) matches on any port (RFC 8252 §7.3, RFC 9700); scheme, host, path and query still match exactly. `http` is allowed only for loopback hosts. |
 
 ## Known limitations
 

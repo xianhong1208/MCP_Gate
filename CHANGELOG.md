@@ -13,6 +13,7 @@ All notable changes to MCP Gate (formerly MCP Center) are documented here. The f
 - **Schema drift test.** `tests/test_schema_drift.py` migrates an empty database to head (and back down and up again) and compares it with the models using Alembic's autogenerate comparison.
 
 ### Changed
+- **`localhost` redirect URIs match on any port**, like `127.0.0.1` and `[::1]` already did (RFC 9700 §2.1 / §4.1.3; RFC 8252 §7.3). CLI and desktop MCP clients register `http://localhost:<port>/callback` and listen on whatever port is free. Scheme, host, path and query still match exactly; `localhost` and `127.0.0.1` are not interchangeable; every other redirect URI is an exact match.
 - **`SECURITY.md` no longer understates the offline revocation delay.** It said a revoked token stays valid at an offline-verifying server for "60 minutes by default"; that is only true of OAuth access tokens. A personal access token stays valid there for its whole remaining lifetime (up to `pat_max_days`, 365 days by default) unless the server polls the revocation feed (`POST /oauth/revoked`). The README (both languages) says the same.
 - **`ROADMAP.md` is current:** `private_key_jwt` client authentication shipped in 1.1.0 and is listed as done instead of planned.
 - **SQLite connections set `busy_timeout=5000` and `synchronous=NORMAL` explicitly** (with WAL, as before). A writer waits up to 5 s for another instead of failing with "database is locked", and WAL commits need far fewer fsyncs; only a power loss (not an application crash) can drop the last commits. PostgreSQL is unchanged.
