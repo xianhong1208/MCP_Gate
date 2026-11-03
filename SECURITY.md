@@ -29,7 +29,7 @@ Only the latest release on the `main` branch receives fixes.
 
 - **Resource servers are explicit.** Only a confidential client registered in the console *and bound to one MCP server* may read the revocation feed, introspect other clients' tokens or report usage, and it only sees tokens whose audience is that server. Any other client can introspect only its own tokens.
 - **Tokens verified offline stay valid after revocation until they expire — unless the server reads the revocation feed.** A resource server that verifies JWTs offline with a plain `JWTVerifier` never hears about a revocation, so it keeps accepting a revoked token until its `exp`:
-  - an OAuth **access token**: at most the access-token lifetime (`OAUTH_ACCESS_EXPIRE_MINUTES`, 60 minutes by default);
+  - an OAuth **access token**: at most the access-token lifetime (`OAUTH_ACCESS_EXPIRE_MINUTES`, 15 minutes by default);
   - a **personal access token**: its whole remaining lifetime — up to `oauth.pat_max_days` (365 days by default). Revoking a PAT in the console does **not** stop such a server from accepting it.
 
   The fix is the revocation feed, `POST /oauth/revoked`: bind a console-registered confidential client to the server (*OAuth Clients → Resource server…*) and have the server poll the feed with it. `MCPGateVerifier` from `examples/mcp_gate_hooks.py` does that (default every 15 s) and also reports usage, which shrinks the window to the poll interval for access tokens and PATs alike; use FastMCP's `IntrospectionTokenVerifier` where revocation must be instant. Until a server is wired to the feed, treat a leaked PAT for it as valid until it expires: keep PAT lifetimes short, or rotate the signing key (which stops every token it signed once the key leaves the JWKS, see above).

@@ -51,7 +51,7 @@ Confidential clients exchange `client_id` + secret for an access token whose `su
 | Format | JWT, RS256, `typ: at+jwt` (`refresh+jwt` for refresh tokens) |
 | Claims | `iss`, `sub`, `aud`, `scope`, `client_id`, `jti`, `iat`, `exp`, `token_use`; `email`, `name` when a user is present |
 | Refresh tokens | `token_use: refresh`, `aud` = `<issuer>/oauth/token` (never a resource), so a resource server checking `aud` refuses them as Bearer tokens; the granted resource is kept in the token record |
-| Access lifetime | `OAUTH_ACCESS_EXPIRE_MINUTES` (60) |
+| Access lifetime | `OAUTH_ACCESS_EXPIRE_MINUTES` (15); personal access tokens choose their own, up to `pat_max_days` (365) |
 | Refresh lifetime | `OAUTH_REFRESH_EXPIRE_DAYS` (30) |
 | Verification | Signature against JWKS, `iss`, `exp`; `aud` and scopes by the resource server |
 | Revocation | `OAuthToken.revoked_at`; visible through `/oauth/introspect`; offline verifiers see it only after expiry |

@@ -31,7 +31,8 @@ oauth:
   # Written into the iss of every JWT and the /.well-known documents; for public deployments use the public URL
   issuer: "${OAUTH_ISSUER:-http://localhost:4568}"
   signing_key_bits: ${OAUTH_SIGNING_KEY_BITS:-2048}
-  access_expire_minutes: ${OAUTH_ACCESS_EXPIRE_MINUTES:-60}
+  # OAuth access tokens only (PATs choose their own lifetime, up to pat_max_days); clients renew with refresh tokens
+  access_expire_minutes: ${OAUTH_ACCESS_EXPIRE_MINUTES:-15}
   refresh_expire_days: ${OAUTH_REFRESH_EXPIRE_DAYS:-30}
   auth_code_ttl_seconds: 120
   # Whether dynamically registered (RFC 7591) clients are usable without review (the human consent page is the

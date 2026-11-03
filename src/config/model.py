@@ -41,7 +41,10 @@ class OAuthConfig(BaseModel):
     """
     issuer: str = "http://localhost:4568"
     signing_key_bits: int = 2048
-    access_expire_minutes: int = 60
+    # OAuth access tokens (authorization_code / refresh_token / client_credentials grants). Short, because a
+    # server that verifies offline without the revocation feed accepts a revoked one until it expires; clients
+    # renew with their refresh token. Personal access tokens are not affected (their lifetime is chosen per token).
+    access_expire_minutes: int = 15
     refresh_expire_days: int = 30
     auth_code_ttl_seconds: int = 120
     # Personal-project default: dynamically registered (DCR) clients are usable immediately; the human consent
