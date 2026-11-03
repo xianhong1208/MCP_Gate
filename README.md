@@ -30,10 +30,10 @@ MCP Gate puts standards-based authentication in front of every MCP server you ru
 
 ## Key features
 
-- **Standards-based authorization server.** Covers the authorization requirements of the [MCP specification (2025-06-18)](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization): RFC 8414 metadata, RFC 7591 dynamic client registration, authorization code + PKCE (S256), refresh-token rotation with replay detection, RFC 7009 revocation, RFC 7662 introspection, RFC 8707 resource indicators, RFC 9207 `iss` responses.
+- **Standards-based authorization server.** Covers the authorization requirements of the [MCP specification (2025-06-18)](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization): RFC 8414 metadata, RFC 7591 dynamic client registration, [Client ID Metadata Documents](#client-id-metadata-documents) (the registration method of MCP 2026-07-28), authorization code + PKCE (S256), refresh-token rotation with replay detection, RFC 7009 revocation, RFC 7662 introspection, RFC 8707 resource indicators, RFC 9207 `iss` responses.
 - **Asymmetric signing, offline verification.** RS256 keys with JWKS publishing and rotation. MCP servers verify tokens locally with the public key; MCP Gate is never on the request path.
 - **One-block FastMCP integration.** `RemoteAuthProvider` + `JWTVerifier(jwks_uri, issuer, audience)` protects a server. Tokens are bound to each server's audience, so a token for one server never works on another.
-- **Consent screen.** Dynamically registered clients ask the owner for permission on first connect; decisions can be remembered per client and server. Clients you register yourself skip the prompt.
+- **Consent screen.** Dynamically registered clients and clients identified by a metadata URL ask the owner for permission on first connect; decisions can be remembered per client and server. Clients you register yourself skip the prompt.
 - **Personal access tokens (PATs).** Mint long-lived bearer tokens from the console for scripts, CI and clients that cannot run an OAuth flow, with ready-to-paste `claude mcp add` and `mcpServers` snippets.
 - **Server registry and health.** Register or auto-discover MCP servers, sync their tool lists, monitor health every 30 seconds and stream status changes over WebSocket.
 - **Marketplace and orchestrator.** Deploy MCP servers from a catalog with one click, or paste a standard `{command, args, env}` block and let MCP Gate run it behind an HTTP bridge, as a Docker container or as a local process (`MCP_RUNTIME=process`).
@@ -164,7 +164,7 @@ MCP Gate plays the **authorization server** role from the MCP specification. You
 | Step | Who | What happens |
 |---|---|---|
 | Discovery | client → server → MCP Gate | The server answers `401` with a `WWW-Authenticate` header pointing at its protected-resource metadata, which names MCP Gate as the authorization server. The client fetches `/.well-known/oauth-authorization-server`. |
-| Registration | client → MCP Gate | The client registers dynamically (`POST /oauth/register`) and gets a `client_id`. Public clients use PKCE; confidential clients get a secret, or register a public key and authenticate with a signed JWT (`private_key_jwt`, RFC 7523). |
+| Registration | client → MCP Gate | The client either uses the https URL of its metadata document as `client_id` (no registration; MCP Gate fetches the document) or registers dynamically (`POST /oauth/register`) and gets a `client_id`. Public clients use PKCE; confidential clients get a secret, or register a public key and authenticate with a signed JWT (`private_key_jwt`, RFC 7523). |
 | Authorization | browser → MCP Gate | `/oauth/authorize` validates the request, binds it to the target server through the `resource` parameter, and shows the consent screen (or skips it for remembered or trusted clients). |
 | Token | client → MCP Gate | `/oauth/token` exchanges the code — checking PKCE, redirect URI and resource — for an RS256 access token plus a refresh token. |
 | Verification | server | The server fetches JWKS once, then verifies signature, issuer, audience, expiry and scopes locally. |
@@ -184,7 +184,8 @@ To change when the consent screen appears, edit [`src/oauth/consent_policy.py`](
 | Audience | The MCP URL a token is valid for (the `aud` claim). Set per server in the console; the server's `JWTVerifier(audience=…)` must match. |
 | Resource server | Your MCP server. It verifies tokens and never issues them. The console calls these *services*. |
 | Scope | What a token may do on a server, for example `mcp:tools:invoke`. The console's global scope registry defines the shared set; a server can additionally declare scopes of its own that only tokens for that server may carry. |
-| DCR | Dynamic client registration (RFC 7591): a client creates its own `client_id` on first connect. |
+| DCR | Dynamic client registration (RFC 7591): a client creates its own `client_id` on first connect. Deprecated by MCP 2026-07-28 in favour of CIMD; still supported. |
+| CIMD | Client ID Metadata Document: the client's `client_id` is an https URL serving its metadata as JSON. Nothing is registered in advance. |
 | PAT | Personal access token: a long-lived access token minted from the console, used as a plain bearer token. |
 
 ## Configuration
@@ -199,11 +200,35 @@ Settings live in [`config/config.yaml`](config/config.yaml) and read their secre
 | `ADMIN_EMAIL`, `ADMIN_PASSWORD` | — | Create the owner account at first start instead of using `/setup`. |
 | `OAUTH_ACCESS_EXPIRE_MINUTES`, `OAUTH_REFRESH_EXPIRE_DAYS` | `15`, `30` | OAuth token lifetimes (personal access tokens choose their own). |
 | `OAUTH_DCR_AUTO_APPROVE` | `true` | Whether dynamically registered clients are usable immediately (the consent screen still gates them) or must be approved in the console. |
+| `OAUTH_CIMD_ENABLED`, `OAUTH_CIMD_AUTO_APPROVE` | `true`, `true` | Accept https URLs as `client_id` ([Client ID Metadata Documents](#client-id-metadata-documents)); whether such a client is usable at once or waits for approval in the console. |
+| `OAUTH_CIMD_ALLOWED_HOSTS` | — | Comma-separated hosts whose `client_id` URLs are accepted (`*.example.com` for subdomains). Empty accepts any public host. |
 | `GITHUB_CLIENT_ID/_SECRET`, `GOOGLE_CLIENT_ID/_SECRET` | — | Enable GitHub / Google sign-in for the console (experimental — the providers are implemented but not yet verified against live accounts). Callback: `<issuer>/api/session/oauth/<provider>/callback`. |
 | `SECURE_COOKIE` | `false` | Set to `true` behind HTTPS. |
 | `CORS_ALLOWED_ORIGINS` | — | Comma-separated extra origins given credentialed access to the console API. Leave empty unless another site must call it; the Vite dev server does not need it. |
 | `ALLOWED_HOSTS` | — | Comma-separated host names MCP Gate answers to besides the `OAUTH_ISSUER` host, `localhost` and IP addresses (e.g. a container service name); `*.suffix` wildcards, `*` disables the check. Other names get 421. |
 | `ENABLE_API_DOCS` | — | `true` exposes OpenAPI at `/docs`. Environment-only; not in `config.yaml`. |
+
+### Client ID Metadata Documents
+
+The MCP authorization specification (2026-07-28) deprecates dynamic registration in favour of [Client ID Metadata Documents](https://datatracker.ietf.org/doc/draft-ietf-oauth-client-id-metadata-document/) (CIMD). A client publishes a JSON document at an https URL and uses that URL as its `client_id`; MCP Gate advertises `client_id_metadata_document_supported: true` and fetches the document when the client first shows up at `/oauth/authorize`:
+
+```json
+{
+  "client_id": "https://app.example.com/oauth/client-metadata.json",
+  "client_name": "Example MCP Client",
+  "redirect_uris": ["http://127.0.0.1/callback"],
+  "grant_types": ["authorization_code", "refresh_token"],
+  "token_endpoint_auth_method": "none"
+}
+```
+
+- The document's `client_id` must equal the URL exactly; `client_name` and `redirect_uris` are required. Redirect URIs match exactly, except that loopback ones match on any port (as for registered clients).
+- Public clients (`none`) use PKCE. A document declaring `private_key_jwt` (in `token_endpoint_auth_methods_supported` or `token_endpoint_auth_method`) must carry `jwks` or `jwks_uri`, and then must authenticate with a signed JWT. Shared-secret methods and `client_secret` are refused. `client_credentials` is not available to these clients.
+- The client appears under **OAuth Clients** with the URL as its id (*Metadata document*). Revoking it blocks that URL until you delete it; deleting it lets the URL be fetched again. Tokens, consents and the audit log work as for any other client. Unused ones are purged after `dcr_unused_client_days`, like dynamically registered clients.
+- The consent screen says the client is identified only by its URL's host: its name and links are unverified.
+- MCP Gate fetches only public addresses (no loopback, private, link-local or metadata-service ranges), does not follow redirects, reads at most 5 KB within 5 seconds, and requires `application/json`. Documents are cached for their `Cache-Control: max-age`, between 1 minute and 1 day; a failed fetch is not retried for 30 seconds. Every limit is under `oauth.cimd` in `config/config.yaml`; `OAUTH_CIMD_PRIVATE_NETWORK_HOSTS` lets named hosts on a private network through (development or intranet only).
+
+Dynamic registration (`/oauth/register`) keeps working alongside; set `OAUTH_CIMD_ENABLED=false` to accept registered clients only.
 
 Advanced: `SERVER_HOST` / `SERVER_PORT` override the bind address when it must differ from the issuer, for example listening on `127.0.0.1` behind a reverse proxy. See [Deploy](docs/deploy.md) for the full reverse-proxy and HTTPS procedure.
 
@@ -214,7 +239,7 @@ Advanced: `SERVER_HOST` / `SERVER_PORT` override the bind address when it must d
 | **Dashboard** | Service health, token activity, recent events, system status. |
 | **Services** | Register or scan MCP servers, set audience and allowed scopes, declare server-specific scopes, refresh tools, run health checks, copy integration snippets. |
 | **Tokens · Issue Token** | Every token issued by MCP Gate — OAuth grants and PATs — with revoke, expiry and last-use information. |
-| **OAuth Clients** | Dynamically registered and trusted clients: approve, revoke, delete; scope registry; signing-key rotation. |
+| **OAuth Clients** | Dynamically registered, metadata-document and trusted clients: approve, revoke, delete; scope registry; signing-key rotation. |
 | **Marketplace** | Deploy MCP servers from the catalog or bring your own `{command, args, env}`. |
 | **Audit Logs** | Who did what, when, and from where. |
 

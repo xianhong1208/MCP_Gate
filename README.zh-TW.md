@@ -30,10 +30,10 @@ MCP Gate 把標準化的身分驗證放在你每一台 MCP server 前面。[Fast
 
 ## 主要特色
 
-- **標準化的授權伺服器。** 涵蓋 [MCP 規範(2025-06-18)](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization)的授權要求:RFC 8414 metadata、RFC 7591 動態註冊、authorization code + PKCE(S256)、refresh token 輪替與重放偵測、RFC 7009 撤銷、RFC 7662 內省、RFC 8707 resource indicator、RFC 9207 `iss` 回應。
+- **標準化的授權伺服器。** 涵蓋 [MCP 規範(2025-06-18)](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization)的授權要求:RFC 8414 metadata、RFC 7591 動態註冊、[Client ID Metadata Documents](#client-id-metadata-documents)(MCP 2026-07-28 的註冊方式)、authorization code + PKCE(S256)、refresh token 輪替與重放偵測、RFC 7009 撤銷、RFC 7662 內省、RFC 8707 resource indicator、RFC 9207 `iss` 回應。
 - **非對稱簽章、離線驗證。** RS256 金鑰,公開 JWKS、可輪替。MCP server 用公鑰在本地驗 token;MCP Gate 不在請求路徑上。
 - **一段設定接上 FastMCP。** `RemoteAuthProvider` + `JWTVerifier(jwks_uri, issuer, audience)` 就完成保護。token 綁定每台 server 的 audience,給 A 的 token 永遠不能打 B。
-- **同意頁。** 動態註冊的 client 第一次連線要請擁有者按「允許」;可依 client + server 記住。你自己登記的 client 免同意。
+- **同意頁。** 動態註冊的 client 與以中繼資料網址識別的 client 第一次連線要請擁有者按「允許」;可依 client + server 記住。你自己登記的 client 免同意。
 - **Personal access token(PAT)。** 從管理台簽長效 bearer token 給腳本、CI 與不會走 OAuth 的 client,附上可直接貼的 `claude mcp add` 與 `mcpServers` 片段。
 - **服務登錄與健康監控。** 手動登記或自動掃描 MCP server、同步 tools 列表、每 30 秒健康檢查、狀態變更經 WebSocket 即時推播。
 - **Marketplace 與 orchestrator。** 從 catalog 一鍵部署 MCP server;或貼一段標準的 `{command, args, env}`,由 MCP Gate 掛上 HTTP bridge 執行,可以跑在 Docker 容器裡,也可以直接跑成本機行程(`MCP_RUNTIME=process`)。
@@ -164,7 +164,7 @@ MCP Gate 扮演 MCP 規範中的 **authorization server**;你的 MCP server 是 
 | 步驟 | 誰 | 發生什麼事 |
 |---|---|---|
 | Discovery | client → server → MCP Gate | server 回 `401` 並在 `WWW-Authenticate` 指向它的 protected-resource metadata,裡面寫著 MCP Gate 是授權伺服器;client 再抓 `/.well-known/oauth-authorization-server`。 |
-| 註冊 | client → MCP Gate | client 動態註冊(`POST /oauth/register`)拿到 `client_id`。public client 用 PKCE;confidential client 拿到 secret,或登記公鑰後以簽章 JWT 認證(`private_key_jwt`,RFC 7523)。 |
+| 註冊 | client → MCP Gate | client 以自己中繼資料文件的 https 網址當 `client_id`(不需註冊,MCP Gate 會去抓那份文件),或動態註冊(`POST /oauth/register`)拿到 `client_id`。public client 用 PKCE;confidential client 拿到 secret,或登記公鑰後以簽章 JWT 認證(`private_key_jwt`,RFC 7523)。 |
 | 授權 | 瀏覽器 → MCP Gate | `/oauth/authorize` 驗證請求、用 `resource` 參數綁定目標 server,顯示同意頁(記住過或受信任的 client 直接略過)。 |
 | Token | client → MCP Gate | `/oauth/token` 用授權碼——檢查 PKCE、redirect URI、resource——換出 RS256 access token 與 refresh token。 |
 | 驗證 | server | server 抓一次 JWKS,之後在本地驗簽章、issuer、audience、有效期與 scope。 |
@@ -184,7 +184,8 @@ Access token 的 claim:`iss`、`sub`、`aud`、`scope`、`client_id`、`jti`、`
 | Audience | token 對哪個 MCP URL 有效(`aud` claim)。在管理台逐台設定;server 的 `JWTVerifier(audience=…)` 必須一致。 |
 | Resource server | 你的 MCP server。只驗 token、從不簽發。管理台稱之為 *service*。 |
 | Scope | token 在 server 上可以做什麼,例如 `mcp:tools:invoke`。管理台的全域 scope 註冊表定義共用集合;每台 server 還可以宣告只有簽給它的 token 才能帶的專屬 scope。 |
-| DCR | 動態註冊(RFC 7591):client 第一次連線時自己建立 `client_id`。 |
+| DCR | 動態註冊(RFC 7591):client 第一次連線時自己建立 `client_id`。MCP 2026-07-28 已改建議 CIMD,但仍支援。 |
+| CIMD | Client ID Metadata Document:client 的 `client_id` 是一個 https 網址,該網址以 JSON 提供它的中繼資料。不需事先註冊。 |
 | PAT | Personal access token:從管理台簽的長效 access token,當一般 bearer token 使用。 |
 
 ## 設定
@@ -199,11 +200,35 @@ Access token 的 claim:`iss`、`sub`、`aud`、`scope`、`client_id`、`jti`、`
 | `ADMIN_EMAIL`、`ADMIN_PASSWORD` | — | 首次啟動直接建立擁有者帳號,不用走 `/setup`。 |
 | `OAUTH_ACCESS_EXPIRE_MINUTES`、`OAUTH_REFRESH_EXPIRE_DAYS` | `15`、`30` | OAuth token 有效期(personal access token 各自設定)。 |
 | `OAUTH_DCR_AUTO_APPROVE` | `true` | 動態註冊的 client 是否立即可用(同意頁仍是閘門),或必須在管理台核准。 |
+| `OAUTH_CIMD_ENABLED`、`OAUTH_CIMD_AUTO_APPROVE` | `true`、`true` | 接受 https 網址當 `client_id`([Client ID Metadata Documents](#client-id-metadata-documents));這類 client 是否立即可用,或要在管理台核准。 |
+| `OAUTH_CIMD_ALLOWED_HOSTS` | — | 以逗號分隔、允許其 `client_id` 網址的主機(`*.example.com` 代表子網域)。空白表示任何公開主機。 |
 | `GITHUB_CLIENT_ID/_SECRET`、`GOOGLE_CLIENT_ID/_SECRET` | — | 啟用管理台的 GitHub / Google 登入(實驗性——已實作但尚未用真實帳號驗證)。Callback:`<issuer>/api/session/oauth/<provider>/callback`。 |
 | `SECURE_COOKIE` | `false` | 走 HTTPS 時設 `true`。 |
 | `CORS_ALLOWED_ORIGINS` | — | 以逗號分隔、可帶 cookie 存取管理台 API 的額外 origin。除非有其他網站必須呼叫它，否則請留空；Vite 開發伺服器不需要設定。 |
 | `ALLOWED_HOSTS` | — | 以逗號分隔、除 `OAUTH_ISSUER` 的 host、`localhost` 與 IP 位址外也要回應的主機名稱（例如容器的 service 名稱）；可用 `*.suffix` 萬用字元，`*` 會關閉此檢查。其他名稱一律回 421。 |
 | `ENABLE_API_DOCS` | — | `true` 會在 `/docs` 開放 OpenAPI。只讀環境變數,不在 `config.yaml` 內。 |
+
+### Client ID Metadata Documents
+
+MCP 授權規範(2026-07-28)把動態註冊列為過時,改建議 [Client ID Metadata Documents](https://datatracker.ietf.org/doc/draft-ietf-oauth-client-id-metadata-document/)(CIMD)。client 在某個 https 網址發布一份 JSON 文件,並以該網址當 `client_id`;MCP Gate 在 metadata 中宣告 `client_id_metadata_document_supported: true`,並在 client 第一次來到 `/oauth/authorize` 時去抓這份文件:
+
+```json
+{
+  "client_id": "https://app.example.com/oauth/client-metadata.json",
+  "client_name": "Example MCP Client",
+  "redirect_uris": ["http://127.0.0.1/callback"],
+  "grant_types": ["authorization_code", "refresh_token"],
+  "token_endpoint_auth_method": "none"
+}
+```
+
+- 文件中的 `client_id` 必須與網址完全相同;`client_name` 與 `redirect_uris` 為必填。redirect URI 完全比對,但 loopback 的可以是任何連接埠(和已註冊的 client 相同)。
+- public client(`none`)使用 PKCE。文件若宣告 `private_key_jwt`(在 `token_endpoint_auth_methods_supported` 或 `token_endpoint_auth_method` 中),就必須附上 `jwks` 或 `jwks_uri`,之後也必須以簽章 JWT 認證。共用密鑰的認證方式與 `client_secret` 一律拒絕。這類 client 不能用 `client_credentials`。
+- 這類 client 會出現在 **OAuth Clients**,以網址為 id(*中繼資料文件*)。撤銷它會封鎖該網址,直到你刪除它;刪除後該網址可再被抓取。token、同意紀錄與稽核紀錄都和其他 client 一樣運作。從未取得 token 的會在 `dcr_unused_client_days` 後清除,和動態註冊的 client 相同。
+- 同意頁會說明這個 client 只以網址的主機識別:名稱與連結都未經驗證。
+- MCP Gate 只抓公開位址(不抓 loopback、私有網段、link-local 或雲端 metadata 服務位址),不跟隨重新導向,5 秒內最多讀 5 KB,且要求 `application/json`。文件依 `Cache-Control: max-age` 快取,介於 1 分鐘到 1 天;抓取失敗後 30 秒內不再重試。所有限制都在 `config/config.yaml` 的 `oauth.cimd` 底下;`OAUTH_CIMD_PRIVATE_NETWORK_HOSTS` 可放行私有網路上指定的主機(僅限開發或內網)。
+
+動態註冊(`/oauth/register`)仍可並用;設定 `OAUTH_CIMD_ENABLED=false` 則只接受已註冊的 client。
 
 進階:`SERVER_HOST` / `SERVER_PORT` 可覆寫 bind 位址,只在它必須和 issuer 不同時使用(例如反向代理後面只聽 `127.0.0.1`)。完整的反向代理與 HTTPS 步驟見[部署](docs/deploy.md)。
 
@@ -214,7 +239,7 @@ Access token 的 claim:`iss`、`sub`、`aud`、`scope`、`client_id`、`jti`、`
 | **Dashboard** | 服務健康、token 活動、最近事件、系統狀態。 |
 | **Services** | 登記或掃描 MCP server、設定 audience 與允許的 scope、宣告 server 專屬 scope、更新 tools、執行健康檢查、複製接入片段。 |
 | **Tokens · Issue Token** | MCP Gate 簽發過的所有 token——OAuth 授權與 PAT——含撤銷、到期與最後使用資訊。 |
-| **OAuth Clients** | 動態註冊與受信任的 client:核准、撤銷、刪除;scope 註冊表;簽章金鑰輪替。 |
+| **OAuth Clients** | 動態註冊、中繼資料文件與受信任的 client:核准、撤銷、刪除;scope 註冊表;簽章金鑰輪替。 |
 | **Marketplace** | 從 catalog 部署 MCP server,或自帶 `{command, args, env}`。 |
 | **Audit Logs** | 誰、何時、從哪裡、做了什麼。 |
 
