@@ -21,7 +21,7 @@ import clsx from 'clsx'
 import { copyToClipboard } from '../utils/clipboard'
 
 import { marketplaceApi, managedApi, byoApi } from '../services/api'
-import { BYO_COMMANDS, parseMcpConfigJson, buildAgentConfig } from '../utils/mcpConfig'
+import { BYO_COMMANDS, parseMcpConfigJson, buildAgentConfig, byoEndpointPreview } from '../utils/mcpConfig'
 import { useToast } from '../contexts/ToastContext'
 import { useConfirm } from '../contexts/ConfirmContext'
 import {
@@ -865,7 +865,7 @@ function ByoModal({ stageText, onClose, onDeployed }) {
             <div className="flex gap-2">
               <span className="shrink-0 text-muted-foreground">{t('marketplace.byo.endpoint')}</span>
               <span className="truncate font-mono text-foreground">
-                127.0.0.1:{portNum || t('marketplace.byo.portAuto')}/sse
+                {byoEndpointPreview(portNum, t('marketplace.byo.portAuto'))}
               </span>
             </div>
             {!commandOk && (
