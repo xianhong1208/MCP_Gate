@@ -53,26 +53,32 @@ class SlidingWindowCounter:
         return len(self.requests[key])
 
     def get_count(self, key: str) -> int:
-        """Get the request count within the current window."""
-        now = time.time()
-        window_start = now - self.window_size
+        """Get the request count within the current window. A read never creates a key."""
+        if key not in self.requests:
+            return 0
+        window_start = time.time() - self.window_size
         self.requests[key] = [t for t in self.requests[key] if t > window_start]
         return len(self.requests[key])
 
-    def cleanup(self):
-        """Purge all expired records."""
-        now = time.time()
+    def cleanup(self) -> int:
+        """Purge all expired records, dropping keys with nothing left in the window. Returns the keys dropped."""
+        window_start = time.time() - self.window_size
+        dropped = 0
         for key in list(self.requests.keys()):
-            window_start = now - self.window_size
             self.requests[key] = [t for t in self.requests[key] if t > window_start]
             if not self.requests[key]:
                 del self.requests[key]
+                dropped += 1
+        return dropped
 
 
 class RateLimiter:
     """Rate limiter instance"""
 
     _instance: Optional['RateLimiter'] = None
+    # Every client IP leaves keys behind; idle ones are swept at most this often (lazily, from is_allowed), so
+    # memory follows the clients seen in the last hour, not every client ever seen.
+    CLEANUP_INTERVAL_SECONDS = 60
 
     def __init__(self, config: RateLimitConfig = None):
         self.config = config or RateLimitConfig()
@@ -80,6 +86,17 @@ class RateLimiter:
         self.hour_counter = SlidingWindowCounter(window_size=3600)
         self.blocked_until: Dict[str, float] = {}  # Blocked IPs
         self._lock = asyncio.Lock()  # Guards concurrent access
+        self._next_cleanup = time.time() + self.CLEANUP_INTERVAL_SECONDS
+
+    def cleanup(self) -> int:
+        """Drop idle counter keys and expired blocks. Returns how many keys were dropped."""
+        now = time.time()
+        dropped = self.minute_counter.cleanup() + self.hour_counter.cleanup()
+        for key in [k for k, until in self.blocked_until.items() if until <= now]:
+            del self.blocked_until[key]
+            dropped += 1
+        self._next_cleanup = now + self.CLEANUP_INTERVAL_SECONDS
+        return dropped
 
     @classmethod
     def get_instance(cls, config: RateLimitConfig = None) -> 'RateLimiter':
@@ -117,6 +134,8 @@ class RateLimiter:
         path_key = f"{client_ip}:path:{path}" if path_limit is not None else None
 
         async with self._lock:
+            if time.time() >= self._next_cleanup:
+                self.cleanup()
             # Blocked IP-wide, or blocked for this path only
             for key in (client_ip, path_key):
                 if key is None or key not in self.blocked_until:
