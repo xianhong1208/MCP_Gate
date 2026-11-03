@@ -14,6 +14,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 from typing import List, Optional
 from urllib.parse import parse_qs, urlencode
@@ -26,6 +28,7 @@ from starlette.concurrency import run_in_threadpool
 
 from db import get_db
 from db.models import AdminUser
+from src.audit import ActorType, AuditAction, AuditService, AuditStatus, ResourceType, record_oauth_event
 from src.identity import get_current_user
 from src.logging import get_logger
 from src.oauth import service as oauth
@@ -78,10 +81,32 @@ async def _form(request: Request, limit: int = FORM_BODY_LIMIT) -> dict:
     return {k: v[0] for k, v in parse_qs(raw).items() if v}
 
 
+def _claimed_client_id(request: Request, form: dict) -> Optional[str]:
+    """The client_id a request claims (Basic username or form field), for the audit log; never trusted."""
+    header = request.headers.get("Authorization", "")
+    if header.startswith("Basic "):
+        try:
+            return base64.b64decode(header[6:], validate=True).decode("utf-8").partition(":")[0] or None
+        except (binascii.Error, UnicodeDecodeError):
+            return None
+    return form.get("client_id") or None
+
+
 def _authenticate_client(request: Request, db: Session, form: dict):
     """Called from the threadpool only: a private_key_jwt client may need its jwks_uri fetched, a blocking network
-    call (DNS + HTTPS, up to the fetch timeout) that must not stall every other request."""
-    return oauth.authenticate_client(db, authorization_header=request.headers.get("Authorization", ""), form=form)
+    call (DNS + HTTPS, up to the fetch timeout) that must not stall every other request.
+
+    A failed client authentication (invalid_client) is audited before the error goes back."""
+    try:
+        return oauth.authenticate_client(db, authorization_header=request.headers.get("Authorization", ""),
+                                         form=form)
+    except OAuthError as e:
+        if e.error == "invalid_client":
+            db.rollback()
+            record_oauth_event(db, AuditAction.OAUTH_CLIENT_AUTH_FAILED, status=AuditStatus.FAILURE,
+                               client_id=_claimed_client_id(request, form), ip_address=_client_ip(request),
+                               request_path=request.url.path, error_message=e.description)
+        raise
 
 
 async def _off_loop(request: Request, read_body, handler, *args):
@@ -134,6 +159,12 @@ def _register(request: Request, db: Session, raw: bytes) -> JSONResponse:
             raise OAuthError("invalid_client_metadata", "request body must be a JSON object")
         client, secret = oauth.register_client(db, metadata, created_via="dcr")
         logger.info(f"DCR: registered client {client.client_id} ({client.client_name}) approved={client.is_approved}")
+        record_oauth_event(db, AuditAction.OAUTH_CLIENT_CREATE, client_id=client.client_id,
+                           client_name=client.client_name, ip_address=_client_ip(request),
+                           request_path=request.url.path,
+                           details={"created_via": "dcr", "approved": client.is_approved,
+                                    "redirect_uris": client.redirect_uri_list(),
+                                    "token_endpoint_auth_method": client.token_endpoint_auth_method})
         return JSONResponse(status_code=201, content=oauth.registration_response(client, secret), headers=NO_STORE)
     except OAuthError as e:
         db.rollback()
@@ -195,19 +226,35 @@ class DecisionRequest(BaseModel):
 
 
 @router.post("/oauth/authorize/requests/{request_id}/decision")
-def decide_authorization_request(request_id: str, body: DecisionRequest, db: Session = Depends(get_db),
-                                 user: AdminUser = Depends(get_current_user)):
+def decide_authorization_request(request_id: str, body: DecisionRequest, request: Request,
+                                 db: Session = Depends(get_db), user: AdminUser = Depends(get_current_user)):
     """Approve or deny a pending authorization request. On approval an authorization code is issued; returns the URL to send the browser back to. Requires a console session."""
     try:
         req = oauth.get_pending_request(db, request_id)
     except OAuthError as e:
         return _error_json(e)
+    client_id, client_name, resource, requested = req.client_id, req.client.client_name, req.resource, req.scope
     if body.approve:
         url = oauth.approve_request(db, req, user, granted_scopes=body.scopes, remember=body.remember)
-        logger.info(f"consent granted: client={req.client_id} user={user.email} aud={req.resource}")
+        logger.info(f"consent granted: client={client_id} user={user.email} aud={resource}")
     else:
         url = oauth.deny_request(db, req)
-        logger.info(f"consent denied: client={req.client_id} user={user.email}")
+        logger.info(f"consent denied: client={client_id} user={user.email}")
+    granted = requested.split() if requested else []
+    if body.approve and body.scopes is not None:
+        granted = [s for s in granted if s in set(body.scopes)]
+    try:
+        AuditService.log_from_request(
+            db=db, request=request,
+            action=AuditAction.OAUTH_CONSENT_APPROVE if body.approve else AuditAction.OAUTH_CONSENT_DENY,
+            resource_type=ResourceType.OAUTH_CONSENT, status=AuditStatus.SUCCESS, resource_id=client_id,
+            actor_type=ActorType.ADMIN, actor_id=str(user.id), actor_name=user.audit_name,
+            details={"client_id": client_id, "client_name": client_name, "resource": resource,
+                     "scopes": granted if body.approve else [], "remember": bool(body.approve and body.remember)},
+        )
+    except Exception as e:  # the decision is already stored; the redirect must still go back
+        db.rollback()
+        logger.error(f"Failed to audit the consent decision: {e}")
     return {"redirect_to": url}
 
 

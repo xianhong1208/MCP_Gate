@@ -341,3 +341,54 @@ class TestRateLimitIntegration:
         # The health check endpoint should be accessible
         response = client.get("/health")
         assert response.status_code == 200
+
+
+class TestIdleKeysAreSwept:
+    """Every client IP used to leave its counter keys (and expired blocks) in memory forever."""
+
+    @pytest.mark.asyncio
+    async def test_idle_keys_disappear(self, monkeypatch):
+        from src.middleware import rate_limiter
+        from src.middleware.rate_limiter import RateLimitConfig, RateLimiter
+
+        now = [1_000_000.0]
+        monkeypatch.setattr(rate_limiter.time, "time", lambda: now[0])
+        limiter = RateLimiter(RateLimitConfig(requests_per_minute=1, requests_per_hour=100, whitelist=[],
+                                              path_limits={"/oauth/token": 5}))
+        for i in range(50):
+            await limiter.is_allowed(f"203.0.113.{i}", "/oauth/token")
+        await limiter.is_allowed("203.0.113.0", "/oauth/token")  # over the per-minute limit: blocked
+        assert len(limiter.minute_counter.requests) == 100 and len(limiter.hour_counter.requests) == 50
+        assert limiter.blocked_until
+
+        now[0] += 3601  # every window and block has expired; the next request sweeps lazily
+        assert (await limiter.is_allowed("198.51.100.1", "/"))[0]
+        assert set(limiter.minute_counter.requests) == {"198.51.100.1:minute"}
+        assert set(limiter.hour_counter.requests) == {"198.51.100.1:hour"}
+        assert limiter.blocked_until == {}
+
+    @pytest.mark.asyncio
+    async def test_sweep_is_rate_limited(self, monkeypatch):
+        from src.middleware import rate_limiter
+        from src.middleware.rate_limiter import RateLimitConfig, RateLimiter
+
+        now = [1_000_000.0]
+        monkeypatch.setattr(rate_limiter.time, "time", lambda: now[0])
+        limiter = RateLimiter(RateLimitConfig(whitelist=[]))
+        calls = []
+        original = limiter.cleanup
+        monkeypatch.setattr(limiter, "cleanup", lambda: calls.append(1) or original())
+        for _ in range(10):
+            await limiter.is_allowed("203.0.113.9")
+        assert calls == []
+        now[0] += RateLimiter.CLEANUP_INTERVAL_SECONDS
+        await limiter.is_allowed("203.0.113.9")
+        await limiter.is_allowed("203.0.113.9")
+        assert calls == [1]
+
+    def test_reading_stats_creates_no_keys(self):
+        from src.middleware.rate_limiter import RateLimitConfig, RateLimiter
+
+        limiter = RateLimiter(RateLimitConfig(whitelist=[]))
+        limiter.get_stats("203.0.113.7", "/x")
+        assert not limiter.minute_counter.requests and not limiter.hour_counter.requests

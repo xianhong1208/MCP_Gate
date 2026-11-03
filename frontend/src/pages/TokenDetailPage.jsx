@@ -35,7 +35,7 @@ function ChartTooltip({ active, payload, label }) {
 export default function TokenDetailPage() {
   const { t } = useTranslation()
   const { jti } = useParams()
-  const { confirmRevoke } = useConfirm()
+  const { confirmTokenRevoke } = useConfirm()
   const toast = useToast()
   const decodedJti = decodeURIComponent(jti)
 
@@ -71,7 +71,7 @@ export default function TokenDetailPage() {
 
   const handleRevoke = async () => {
     if (!token) return
-    const confirmed = await confirmRevoke(token.label ? `"${token.label}"` : `${token.kind} ${token.jti.slice(0, 8)}…`)
+    const confirmed = await confirmTokenRevoke(token)
     if (!confirmed) return
     setIsRevoking(true)
     try {

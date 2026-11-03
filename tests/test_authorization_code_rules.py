@@ -1,5 +1,5 @@
-"""Authorization-code redemption rules: a failed PKCE check burns the code (OAuth 2.1), and loopback IP redirect
-URIs accept any port (RFC 8252 §7.3)."""
+"""Authorization-code redemption rules: a failed PKCE check burns the code (OAuth 2.1), and loopback redirect URIs
+(127.0.0.1, [::1], localhost) accept any port (RFC 8252 §7.3, RFC 9700)."""
 
 from urllib.parse import parse_qs, urlparse
 
@@ -62,8 +62,22 @@ def test_loopback_ip_redirect_accepts_any_port(owner_client, service):
         assert r.status_code == 400 and r.json()["error"] == "invalid_request", other
 
 
-def test_localhost_redirect_port_must_match(owner_client, service):
-    """RFC 8252 §8.3 makes `localhost` NOT RECOMMENDED and §7.3 only frees the port for IP literals: keep exact."""
+def test_localhost_redirect_accepts_any_port(owner_client, service):
+    """RFC 9700 §2.1 / §4.1.3: the port of a localhost redirect URI is not compared either (CLI MCP clients
+    register http://localhost:<port>/callback and listen on whatever port is free)."""
     reg = _register(owner_client, redirect_uris=["http://localhost:4617/cb"])
-    r = _authorize(owner_client, reg["client_id"], "http://localhost:4618/cb")
+    _flow_ok(owner_client, reg["client_id"], "http://localhost:4618/cb")
+    _flow_ok(owner_client, reg["client_id"], "http://localhost/cb")
+    for other in ("http://localhost:4618/cb2", "http://localhost:4618/cb?x=1", "https://localhost:4618/cb",
+                  "http://127.0.0.1:4617/cb", "http://localhost.example.com:4617/cb",
+                  "http://user@localhost:4618/cb"):
+        r = _authorize(owner_client, reg["client_id"], other)
+        assert r.status_code == 400 and r.json()["error"] == "invalid_request", other
+
+
+def test_non_loopback_redirect_is_exact(owner_client, service):
+    reg = _register(owner_client, redirect_uris=["https://app.example.com:8443/cb"])
+    r = _authorize(owner_client, reg["client_id"], "https://app.example.com:9443/cb")
+    assert r.status_code == 400 and r.json()["error"] == "invalid_request"
+    r = _authorize(owner_client, reg["client_id"], "https://app.example.com/cb")
     assert r.status_code == 400 and r.json()["error"] == "invalid_request"

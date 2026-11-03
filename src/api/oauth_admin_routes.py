@@ -255,6 +255,25 @@ async def list_service_scopes(service_id: str, db: Session = Depends(get_db), _:
     return {"own": own, "effective": oauth.effective_scopes(db, service), "total": len(own)}
 
 
+@router.get("/services/{service_id}/revocation-feed")
+def service_revocation_feed(service_id: str, db: Session = Depends(get_db), _: AdminUser = Depends(get_current_user)):
+    """Whether revoking a token for this server takes effect there before the token expires: the resource servers
+    bound to it and when they last polled the revocation feed (`state`: active | stale | never_polled |
+    not_wired)."""
+    try:
+        service = ServiceAdapter.get_existing(db, service_id)
+    except AdapterError as e:
+        raise _adapter_exc(e)
+    return oauth.revocation_feed_status(db, service.effective_audience)
+
+
+@router.get("/revocation-feed")
+def revocation_feed_for_audience(audience: str = Query(..., max_length=512), db: Session = Depends(get_db),
+                                 _: AdminUser = Depends(get_current_user)):
+    """The same revocation-feed status for a token audience (the revoke dialog asks with the token's `aud`)."""
+    return oauth.revocation_feed_status(db, audience)
+
+
 @router.put("/services/{service_id}/scopes/{name}")
 async def upsert_service_scope(service_id: str, name: str, body: ScopeUpsertRequest, request: Request,
                                db: Session = Depends(get_db), user: AdminUser = Depends(get_current_user)):

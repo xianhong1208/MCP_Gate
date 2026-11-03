@@ -280,6 +280,9 @@ class OAuthClient(Base):
     created_at = Column(DateTime, default=local_now, nullable=False)
     updated_at = Column(DateTime, default=local_now, onupdate=local_now, nullable=False)
     last_used_at = Column(DateTime, nullable=True)
+    # When this resource server last read the revocation feed (POST /oauth/revoked): tells the console whether a
+    # revocation reaches the server before the token expires
+    revocation_polled_at = Column(DateTime, nullable=True)
 
     def redirect_uri_list(self) -> list:
         return _json_list(self.redirect_uris)
@@ -312,6 +315,7 @@ class OAuthClient(Base):
             "created_at": format_datetime(self.created_at),
             "updated_at": format_datetime(self.updated_at),
             "last_used_at": format_datetime(self.last_used_at),
+            "revocation_polled_at": format_datetime(self.revocation_polled_at),
         }
 
 
@@ -415,7 +419,8 @@ class OAuthToken(Base):
     service_id = Column(Uuid, ForeignKey("services.id", ondelete="SET NULL"), nullable=True, index=True)
     scope = Column(String(512), nullable=True)
     label = Column(String(128), nullable=True)
-    parent_jti = Column(String(64), nullable=True)
+    # revoke_family filters on parent_jti (OR jti): replay detection must not scan the whole table
+    parent_jti = Column(String(64), nullable=True, index=True)
     issued_at = Column(DateTime, default=local_now, nullable=False, index=True)
     expires_at = Column(DateTime, nullable=False, index=True)
     revoked_at = Column(DateTime, nullable=True, index=True)

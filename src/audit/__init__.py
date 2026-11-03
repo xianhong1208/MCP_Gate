@@ -6,6 +6,7 @@ from .audit_service import (
     ResourceType,
     ActorType,
     AuditStatus,
+    record_oauth_event,
     record_scheduled_purge,
 )
 
@@ -15,5 +16,6 @@ __all__ = [
     "ResourceType",
     "ActorType",
     "AuditStatus",
+    "record_oauth_event",
     "record_scheduled_purge",
 ]

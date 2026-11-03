@@ -37,6 +37,11 @@ class AuditAction(str, Enum):
     OAUTH_SCOPE_UPSERT = "oauth_scope_upsert"
     OAUTH_SCOPE_DELETE = "oauth_scope_delete"
     OAUTH_KEY_ROTATE = "oauth_key_rotate"
+    OAUTH_CONSENT_APPROVE = "oauth_consent_approve"
+    OAUTH_CONSENT_DENY = "oauth_consent_deny"
+    OAUTH_CODE_REPLAY = "oauth_code_replay"
+    OAUTH_REFRESH_REPLAY = "oauth_refresh_replay"
+    OAUTH_CLIENT_AUTH_FAILED = "oauth_client_auth_failed"
 
     # Service operations
     CREATE_SERVICE = "create_service"
@@ -268,6 +273,27 @@ class AuditService:
         deleted = db.query(AuditLog).filter(AuditLog.created_at < cutoff_date).delete()
         db.commit()
         return deleted
+
+
+def record_oauth_event(db: Session, action: str, *, status: str = AuditStatus.SUCCESS,
+                       resource_type: str = ResourceType.OAUTH_CLIENT, client_id: Optional[str] = None,
+                       client_name: Optional[str] = None, ip_address: Optional[str] = None,
+                       request_path: Optional[str] = None, error_message: Optional[str] = None,
+                       details: Optional[Dict[str, Any]] = None) -> None:
+    """Audit an event of the OAuth protocol surface, whose actor is a client (not a console user).
+
+    Never raises: it runs next to protocol responses (often an error response that is already decided), and a
+    failed audit write must not change what the client gets."""
+    try:
+        AuditService.log(
+            db=db, action=action, resource_type=resource_type, status=status, resource_id=client_id,
+            actor_type=ActorType.API, actor_id=client_id, actor_name=client_name, ip_address=ip_address,
+            request_path=request_path, request_method="POST" if request_path else None,
+            error_message=error_message, details=details,
+        )
+    except Exception as e:  # pragma: no cover - defensive
+        db.rollback()
+        logger.error(f"Failed to audit {action}: {e}")
 
 
 def record_scheduled_purge(db: Session, target: str, deleted: int, details: Optional[Dict[str, Any]] = None) -> None:

@@ -19,6 +19,7 @@ from src.config.model import (
     IdentityConfig,
     OAuthConfig,
     RateLimitConfig,
+    SchedulerConfig,
     SecurityConfig,
     SessionConfig,
 )
@@ -111,3 +112,7 @@ class Config:
     @classmethod
     def get_cors_config(cls) -> CORSConfig:
         return cls.get_config_model().cors
+
+    @classmethod
+    def get_scheduler_config(cls) -> SchedulerConfig:
+        return cls.get_config_model().scheduler

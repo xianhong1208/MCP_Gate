@@ -168,7 +168,7 @@ MCP Gate 扮演 MCP 規範中的 **authorization server**;你的 MCP server 是 
 | 授權 | 瀏覽器 → MCP Gate | `/oauth/authorize` 驗證請求、用 `resource` 參數綁定目標 server,顯示同意頁(記住過或受信任的 client 直接略過)。 |
 | Token | client → MCP Gate | `/oauth/token` 用授權碼——檢查 PKCE、redirect URI、resource——換出 RS256 access token 與 refresh token。 |
 | 驗證 | server | server 抓一次 JWKS,之後在本地驗簽章、issuer、audience、有效期與 scope。 |
-| 撤銷 | 管理台或 client | 撤銷 refresh token 會讓整條鏈失效,`POST /oauth/introspect` 立刻回 `active: false`。離線驗簽的 access token 會撐到過期,所以請保持短效(預設 60 分鐘),需要即時撤銷的 server 改用 FastMCP 的 `IntrospectionTokenVerifier`。 |
+| 撤銷 | 管理台或 client | 撤銷 refresh token 會讓整條鏈失效,`POST /oauth/introspect` 立刻回 `active: false`。離線驗簽的 token 會撐到過期——access token 撐滿其有效期(預設 15 分鐘),personal access token 最長可達 `pat_max_days`——除非 server 輪詢撤銷清單(`POST /oauth/revoked`,見 `examples/mcp_gate_hooks.py` 的 `MCPGateVerifier`)或改用 FastMCP 的 `IntrospectionTokenVerifier`。 |
 
 Access token 的 claim:`iss`、`sub`、`aud`、`scope`、`client_id`、`jti`、`iat`、`exp`、`token_use`,以及——簽給已登入擁有者的 token——`email` 與 `name`。
 
@@ -197,7 +197,7 @@ Access token 的 claim:`iss`、`sub`、`aud`、`scope`、`client_id`、`jti`、`
 | `DATABASE_URL` | `sqlite:///data/mcp_center.db` | 指向 `postgresql://…` 即改用 PostgreSQL(`uv sync --extra postgres`)。 |
 | `SESSION_SECRET_KEY`、`ENCRYPTION_KEY` | 自動產生 | 未設定時存在 `data/secrets.json`。`ENCRYPTION_KEY` 保護私鑰與儲存的 secret;更換會讓它們無法解密。 |
 | `ADMIN_EMAIL`、`ADMIN_PASSWORD` | — | 首次啟動直接建立擁有者帳號,不用走 `/setup`。 |
-| `OAUTH_ACCESS_EXPIRE_MINUTES`、`OAUTH_REFRESH_EXPIRE_DAYS` | `60`、`30` | token 有效期。 |
+| `OAUTH_ACCESS_EXPIRE_MINUTES`、`OAUTH_REFRESH_EXPIRE_DAYS` | `15`、`30` | OAuth token 有效期(personal access token 各自設定)。 |
 | `OAUTH_DCR_AUTO_APPROVE` | `true` | 動態註冊的 client 是否立即可用(同意頁仍是閘門),或必須在管理台核准。 |
 | `GITHUB_CLIENT_ID/_SECRET`、`GOOGLE_CLIENT_ID/_SECRET` | — | 啟用管理台的 GitHub / Google 登入(實驗性——已實作但尚未用真實帳號驗證)。Callback:`<issuer>/api/session/oauth/<provider>/callback`。 |
 | `SECURE_COOKIE` | `false` | 走 HTTPS 時設 `true`。 |

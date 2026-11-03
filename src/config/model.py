@@ -2,7 +2,7 @@
 
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 
 class DatabaseConfig(BaseModel):
@@ -41,7 +41,10 @@ class OAuthConfig(BaseModel):
     """
     issuer: str = "http://localhost:4568"
     signing_key_bits: int = 2048
-    access_expire_minutes: int = 60
+    # OAuth access tokens (authorization_code / refresh_token / client_credentials grants). Short, because a
+    # server that verifies offline without the revocation feed accepts a revoked one until it expires; clients
+    # renew with their refresh token. Personal access tokens are not affected (their lifetime is chosen per token).
+    access_expire_minutes: int = 15
     refresh_expire_days: int = 30
     auth_code_ttl_seconds: int = 120
     # Personal-project default: dynamically registered (DCR) clients are usable immediately; the human consent
@@ -131,6 +134,22 @@ class LoggingConfig(BaseModel):
     compression: str = "zip"
 
 
+class SchedulerConfig(BaseModel):
+    """In-process background jobs: expiry purges, retention, health checks (src/scheduler/cleanup_scheduler.py)."""
+    # Expired OAuth codes / requests / tokens and console sessions are purged this often
+    oauth_cleanup_hours: int = Field(6, ge=1)
+    # Token events (dashboard statistics) and audit log entries older than this are deleted daily
+    usage_retention_days: int = Field(30, ge=1)
+    audit_retention_days: int = Field(90, ge=1)
+    health_check_enabled: bool = True
+    health_check_seconds: int = Field(30, ge=5)
+    # Services checked at the same time, and how long one check may take before it counts as failed
+    health_check_concurrency: int = Field(8, ge=1, le=64)
+    health_check_timeout_seconds: float = Field(10.0, gt=0, le=300)
+    # A health row is rewritten when the status changes; otherwise at most this often
+    health_write_interval_minutes: int = Field(5, ge=1)
+
+
 DEFAULT_PORT = 4568
 
 
@@ -144,6 +163,7 @@ class ConfigModel(BaseModel):
     security: SecurityConfig = SecurityConfig()
     cors: CORSConfig = CORSConfig()
     logging: LoggingConfig = LoggingConfig()
+    scheduler: SchedulerConfig = SchedulerConfig()
 
     @property
     def effective_port(self) -> int:

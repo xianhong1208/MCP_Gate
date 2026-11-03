@@ -93,3 +93,27 @@ def test_public_and_dcr_clients_still_need_pkce(client, owner_client, service):
 def test_default_resource_must_be_a_registered_server(owner_client, service):
     r = _create_classic(owner_client, default_resource="http://nowhere.example/mcp")
     assert r.status_code == 400, r.text
+
+
+def test_code_verifier_without_challenge_is_a_downgrade(owner_client, service):
+    """RFC 9700 §4.8.2: a token request with code_verifier for a code issued without code_challenge is refused
+    (and burns the code), instead of the verifier being silently ignored."""
+    r = _create_classic(owner_client)
+    client_id, secret = r.json()["client_id"], r.json()["client_secret"]
+
+    def code():
+        r = owner_client.get("/oauth/authorize", params={
+            "response_type": "code", "client_id": client_id, "redirect_uri": REDIRECT_URI,
+        }, follow_redirects=False)
+        return parse_qs(urlparse(_skip_consent(owner_client, r.headers["location"])).query)["code"][0]
+
+    form = {"grant_type": "authorization_code", "client_id": client_id, "client_secret": secret,
+            "redirect_uri": REDIRECT_URI}
+    c = code()
+    r = owner_client.post("/oauth/token", data={**form, "code": c, "code_verifier": "v" * 43})
+    assert r.status_code == 400 and r.json()["error"] == "invalid_grant", r.text
+    assert "code_challenge" in r.json()["error_description"]
+    # the code is burned
+    assert owner_client.post("/oauth/token", data={**form, "code": c}).status_code == 400
+    # without a verifier the classic flow still works
+    assert owner_client.post("/oauth/token", data={**form, "code": code()}).status_code == 200

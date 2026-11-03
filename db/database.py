@@ -29,6 +29,8 @@ Base = declarative_base(metadata=MetaData(naming_convention=NAMING_CONVENTION))
 _engine = None
 _session_factory = None
 
+SQLITE_BUSY_TIMEOUT_MS = 5000
+
 
 def is_sqlite_url(url: str) -> bool:
     return make_url(url).get_backend_name() == "sqlite"
@@ -56,10 +58,15 @@ def get_engine():
             @event.listens_for(_engine, "connect")
             def _sqlite_pragmas(dbapi_conn, _record):
                 # Foreign-key enforcement (ON DELETE CASCADE) and WAL (concurrent reads/writes) are off by default
-                # in SQLite
+                # in SQLite. busy_timeout: a writer waits this long for another one instead of failing at once with
+                # "database is locked" (set explicitly rather than relying on the driver's default).
+                # synchronous=NORMAL is the recommended pairing with WAL: still durable against application
+                # crashes, only a power loss can drop the last commits, and far fewer fsyncs than FULL.
                 cur = dbapi_conn.cursor()
                 cur.execute("PRAGMA foreign_keys=ON")
                 cur.execute("PRAGMA journal_mode=WAL")
+                cur.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
+                cur.execute("PRAGMA synchronous=NORMAL")
                 cur.close()
         else:
             _engine = create_engine(

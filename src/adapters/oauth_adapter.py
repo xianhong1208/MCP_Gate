@@ -84,6 +84,12 @@ class OAuthTokenAdapter(OAuthTokenCRUD):
         return out
 
     @classmethod
+    def rotate(cls, db, jti):
+        out = super().rotate(db, jti)
+        public_cache.invalidate()
+        return out
+
+    @classmethod
     def revoke_family(cls, db, parent_jti, reason):
         out = super().revoke_family(db, parent_jti, reason)
         public_cache.invalidate()

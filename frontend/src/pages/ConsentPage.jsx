@@ -163,7 +163,13 @@ export default function ConsentPage() {
         {req.resource && (
           <p className="mt-0.5 break-all font-mono text-xs text-muted-foreground">{req.resource}</p>
         )}
+        <SectionLabel className="mt-3">{t('consent.redirectTitle')}</SectionLabel>
+        <p className="mt-1 break-all font-mono text-sm text-foreground">{req.redirect_host}</p>
       </div>
+
+      {req.redirect_loopback_only && (
+        <Alert tone="warning" className="mt-3">{t('consent.loopbackWarning', { host: req.redirect_host })}</Alert>
+      )}
 
       {/* Scopes */}
       <div className="mt-5">
@@ -217,14 +223,11 @@ export default function ConsentPage() {
         </Button>
       </div>
 
-      <div className="mt-5 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-4 text-xs text-muted-foreground">
-        <span className="min-w-0 truncate">{t('consent.redirectTo', { host: req.redirect_host })}</span>
-        {req.expires_at && (
-          <span className="shrink-0 tabular-nums">
-            {t('consent.expiresAt', { time: formatTime(req.expires_at) })}
-          </span>
-        )}
-      </div>
+      {req.expires_at && (
+        <div className="mt-5 border-t border-border pt-4 text-xs text-muted-foreground">
+          <span className="tabular-nums">{t('consent.expiresAt', { time: formatTime(req.expires_at) })}</span>
+        </div>
+      )}
     </AuthShell>
   )
 }

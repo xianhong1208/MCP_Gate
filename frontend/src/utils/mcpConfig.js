@@ -11,6 +11,17 @@
 export const BYO_COMMANDS = ['npx', 'node', 'uvx', 'python', 'python3']
 
 /**
+ * Path a bring-your-own (stdio) server is served on: supergateway bridges it to Streamable HTTP at this path.
+ * Mirror of STDIO_HTTP_PATH in src/orchestrator/runtime.py (tests/mcpConfig.test.mjs checks they agree).
+ */
+export const BYO_MCP_PATH = '/mcp'
+
+/** The endpoint shown before a BYO deploy: 127.0.0.1:<port or placeholder><path> */
+export function byoEndpointPreview(port, autoLabel) {
+  return `127.0.0.1:${port || autoLabel}${BYO_MCP_PATH}`
+}
+
+/**
  * @param {string} text pasted JSON text
  * @returns {{name: string, command: string, args: string[], env: object, extraCount: number}|null}
  *          null when parsing fails

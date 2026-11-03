@@ -689,9 +689,9 @@ class Orchestrator:
         source="managed". Downstream agents connect directly to 127.0.0.1:port (because
         MCP Gate runs with --network host, 127.0.0.1 is the host loopback).
 
-        mcp_path is chosen by the caller based on transport -- http images ship /mcp;
-        stdio goes through supergateway whose endpoint is /sse. Hard-coding a single path
-        would make one of them unreachable forever.
+        mcp_path is chosen by the caller based on transport -- http images ship /mcp; stdio goes through
+        supergateway's Streamable HTTP endpoint (STDIO_HTTP_PATH, also /mcp, not the legacy /sse). It is passed
+        rather than hard-coded so an existing Service whose path is stale gets corrected.
         """
         # If service_id exists, update it (both port and path, so the wrong path in old data gets fixed)
         if process.service_id:

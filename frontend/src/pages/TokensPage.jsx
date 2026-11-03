@@ -56,7 +56,7 @@ export function ScopeChips({ scopes, max = 3 }) {
 export default function TokensPage() {
   const { t } = useTranslation()
   const { preferences } = usePreferences()
-  const { confirmRevoke } = useConfirm()
+  const { confirmTokenRevoke } = useConfirm()
   const toast = useToast()
 
   const [tokens, setTokens] = useState([])
@@ -111,7 +111,7 @@ export default function TokensPage() {
   const pageItems = filtered.slice((page - 1) * pageSize, page * pageSize)
 
   const handleRevoke = async (tk) => {
-    const confirmed = await confirmRevoke(tk.label ? `"${tk.label}"` : `${tk.kind} ${tk.jti.slice(0, 8)}…`)
+    const confirmed = await confirmTokenRevoke(tk)
     if (!confirmed) return
     setRevoking(tk.jti)
     try {

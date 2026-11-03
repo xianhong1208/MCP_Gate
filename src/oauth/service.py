@@ -27,6 +27,7 @@ from db.models import (
 )
 from db.database import make_session
 from db.seed import CONSOLE_CLIENT_ID, SCANNER_CLIENT_ID
+from src.audit import AuditAction, AuditStatus, ResourceType, record_oauth_event
 from src.adapters import (
     OAuthAuthRequestAdapter, OAuthClientAdapter, OAuthCodeAdapter, OAuthConsentAdapter, OAuthScopeAdapter,
     ServiceScopeAdapter,
@@ -102,6 +103,18 @@ def _valid_info_uri(uri) -> bool:
     if p.scheme == "https":
         return True
     return p.scheme == "http" and host in LOOPBACK_HOSTS
+
+
+def _loopback_only(redirect_uris: list) -> bool:
+    """True when there is at least one redirect URI and every one is http(s) to a loopback host."""
+    hosts = []
+    for uri in redirect_uris:
+        try:
+            p = urlparse(uri)
+            hosts.append((p.scheme in ("http", "https"), (p.hostname or "").lower()))
+        except ValueError:
+            return False
+    return bool(hosts) and all(web and host in LOOPBACK_HOSTS for web, host in hosts)
 
 
 def redirect_with(base: str, params: dict) -> str:
@@ -369,32 +382,30 @@ def authenticate_client(db: Session, *, authorization_header: str, form: dict) -
     return client
 
 
-LOOPBACK_IPS = ("127.0.0.1", "::1")
-
-
-def _loopback_ip_key(uri: str) -> Optional[tuple]:
-    """For an http redirect URI on a loopback IP literal, everything but the port; None for any other URI."""
+def _loopback_key(uri: str) -> Optional[tuple]:
+    """For an http redirect URI on a loopback host (127.0.0.1, [::1] or localhost), everything but the port; None
+    for any other URI."""
     try:
         p = urlparse(uri)
         host = p.hostname
         p.port  # noqa: B018 -- raises on a malformed port
     except ValueError:
         return None
-    if p.scheme != "http" or host not in LOOPBACK_IPS or p.username or p.password:
+    if p.scheme != "http" or host not in LOOPBACK_HOSTS or p.username or p.password:
         return None
     return (p.scheme, host, p.path, p.params, p.query, p.fragment)
 
 
 def validate_redirect_uri(client: OAuthClient, redirect_uri: str) -> bool:
-    """Exact match against the registered list, except that a loopback IP literal redirect URI
-    (http://127.0.0.1/... or http://[::1]/...) matches on any port, as RFC 8252 §7.3 requires for native apps that
-    bind an ephemeral port. `localhost` is not covered (§8.3 calls it NOT RECOMMENDED; §7.3 frees the port for IP
-    literals only), so it still has to match exactly."""
+    """Exact match against the registered list, except that a loopback redirect URI (http://127.0.0.1/...,
+    http://[::1]/... or http://localhost/...) matches on any port: native apps and CLI MCP clients bind an
+    ephemeral port (RFC 8252 §7.3, RFC 9700 §2.1 and §4.1.3). Scheme, host, path and query must still match
+    exactly, so 127.0.0.1 and localhost are not interchangeable."""
     registered = client.redirect_uri_list()
     if redirect_uri in registered:
         return True
-    key = _loopback_ip_key(redirect_uri)
-    return key is not None and any(_loopback_ip_key(r) == key for r in registered)
+    key = _loopback_key(redirect_uri)
+    return key is not None and any(_loopback_key(r) == key for r in registered)
 
 
 # ---------------------------------------------------------------------------
@@ -573,6 +584,9 @@ def describe_request(db: Session, req: OAuthAuthorizationRequest, user: AdminUse
         "resource": req.resource,
         "service": {"id": str(service.id), "name": service.name} if service else None,
         "redirect_host": urlparse(req.redirect_uri).netloc or req.redirect_uri,
+        # Every registered redirect URI is on this machine: whatever listens on that port gets the code, so the
+        # consent page asks the owner to make sure they started the app themselves
+        "redirect_loopback_only": _loopback_only(req.client.redirect_uri_list()),
         "expires_at": format_datetime(req.expires_at),
         "can_skip": should_skip_consent(db, user, req.client, req.resource, scopes),
     }
@@ -636,7 +650,7 @@ def issue_access_token(
     db: Session, *, sub: str, client_id: str, scope: str, audience: Optional[str],
     service: Optional[Service] = None, user: Optional[AdminUser] = None, kind: str = "access",
     ttl_seconds: Optional[int] = None, label: Optional[str] = None, parent_jti: Optional[str] = None,
-    record: bool = True,
+    record: bool = True, commit: bool = True,
 ) -> tuple[str, int, Optional[OAuthToken]]:
     cfg = Config.get_oauth_config()
     now = _now_ts()
@@ -657,7 +671,7 @@ def issue_access_token(
         rec = OAuthTokenAdapter.create(
             db, jti=jti, kind=kind, client_id=client_id, user_id=user.id if user else None, sub=sub,
             audience=audience, service_id=service.id if service else None, scope=scope, label=label,
-            parent_jti=parent_jti, expires_at=datetime.fromtimestamp(now + expires_in),
+            parent_jti=parent_jti, expires_at=datetime.fromtimestamp(now + expires_in), commit=commit,
         )
     return token, expires_in, rec
 
@@ -668,7 +682,7 @@ def refresh_token_audience() -> str:
 
 def issue_refresh_token(
     db: Session, *, sub: str, client_id: str, scope: str, audience: Optional[str],
-    service: Optional[Service], user: Optional[AdminUser], parent_jti: Optional[str] = None,
+    service: Optional[Service], user: Optional[AdminUser], parent_jti: Optional[str] = None, commit: bool = True,
 ) -> tuple[str, OAuthToken]:
     cfg = Config.get_oauth_config()
     now = _now_ts()
@@ -686,7 +700,7 @@ def issue_refresh_token(
     rec = OAuthTokenAdapter.create(
         db, jti=jti, kind="refresh", client_id=client_id, user_id=user.id if user else None, sub=sub,
         audience=audience, service_id=service.id if service else None, scope=scope,
-        parent_jti=parent_jti, expires_at=datetime.fromtimestamp(now + expires_in),
+        parent_jti=parent_jti, expires_at=datetime.fromtimestamp(now + expires_in), commit=commit,
     )
     return token, rec
 
@@ -751,6 +765,29 @@ def _record_event(db: Session, *, event: str, jti: Optional[str], grant_type: Op
         db.rollback()
 
 
+def _code_replayed(db: Session, rec: OAuthAuthorizationCode, client: OAuthClient, ip: Optional[str], *,
+                   concurrent: bool = False):
+    """A used code was presented again: revoke everything exchanged from it, audit it, refuse."""
+    revoked = OAuthTokenAdapter.revoke_family(db, rec.code_hash, reason="code_replay")
+    record_oauth_event(db, AuditAction.OAUTH_CODE_REPLAY, status=AuditStatus.FAILURE, resource_type=ResourceType.TOKEN,
+                       client_id=client.client_id, client_name=client.client_name, ip_address=ip,
+                       request_path="/oauth/token", error_message="authorization code already used",
+                       details={"revoked_tokens": revoked, "concurrent": concurrent,
+                                "user_id": str(rec.user_id) if rec.user_id else None, "resource": rec.resource})
+    raise OAuthError("invalid_grant", "authorization code already used")
+
+
+def _refresh_replayed(db: Session, rec: OAuthToken, client: OAuthClient, ip: Optional[str], *,
+                      concurrent: bool = False) -> None:
+    """A rotated refresh token was presented again: revoke its whole family and audit it."""
+    revoked = OAuthTokenAdapter.revoke_family(db, rec.parent_jti or rec.jti, reason="refresh_replay")
+    record_oauth_event(db, AuditAction.OAUTH_REFRESH_REPLAY, status=AuditStatus.FAILURE,
+                       resource_type=ResourceType.TOKEN, client_id=client.client_id, client_name=client.client_name,
+                       ip_address=ip, request_path="/oauth/token", error_message="refresh token reused",
+                       details={"jti": rec.jti, "revoked_tokens": revoked, "concurrent": concurrent,
+                                "resource": rec.audience})
+
+
 # ---------------------------------------------------------------------------
 # grants
 # ---------------------------------------------------------------------------
@@ -763,8 +800,7 @@ def authorization_code_grant(
         raise OAuthError("invalid_grant", "unknown authorization code")
     if rec.used_at is not None:
         # Authorization code replay -> possibly leaked; revoke every token previously exchanged from this code
-        OAuthTokenAdapter.revoke_family(db, rec.code_hash, reason="code_replay")
-        raise OAuthError("invalid_grant", "authorization code already used")
+        _code_replayed(db, rec, client, ip)
     if rec.expires_at < local_now():
         raise OAuthError("invalid_grant", "authorization code expired")
     # Any failed check below burns the code (OAuth 2.1 §4.1.3): a code that met a wrong verifier, client or
@@ -777,30 +813,44 @@ def authorization_code_grant(
     elif rec.code_challenge:
         if not verify_pkce(code_verifier, rec.code_challenge, rec.code_challenge_method):
             failure = OAuthError("invalid_grant", "PKCE verification failed")
+    elif code_verifier:
+        # PKCE downgrade (RFC 9700 §4.8.2): a verifier for a request that carried no challenge means the
+        # authorization request was not the one this client started; refuse rather than ignore it
+        failure = OAuthError("invalid_grant", "code_verifier sent, but the authorization request had no code_challenge")
     elif client.require_pkce or not client.client_secret_hash:
         # A code issued without PKCE can only be redeemed by an authenticated classic client
         failure = OAuthError("invalid_grant", "PKCE verification failed")
     if failure is None and resource and normalize_audience(resource) != (rec.resource or None):
         failure = OAuthError("invalid_target", "resource does not match the authorization request")
-    OAuthCodeAdapter.mark_used(db, rec)
-    if failure is not None:
-        raise failure
 
-    user = rec.user
-    if user is None or not user.is_active:
-        raise OAuthError("invalid_grant", "the user who granted this code is no longer active")
-    service = _active_service_for(db, rec.resource)
+    signing_keys.ensure_active_signing_key(db)  # may commit: must happen before the claim below
+    # Check-then-set would let two concurrent redemptions both pass the used_at check above: the claim is one
+    # conditional UPDATE, and it stays uncommitted (holding the row / write lock) until the tokens are recorded,
+    # so the loser waits, finds the code used and revokes the tokens the winner issued -- a replay, as above.
+    if not OAuthCodeAdapter.claim(db, rec.code_hash):
+        _code_replayed(db, rec, client, ip, concurrent=True)
+    try:
+        if failure is not None:
+            raise failure
+        user = rec.user
+        if user is None or not user.is_active:
+            raise OAuthError("invalid_grant", "the user who granted this code is no longer active")
+        service = _active_service_for(db, rec.resource)
+    except OAuthError:
+        OAuthTokenAdapter.commit_grant(db)  # the code stays burned
+        raise
     scope = rec.scope or ""
     access, expires_in, access_rec = issue_access_token(
         db, sub=str(user.id), client_id=client.client_id, scope=scope, audience=rec.resource,
-        service=service, user=user, parent_jti=rec.code_hash,
+        service=service, user=user, parent_jti=rec.code_hash, commit=False,
     )
     refresh = None
     if "refresh_token" in client.grant_type_list():
         refresh, _ = issue_refresh_token(
             db, sub=str(user.id), client_id=client.client_id, scope=scope, audience=rec.resource,
-            service=service, user=user, parent_jti=rec.code_hash,
+            service=service, user=user, parent_jti=rec.code_hash, commit=False,
         )
+    OAuthTokenAdapter.commit_grant(db)
     OAuthClientAdapter.touch(db, client)
     _record_event(db, event="issued", jti=access_rec.jti if access_rec else None, grant_type="authorization_code",
                   client_id=client.client_id, sub=str(user.id), audience=rec.resource, service=service, ip=ip)
@@ -821,7 +871,7 @@ def refresh_token_grant(db: Session, *, client: OAuthClient, refresh_token: str,
     if rec.is_revoked:
         # An already-rotated refresh token was used again -> replay; revoke the whole chain
         if rec.revoke_reason == "rotated":
-            OAuthTokenAdapter.revoke_family(db, rec.parent_jti or rec.jti, reason="refresh_replay")
+            _refresh_replayed(db, rec, client, ip)
         raise OAuthError("invalid_grant", "refresh token revoked")
 
     scope = rec.scope or ""
@@ -835,16 +885,22 @@ def refresh_token_grant(db: Session, *, client: OAuthClient, refresh_token: str,
     if user is None or not user.is_active:
         raise OAuthError("invalid_grant", "the user who granted this token is no longer active")
     service = _active_service_for(db, rec.audience)  # before rotating: a refused refresh keeps the token usable
-    OAuthTokenAdapter.revoke(db, rec, reason="rotated")
     family = rec.parent_jti or rec.jti
+    signing_keys.ensure_active_signing_key(db)  # may commit: must happen before the rotation below
+    # Rotation is one conditional UPDATE, uncommitted until the new tokens are recorded: of two concurrent
+    # refreshes with the same token one rotates it, the other waits, finds it rotated and treats it as a replay.
+    if not OAuthTokenAdapter.rotate(db, rec.jti):
+        _refresh_replayed(db, rec, client, ip, concurrent=True)
+        raise OAuthError("invalid_grant", "refresh token revoked")
     access, expires_in, access_rec = issue_access_token(
         db, sub=rec.sub, client_id=client.client_id, scope=scope, audience=rec.audience,
-        service=service, user=user, parent_jti=family,
+        service=service, user=user, parent_jti=family, commit=False,
     )
     new_refresh, _ = issue_refresh_token(
         db, sub=rec.sub, client_id=client.client_id, scope=scope, audience=rec.audience,
-        service=service, user=user, parent_jti=family,
+        service=service, user=user, parent_jti=family, commit=False,
     )
+    OAuthTokenAdapter.commit_grant(db)
     OAuthClientAdapter.touch(db, client)
     _record_event(db, event="issued", jti=access_rec.jti if access_rec else None, grant_type="refresh_token",
                   client_id=client.client_id, sub=rec.sub, audience=rec.audience, service=service, ip=ip)
@@ -951,6 +1007,7 @@ def revoked_feed(db: Session, *, caller: OAuthClient, since: Optional[float] = N
         raise OAuthError("unauthorized_client",
                          "only a client registered in the console as a server's resource server may read the "
                          "revocation feed", 403)
+    OAuthClientAdapter.mark_feed_polled(db, caller)
     since_dt = None
     if since is not None:
         try:
@@ -967,6 +1024,39 @@ def revoked_feed(db: Session, *, caller: OAuthClient, since: Optional[float] = N
         "revoked": [{"jti": t.jti, "revoked_at": int(t.revoked_at.timestamp()),
                      "exp": int(t.expires_at.timestamp())} for t in rows],
         "now": int(now.timestamp()),
+    }
+
+
+# A resource server that has not polled the feed for this long is reported as stale (verifiers poll every few
+# seconds; MCPGateVerifier's default is 15 s)
+FEED_STALE_AFTER = timedelta(minutes=10)
+
+
+def revocation_feed_status(db: Session, audience: Optional[str]) -> dict:
+    """Does a revocation reach the server with this audience before the token expires? Answers from the resource
+    servers bound to it and when they last read the feed:
+
+    - ``active``: one of them polled within FEED_STALE_AFTER
+    - ``stale``: one polled, but not recently
+    - ``never_polled``: a resource server is bound, but has never read the feed
+    - ``not_wired``: nothing is bound; a server verifying offline accepts revoked tokens until they expire
+      (a server that introspects every token is not affected, but MCP Gate cannot tell)
+    """
+    aud = normalize_audience(audience) if audience else None
+    clients = OAuthClientAdapter.list_resource_servers(db, aud) if aud else []
+    polls = [c.revocation_polled_at for c in clients if c.revocation_polled_at]
+    last = max(polls) if polls else None
+    if last is not None:
+        state = "active" if local_now() - last <= FEED_STALE_AFTER else "stale"
+    else:
+        state = "never_polled" if clients else "not_wired"
+    return {
+        "audience": aud,
+        "state": state,
+        "last_poll": format_datetime(last) if last else None,
+        "stale_after_minutes": int(FEED_STALE_AFTER.total_seconds() // 60),
+        "resource_servers": [{"client_id": c.client_id, "client_name": c.client_name,
+                              "last_poll": format_datetime(c.revocation_polled_at)} for c in clients],
     }
 
 
