@@ -1,6 +1,9 @@
 import { createContext, useContext, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import ConfirmDialog from '../components/ConfirmDialog'
+import { oauthApi } from '../services/api'
+import { formatDateTime } from '../utils/format'
+import { revocationNote } from '../utils/revocation'
 
 const ConfirmContext = createContext()
 
@@ -67,16 +70,28 @@ export function ConfirmProvider({ children }) {
     })
   }, [confirm, t])
 
-  const confirmRevoke = useCallback((itemName) => {
+  const confirmRevoke = useCallback((itemName, note = null) => {
     const item = itemName || t('confirm.tokenDefault')
+    const message = t('confirm.revokeMessage', { item })
     return confirm({
       title: t('confirm.revokeTitle'),
-      message: t('confirm.revokeMessage', { item }),
+      message: note ? `${message}\n\n${note}` : message,
       confirmText: t('confirm.revoke'),
       cancelText: t('confirm.cancel'),
       type: 'revoke',
     })
   }, [confirm, t])
+
+  // Revoking an issued token: the dialog also says whether the token's server hears about it before the token
+  // expires (it only does when it polls the revocation feed). A status that cannot be loaded adds nothing.
+  const confirmTokenRevoke = useCallback(async (tk) => {
+    let status = null
+    if (tk.audience && tk.kind !== 'refresh') {
+      status = await oauthApi.revocationFeed.forAudience(tk.audience).catch(() => null)
+    }
+    const label = tk.label ? `"${tk.label}"` : `${tk.kind} ${tk.jti.slice(0, 8)}…`
+    return confirmRevoke(label, revocationNote(t, status, tk, (v) => (v ? formatDateTime(v) : '—')))
+  }, [confirmRevoke, t])
 
   // itemType may be an i18n key path passed by the caller (e.g. 'tokens.common.tokenLabel')
   // or an already-translated string (like "Token" or "Service")
@@ -114,7 +129,7 @@ export function ConfirmProvider({ children }) {
   }, [state])
 
   return (
-    <ConfirmContext.Provider value={{ confirm, confirmDelete, confirmRevoke, confirmBatchDelete, confirmDeleteJWT }}>
+    <ConfirmContext.Provider value={{ confirm, confirmDelete, confirmRevoke, confirmTokenRevoke, confirmBatchDelete, confirmDeleteJWT }}>
       {children}
       <ConfirmDialog
         isOpen={state.isOpen}

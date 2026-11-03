@@ -386,6 +386,16 @@ export const oauthApi = {
     },
   },
 
+  /** Does a revocation reach a server before the token expires (its resource servers' feed polls) */
+  revocationFeed: {
+    async forService(serviceId) {
+      return request(`/api/oauth/services/${encodeURIComponent(serviceId)}/revocation-feed`)
+    },
+    async forAudience(audience) {
+      return request(`/api/oauth/revocation-feed${qs({ audience })}`)
+    },
+  },
+
   consents: {
     async list() {
       return request('/api/oauth/consents')

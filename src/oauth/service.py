@@ -1007,6 +1007,7 @@ def revoked_feed(db: Session, *, caller: OAuthClient, since: Optional[float] = N
         raise OAuthError("unauthorized_client",
                          "only a client registered in the console as a server's resource server may read the "
                          "revocation feed", 403)
+    OAuthClientAdapter.mark_feed_polled(db, caller)
     since_dt = None
     if since is not None:
         try:
@@ -1023,6 +1024,39 @@ def revoked_feed(db: Session, *, caller: OAuthClient, since: Optional[float] = N
         "revoked": [{"jti": t.jti, "revoked_at": int(t.revoked_at.timestamp()),
                      "exp": int(t.expires_at.timestamp())} for t in rows],
         "now": int(now.timestamp()),
+    }
+
+
+# A resource server that has not polled the feed for this long is reported as stale (verifiers poll every few
+# seconds; MCPGateVerifier's default is 15 s)
+FEED_STALE_AFTER = timedelta(minutes=10)
+
+
+def revocation_feed_status(db: Session, audience: Optional[str]) -> dict:
+    """Does a revocation reach the server with this audience before the token expires? Answers from the resource
+    servers bound to it and when they last read the feed:
+
+    - ``active``: one of them polled within FEED_STALE_AFTER
+    - ``stale``: one polled, but not recently
+    - ``never_polled``: a resource server is bound, but has never read the feed
+    - ``not_wired``: nothing is bound; a server verifying offline accepts revoked tokens until they expire
+      (a server that introspects every token is not affected, but MCP Gate cannot tell)
+    """
+    aud = normalize_audience(audience) if audience else None
+    clients = OAuthClientAdapter.list_resource_servers(db, aud) if aud else []
+    polls = [c.revocation_polled_at for c in clients if c.revocation_polled_at]
+    last = max(polls) if polls else None
+    if last is not None:
+        state = "active" if local_now() - last <= FEED_STALE_AFTER else "stale"
+    else:
+        state = "never_polled" if clients else "not_wired"
+    return {
+        "audience": aud,
+        "state": state,
+        "last_poll": format_datetime(last) if last else None,
+        "stale_after_minutes": int(FEED_STALE_AFTER.total_seconds() // 60),
+        "resource_servers": [{"client_id": c.client_id, "client_name": c.client_name,
+                              "last_poll": format_datetime(c.revocation_polled_at)} for c in clients],
     }
 
 

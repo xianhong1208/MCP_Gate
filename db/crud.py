@@ -612,6 +612,23 @@ class OAuthClientCRUD:
         db.commit()
 
     @staticmethod
+    def mark_feed_polled(db: Session, client: OAuthClient, min_interval: timedelta = timedelta(seconds=30)) -> None:
+        """Record a revocation-feed poll. Verifiers poll every few seconds: write at most once per
+        ``min_interval``."""
+        now = local_now()
+        if client.revocation_polled_at is None or now - client.revocation_polled_at >= min_interval:
+            client.revocation_polled_at = now
+            db.commit()
+
+    @staticmethod
+    def list_resource_servers(db: Session, audience: str) -> List[OAuthClient]:
+        """Active console-registered confidential clients bound to ``audience`` as its resource server."""
+        return db.query(OAuthClient).filter(
+            OAuthClient.resource_audience == audience, OAuthClient.is_active.is_(True),
+            OAuthClient.created_via == "manual", OAuthClient.token_endpoint_auth_method != "none",
+        ).order_by(OAuthClient.created_at).all()
+
+    @staticmethod
     def delete_unused_dcr(db: Session, older_than: timedelta) -> int:
         """Delete dynamically registered clients that never obtained a token (no last use, no token record) and
         were registered before ``older_than`` ago. Their pending requests, codes and consents go with them."""
