@@ -13,6 +13,12 @@ from sqlalchemy import desc
 from fastapi import Request
 
 from db.models import AuditLog, local_now
+from src.logging import get_logger
+from src.utils.client_ip import resolve_client_ip
+from src.utils.field_limits import clip
+
+
+logger = get_logger("audit")
 
 
 class AuditAction(str, Enum):
@@ -26,10 +32,16 @@ class AuditAction(str, Enum):
     OAUTH_CLIENT_APPROVE = "oauth_client_approve"
     OAUTH_CLIENT_REVOKE = "oauth_client_revoke"
     OAUTH_CLIENT_DELETE = "oauth_client_delete"
+    OAUTH_CLIENT_BIND = "oauth_client_bind"
     OAUTH_CONSENT_DELETE = "oauth_consent_delete"
     OAUTH_SCOPE_UPSERT = "oauth_scope_upsert"
     OAUTH_SCOPE_DELETE = "oauth_scope_delete"
     OAUTH_KEY_ROTATE = "oauth_key_rotate"
+    OAUTH_CONSENT_APPROVE = "oauth_consent_approve"
+    OAUTH_CONSENT_DENY = "oauth_consent_deny"
+    OAUTH_CODE_REPLAY = "oauth_code_replay"
+    OAUTH_REFRESH_REPLAY = "oauth_refresh_replay"
+    OAUTH_CLIENT_AUTH_FAILED = "oauth_client_auth_failed"
 
     # Service operations
     CREATE_SERVICE = "create_service"
@@ -93,8 +105,12 @@ class AuditService:
         error_message: Optional[str] = None,
         details: Optional[Dict[str, Any]] = None,
     ) -> AuditLog:
-        """Record an audit log entry"""
-        audit_log = AuditLog(
+        """Record an audit log entry.
+
+        Several fields carry what a caller sent (the email of a failed login, a User-Agent, a path), so every
+        bounded column is clipped to fit: an audit write must never fail the request it records.
+        """
+        fields = dict(
             action=action,
             resource_type=resource_type,
             resource_id=resource_id,
@@ -108,8 +124,12 @@ class AuditService:
             status=status,
             status_code=status_code,
             error_message=error_message,
-            details=json.dumps(details) if details else None,
         )
+        for name, value in fields.items():
+            limit = getattr(AuditLog.__table__.c[name].type, "length", None)
+            if limit and isinstance(value, str):
+                fields[name] = clip(value, limit)
+        audit_log = AuditLog(**fields, details=json.dumps(details) if details else None)
         db.add(audit_log)
         db.commit()
         db.refresh(audit_log)
@@ -131,17 +151,9 @@ class AuditService:
         details: Optional[Dict[str, Any]] = None,
     ) -> AuditLog:
         """Record an audit log entry from a Request object"""
-        # Get the client IP
-        ip_address = None
-        forwarded = request.headers.get("X-Forwarded-For")
-        if forwarded:
-            ip_address = forwarded.split(",")[0].strip()
-        else:
-            real_ip = request.headers.get("X-Real-IP")
-            if real_ip:
-                ip_address = real_ip
-            elif request.client:
-                ip_address = request.client.host
+        # Forwarded headers count only when the direct peer is a trusted proxy (src.utils.client_ip):
+        # otherwise anyone could write an arbitrary address into the audit trail.
+        ip_address = resolve_client_ip(request)
 
         return AuditService.log(
             db=db,
@@ -261,3 +273,43 @@ class AuditService:
         deleted = db.query(AuditLog).filter(AuditLog.created_at < cutoff_date).delete()
         db.commit()
         return deleted
+
+
+def record_oauth_event(db: Session, action: str, *, status: str = AuditStatus.SUCCESS,
+                       resource_type: str = ResourceType.OAUTH_CLIENT, client_id: Optional[str] = None,
+                       client_name: Optional[str] = None, ip_address: Optional[str] = None,
+                       request_path: Optional[str] = None, error_message: Optional[str] = None,
+                       details: Optional[Dict[str, Any]] = None) -> None:
+    """Audit an event of the OAuth protocol surface, whose actor is a client (not a console user).
+
+    Never raises: it runs next to protocol responses (often an error response that is already decided), and a
+    failed audit write must not change what the client gets."""
+    try:
+        AuditService.log(
+            db=db, action=action, resource_type=resource_type, status=status, resource_id=client_id,
+            actor_type=ActorType.API, actor_id=client_id, actor_name=client_name, ip_address=ip_address,
+            request_path=request_path, request_method="POST" if request_path else None,
+            error_message=error_message, details=details,
+        )
+    except Exception as e:  # pragma: no cover - defensive
+        db.rollback()
+        logger.error(f"Failed to audit {action}: {e}")
+
+
+def record_scheduled_purge(db: Session, target: str, deleted: int, details: Optional[Dict[str, Any]] = None) -> None:
+    """Audit one scheduled purge run (system actor). No-op when nothing was deleted.
+
+    Never raises: the purge itself has already been committed, and a failure to audit it must not make the
+    scheduler report the run as failed.
+    """
+    if not deleted:
+        return
+    try:
+        AuditService.log(
+            db=db, action=AuditAction.CLEANUP_EXPIRED, resource_type=ResourceType.SYSTEM,
+            status=AuditStatus.SUCCESS, resource_id=target, actor_type=ActorType.SYSTEM, actor_name="scheduler",
+            details={"target": target, "deleted": deleted, **(details or {})},
+        )
+    except Exception as e:  # pragma: no cover - defensive
+        db.rollback()
+        logger.error(f"Failed to audit scheduled purge of {target}: {e}")

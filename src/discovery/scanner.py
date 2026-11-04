@@ -16,6 +16,8 @@ from typing import List, Optional, Dict, Any, Callable
 
 import aiohttp
 
+from src.utils.mcp_target import InvalidTargetError, build_mcp_url
+
 logger = logging.getLogger(__name__)
 
 
@@ -61,8 +63,9 @@ class DiscoveredService:
     def requires_auth(self) -> bool:
         """Determine whether the service requires authentication.
 
-        If the verification result shows "(requires auth)" or a 401 error, authentication is required.
-        If tools were fetched successfully (without an auth_token), authentication is not required.
+        Decided by the verification result alone: a 401 / Bearer challenge (or the "(requires auth)"
+        placeholder) means auth is required; a successful initialize without one means it is not -- even
+        when the server exposes no tools.
         """
         if self.verify_result:
             if self.verify_result.requires_auth:
@@ -70,10 +73,10 @@ class DiscoveredService:
             # server_name == "(requires auth)" means the service returned 401
             if self.verify_result.server_name == "(requires auth)":
                 return True
-            # Tools were fetched successfully without an auth_token, so no authentication is needed
-            if self.tools:
+            # initialize succeeded without a challenge, so no authentication is needed
+            if self.verify_result.success:
                 return False
-        # Default to requiring authentication (the safer assumption)
+        # Nothing verified: default to requiring authentication (the safer assumption)
         return True
 
 
@@ -81,7 +84,33 @@ class ScannerSSRFError(Exception):
     """Connection target address rejected by SSRF protection"""
 
 
-# audience (the peer's MCP URL) -> short-lived bearer token, or None when MCP Center cannot mint one
+class ScannerResolveError(ScannerSSRFError):
+    """The target host did not resolve to any usable address. The scanner refuses it rather than letting the
+    HTTP client resolve the name again at connect time, which would bypass the address check."""
+
+
+# Cloud metadata endpoints the generic range checks below do not catch: AWS IMDS over IPv6 sits in the
+# unique-local range (fd00::/8, otherwise allowed as an intranet address) and Alibaba Cloud's sits in the
+# carrier-grade NAT range 100.64.0.0/10. 169.254.169.254 is already covered by the link-local check.
+_BLOCKED_METADATA_ADDRESSES = {"fd00:ec2::254", "100.100.100.200"}
+
+
+class ToolsListError(Exception):
+    """tools/list could not be completed (HTTP error, transport failure or malformed reply).
+
+    Raised instead of returning an empty list so callers never mistake a failed fetch for a server
+    that has no tools (which would wipe the stored tool list).
+    """
+
+
+def _jsonrpc_error_text(data: Any) -> str:
+    """Short reason for a JSON-RPC reply that carries no usable result."""
+    if isinstance(data, dict) and isinstance(data.get("error"), dict):
+        return str(data["error"].get("message") or data["error"])
+    return "empty response" if not data else "malformed response"
+
+
+# audience (the peer's MCP URL) -> short-lived bearer token, or None when MCP Gate cannot mint one
 TokenFactory = Callable[[str], Optional[str]]
 
 
@@ -125,26 +154,27 @@ def _is_bearer_challenge(www_authenticate: Optional[str]) -> bool:
     return bool(www_authenticate) and www_authenticate.strip().lower().startswith("bearer")
 
 
-def _resolve_validated_ip(host: str) -> Optional[str]:
+def _resolve_validated_ip(host: str) -> str:
     """SSRF protection: resolve the host, validate every IP, and return a single IP that is safe to connect to.
 
     Rejects link-local (including the cloud metadata address 169.254.169.254), multicast, reserved and
-    unspecified (0.0.0.0) addresses; allows loopback / private addresses (scanning local managed services
-    and intranet MCP services is a legitimate use case).
+    unspecified (0.0.0.0) addresses plus the metadata addresses in _BLOCKED_METADATA_ADDRESSES; allows
+    loopback / private addresses (scanning local managed services and intranet MCP services is a legitimate
+    use case).
 
     Key point: the *validated* IP is returned so the caller can pin the connection to it, avoiding DNS
     rebinding between "resolve at validation time" and "resolve again at connect time" (first answer is a
     benign IP that passes the check, second answer is the metadata IP). If the host is already an IP
-    literal it is validated and returned directly. Resolution failure returns None (left to the connection
-    phase's timeout/error handling rather than being rejected here). Addresses security audit item AUDIT-1
-    (SSRF).
+    literal it is validated and returned directly. Resolution failure raises ScannerResolveError (fail
+    closed): handing the bare hostname to the HTTP client would let it resolve the name again, unchecked.
+    Addresses security audit item AUDIT-1 (SSRF) and #33.
     """
     import ipaddress as _ip
     import socket as _sock
     try:
         infos = _sock.getaddrinfo(host, None)
-    except _sock.gaierror:
-        return None
+    except (_sock.gaierror, UnicodeError) as e:
+        raise ScannerResolveError(f"Host {host} could not be resolved ({e}); refusing to connect")
     validated = None
     for info in infos:
         addr = info[4][0].split('%')[0]  # Strip the IPv6 scope id
@@ -160,19 +190,17 @@ def _resolve_validated_ip(host: str) -> Optional[str]:
             if validated is None:
                 validated = addr
             continue
-        if ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified:
+        if (ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified
+                or str(ip) in _BLOCKED_METADATA_ADDRESSES):
             raise ScannerSSRFError(
                 f"Refusing to connect to disallowed address {addr} "
                 f"(link-local / cloud-metadata / reserved addresses are blocked)"
             )
         if validated is None:
             validated = addr
+    if validated is None:
+        raise ScannerResolveError(f"Host {host} did not resolve to a usable address; refusing to connect")
     return validated
-
-
-def _url_host(host: str) -> str:
-    """Host form for building URLs: IPv6 addresses need square brackets."""
-    return f"[{host}]" if ":" in host else host
 
 
 class MCPScanner:
@@ -217,8 +245,12 @@ class MCPScanner:
             List of open ports
         """
         # SSRF protection (AUDIT-1): resolve and validate once, then pin the connection to that IP
-        # (prevents DNS rebinding)
-        connect_host = _resolve_validated_ip(host) or host
+        # (prevents DNS rebinding). An unresolvable host has no open ports; a disallowed address still raises.
+        try:
+            connect_host = _resolve_validated_ip(host)
+        except ScannerResolveError as e:
+            logger.warning(f"Port scan skipped: {e}")
+            return []
         tasks = [self._check_port(connect_host, port) for port in ports]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -299,15 +331,25 @@ class MCPScanner:
 
         Uses a JSON-RPC initialize request to check whether the service is a valid MCP service.
         When the peer answers 401 with a Bearer challenge and `token_factory` is given, a token for the
-        peer's MCP URL is minted (MCP Center is the authorization server) and the probe is retried once,
-        so servers protected by MCP Center still report their real name, version and tools.
+        peer's MCP URL is minted (MCP Gate is the authorization server) and the probe is retried once,
+        so servers protected by MCP Gate still report their real name, version and tools.
         """
-        public_url = f"{protocol}://{_url_host(host)}:{port}{path}"
-        # SSRF protection (AUDIT-1): resolve and validate once, pin the connection to that IP (prevents
-        # DNS rebinding), and keep the original Host header so vhost routing is unaffected.
-        connect_host = _resolve_validated_ip(host) or host
-        url = f"{protocol}://{_url_host(connect_host)}:{port}{path}"
         start_time = time.time()
+        # Protocol, host and path come from the operator: an '@' in the path or a URL in the protocol
+        # would move the authority away from the pinned IP below, so they are validated before anything
+        # is resolved or contacted (a stored service that fails here is reported, never connected to).
+        try:
+            public_url = build_mcp_url(protocol, host, port, path)
+        except InvalidTargetError as e:
+            return MCPVerifyResult(success=False, error=str(e), response_time_ms=(time.time() - start_time) * 1000)
+        # SSRF protection (AUDIT-1): resolve and validate once, pin the connection to that IP (prevents
+        # DNS rebinding), and keep the original Host header so vhost routing is unaffected. A host that does
+        # not resolve, or resolves to a blocked address, is reported as a failed check and never contacted.
+        try:
+            connect_host = _resolve_validated_ip(host)
+        except ScannerSSRFError as e:
+            return MCPVerifyResult(success=False, error=str(e), response_time_ms=(time.time() - start_time) * 1000)
+        url = build_mcp_url(protocol, connect_host, port, path)
 
         headers = {
             "Content-Type": "application/json",
@@ -326,7 +368,7 @@ class MCPScanner:
                 "protocolVersion": "2024-11-05",
                 "capabilities": {},
                 "clientInfo": {
-                    "name": "mcp-center-scanner",
+                    "name": "mcp-gate-scanner",
                     "version": "1.0.0"
                 }
             }
@@ -340,7 +382,10 @@ class MCPScanner:
                     json=payload,
                     headers=headers,
                     timeout=timeout,
-                    ssl=False
+                    ssl=False,
+                    # A redirect hands the peer control over where we connect next (e.g. a 307 to
+                    # http://169.254.169.254/), bypassing the address check above: never follow one.
+                    allow_redirects=False,
                 ) as response:
                     elapsed_ms = (time.time() - start_time) * 1000
                     logger.info(f"MCP verify response: status={response.status}, content-type={response.headers.get('Content-Type', 'N/A')}")
@@ -366,7 +411,7 @@ class MCPScanner:
                                 error="HTTP 401 (not MCP - no Bearer challenge or JSON-RPC response)",
                                 response_time_ms=elapsed_ms,
                             )
-                        # MCP Center is the authorization server: mint a token for this URL and look inside
+                        # MCP Gate is the authorization server: mint a token for this URL and look inside
                         if token_factory is not None and not auth_token:
                             minted = token_factory(public_url)
                             if minted:
@@ -472,11 +517,18 @@ class MCPScanner:
         protocol: str = "http",
         auth_token: Optional[str] = None
     ) -> List[MCPToolInfo]:
-        """Get the tool list of an MCP service (three-step flow: initialize -> initialized -> tools/list)."""
+        """Get the tool list of an MCP service (three-step flow: initialize -> initialized -> tools/list).
+
+        Returns [] only when the server answered a valid tools/list with an empty `tools` array.
+        Raises PermissionError on 401, InvalidTargetError for an unacceptable protocol / host / path,
+        and ToolsListError on any other failure.
+        """
+        build_mcp_url(protocol, host, port, path)  # reject a bad target before resolving anything
         # SSRF protection (AUDIT-1): resolve and validate once, pin the connection to that IP (prevents
-        # DNS rebinding), and keep the original Host header so vhost routing is unaffected.
-        connect_host = _resolve_validated_ip(host) or host
-        url = f"{protocol}://{_url_host(connect_host)}:{port}{path}"
+        # DNS rebinding), and keep the original Host header so vhost routing is unaffected. ScannerSSRFError
+        # (blocked address or unresolvable host) propagates so the caller can say why.
+        connect_host = _resolve_validated_ip(host)
+        url = build_mcp_url(protocol, connect_host, port, path)
 
         headers = {
             "Content-Type": "application/json",
@@ -498,24 +550,27 @@ class MCPScanner:
                     "params": {
                         "protocolVersion": "2024-11-05",
                         "capabilities": {},
-                        "clientInfo": {"name": "mcp-center-scanner", "version": "1.0.0"}
+                        "clientInfo": {"name": "mcp-gate-scanner", "version": "1.0.0"}
                     }
                 }
 
                 async with session.post(
-                    url, json=init_request, headers=headers, timeout=timeout, ssl=False
+                    url, json=init_request, headers=headers, timeout=timeout, ssl=False,
+                    allow_redirects=False,  # never follow a redirect (see verify_mcp_service)
                 ) as init_response:
                     if init_response.status == 401:
                         raise PermissionError("Service requires authentication. Please configure auth_token for this service.")
                     if init_response.status != 200:
-                        return []
+                        raise ToolsListError(f"initialize failed: HTTP {init_response.status}")
 
                     # Get the session ID (Streamable HTTP carries the session in this header)
                     session_id = init_response.headers.get("mcp-session-id")
 
                     # Read the initialize response. SSE must be read incrementally: a plain read() waits
                     # for the stream to end and hangs forever (see the notes on _read_sse_message).
-                    await self._read_jsonrpc(init_response)
+                    init_data = await self._read_jsonrpc(init_response)
+                    if not isinstance(init_data, dict) or "result" not in init_data:
+                        raise ToolsListError(f"initialize failed: {_jsonrpc_error_text(init_data)}")
 
                 # Step 2: Send the initialized notification
                 initialized_notification = {
@@ -529,7 +584,8 @@ class MCPScanner:
                     notify_headers["mcp-session-id"] = session_id
 
                 async with session.post(
-                    url, json=initialized_notification, headers=notify_headers, timeout=timeout, ssl=False
+                    url, json=initialized_notification, headers=notify_headers, timeout=timeout, ssl=False,
+                    allow_redirects=False,
                 ) as notify_response:
                     # Consume the response body (even though it is not needed, read it to avoid connection issues)
                     await notify_response.read()
@@ -547,30 +603,35 @@ class MCPScanner:
                     tools_headers["mcp-session-id"] = session_id
 
                 async with session.post(
-                    url, json=tools_request, headers=tools_headers, timeout=timeout, ssl=False
+                    url, json=tools_request, headers=tools_headers, timeout=timeout, ssl=False,
+                    allow_redirects=False,
                 ) as response:
                     if response.status == 401:
                         raise PermissionError("Service requires authentication. Please configure auth_token for this service.")
 
-                    if response.status == 200:
-                        data = await self._read_jsonrpc(response)
+                    if response.status != 200:
+                        raise ToolsListError(f"tools/list failed: HTTP {response.status}")
 
-                        if data and "result" in data and "tools" in data["result"]:
-                            return [
-                                MCPToolInfo(
-                                    name=t.get("name", ""),
-                                    description=t.get("description"),
-                                    input_schema=t.get("inputSchema")
-                                )
-                                for t in data["result"]["tools"]
-                            ]
+                    data = await self._read_jsonrpc(response)
+                    result = data.get("result") if isinstance(data, dict) else None
+                    tools = result.get("tools") if isinstance(result, dict) else None
+                    if not isinstance(tools, list) or not all(isinstance(t, dict) for t in tools):
+                        raise ToolsListError(f"tools/list failed: {_jsonrpc_error_text(data)}")
+                    return [
+                        MCPToolInfo(
+                            name=t.get("name", ""),
+                            description=t.get("description"),
+                            input_schema=t.get("inputSchema")
+                        )
+                        for t in tools
+                    ]
 
-        except PermissionError:
+        except (PermissionError, ToolsListError):
             raise
+        except asyncio.TimeoutError as e:
+            raise ToolsListError("tools/list failed: connection timeout") from e
         except Exception as e:
-            logger.error(f"Get tools list error: {e}")
-
-        return []
+            raise ToolsListError(f"tools/list failed: {e}") from e
 
     async def discover_services(
         self,
@@ -580,6 +641,7 @@ class MCPScanner:
         get_tools: bool = True,
         auth_token: Optional[str] = None,
         token_factory: Optional[TokenFactory] = None,
+        host_errors: Optional[List[dict]] = None,
     ) -> List[DiscoveredService]:
         """Discover MCP services.
 
@@ -589,8 +651,10 @@ class MCPScanner:
             verify: Whether to verify MCP services
             get_tools: Whether to fetch the tool list
             auth_token: Bearer token (optional, for MCP services that require authentication)
-            token_factory: Mints a token for a peer's MCP URL so servers protected by MCP Center itself
+            token_factory: Mints a token for a peer's MCP URL so servers protected by MCP Gate itself
                 can be inspected without the caller supplying a token
+            host_errors: When given, a host that may not be scanned (it resolves to a blocked address) is
+                appended here as {host, error, params, fallback} and the scan goes on with the other hosts
 
         Returns:
             List of DiscoveredService
@@ -598,8 +662,18 @@ class MCPScanner:
         discovered = []
 
         for host in hosts:
-            # Scan for open ports
-            open_ports = await self.scan_ports(host, ports)
+            # Scan for open ports. A blocked host (link-local / metadata address) is skipped, not fatal:
+            # one bad entry must not fail the scan of every other host (#16).
+            try:
+                open_ports = await self.scan_ports(host, ports)
+            except ScannerSSRFError as e:
+                logger.warning(f"Scan of {host} skipped: {e}")
+                if host_errors is not None:
+                    host_errors.append({
+                        "host": host, "error": "discovery.address_blocked", "params": {"host": host},
+                        "fallback": f"{host} resolves to a blocked address (link-local or cloud metadata); skipped.",
+                    })
+                continue
             logger.info(f"Found {len(open_ports)} open ports on {host}: {open_ports}")
 
             # Verify each open port
@@ -635,6 +709,9 @@ class MCPScanner:
                         except PermissionError:
                             # Service requires authentication; skip fetching tools
                             pass
+                        except ToolsListError as e:
+                            # Verified but tools/list failed: keep the service, without tools
+                            logger.warning(f"Tools not fetched from {host}:{port}: {e}")
 
                 # Only add services that verified successfully, or all services when not verifying
                 if not verify or (service.verify_result and service.verify_result.success):

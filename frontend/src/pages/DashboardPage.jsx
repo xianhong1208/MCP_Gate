@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import clsx from 'clsx'
 import { useTranslation } from 'react-i18next'
 import {
-  Key, Activity, Plus, Server, BarChart3, Clock, Bot, Search, ShieldX, ArrowUpRight, Globe,
+  Key, Activity, Plus, Server, BarChart3, Clock, Bot, Search, ShieldX, ShieldAlert, ArrowUpRight, Globe,
 } from 'lucide-react'
 import { XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Line, LineChart } from 'recharts'
 import { servicesApi, statsApi, systemApi, oauthApi } from '../services/api'
@@ -367,10 +367,32 @@ export default function DashboardPage() {
                   {t('dashboard.issuerMismatch.seen', { n: m.count })}
                   {m.last_seen && <> · <LastChecked value={m.last_seen} withIcon={false} className="text-xs" /></>}
                 </span>
+                {m.plausible === false && (
+                  <span className="text-xs text-muted-foreground">{t('dashboard.issuerMismatch.untrusted')}</span>
+                )}
               </li>
             ))}
           </ul>
           <p className="mt-1.5">{t('dashboard.issuerMismatch.fix')}</p>
+        </Alert>
+      )}
+
+      {/* Weak SESSION_SECRET_KEY / ENCRYPTION_KEY (see src/utils/secret_policy.py) */}
+      {!isLoading && oauthOverview?.weak_secrets?.length > 0 && (
+        <Alert tone="danger" icon={ShieldAlert} title={t('dashboard.weakSecrets.title')}>
+          <ul className="space-y-0.5">
+            {oauthOverview.weak_secrets.map((w) => (
+              <li key={w.name} className="flex flex-wrap items-baseline gap-x-2">
+                <code className="font-mono text-xs text-foreground">{w.name}</code>
+                <span className="text-xs">
+                  {w.reason === 'placeholder' ? t('dashboard.weakSecrets.reasonPlaceholder')
+                    : w.reason === 'low_variety' ? t('dashboard.weakSecrets.reasonLowVariety')
+                      : t('dashboard.weakSecrets.reasonTooShort')}
+                </span>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-1.5">{t('dashboard.weakSecrets.fix')}</p>
         </Alert>
       )}
 

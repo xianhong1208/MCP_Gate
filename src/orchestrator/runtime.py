@@ -4,7 +4,7 @@ The Orchestrator owns everything that is the same however a server runs: port al
 spec, argv-policy validation, waiting for the port, service registration and DB state. A ``Runtime``
 owns only how an instance is started, stopped, found and read: ``DockerRuntime`` runs it as a container,
 ``ProcessRuntime`` as a local subprocess. Both expose the stdio bridge (supergateway) on the same
-Streamable-HTTP path so the rest of MCP Center cannot tell them apart.
+Streamable-HTTP path so the rest of MCP Gate cannot tell them apart.
 """
 
 from __future__ import annotations
@@ -21,6 +21,13 @@ SUPERGATEWAY_BIN = os.environ.get("MCP_SUPERGATEWAY_BIN", "supergateway")
 ProgressFn = Callable[[str, Optional[str]], None]
 
 
+class RuntimeUnavailableError(Exception):
+    """The runtime itself cannot be reached or used right now (Docker daemon down, supergateway missing).
+
+    Distinct from "this instance failed": callers turn it into 503 rather than 500, and nothing about the
+    instance's state can be concluded from it."""
+
+
 @dataclass
 class LaunchRequest:
     """Everything a runtime needs to start one managed server. All argv fields have already passed the
@@ -32,24 +39,28 @@ class LaunchRequest:
     entrypoint_args: List[str]      # http: validated container command (may be empty)
     stdio_command: List[str]        # stdio: validated inner command + args
     env: Dict[str, str]             # decrypted env vars for the server
-    host_port: int                  # where MCP Center and clients reach it on 127.0.0.1
+    host_port: int                  # where MCP Gate and clients reach it on 127.0.0.1
     container_port: int             # where the server listens inside a container
     restart_on_failure: bool = False
     labels: Dict[str, str] = field(default_factory=dict)
 
 
-def bridge_argv(inner_command: List[str], port: int) -> List[str]:
+def bridge_argv(inner_command: List[str], port: int, host: Optional[str] = None) -> List[str]:
     """supergateway argv bridging a stdio MCP server to Streamable HTTP on ``port``.
 
     --outputTransport streamableHttp (not legacy SSE) and --stateful are what this project's scanner and
-    health check need; see the Docker runtime for the history."""
-    return [
+    health check need; see the Docker runtime for the history. ``host`` adds ``--host`` (supergateway >= 4.2.0;
+    older versions ignore the unknown flag and listen on every interface, so the process runtime also pins
+    the bind another way). Inside a container the default (all interfaces) is what the port mapping needs."""
+    argv = [
         SUPERGATEWAY_BIN, "--stdio", " ".join(inner_command),
         "--outputTransport", "streamableHttp",
         "--stateful",
         "--streamableHttpPath", STDIO_HTTP_PATH,
-        "--port", str(port),
     ]
+    if host:
+        argv += ["--host", host]
+    return argv + ["--port", str(port)]
 
 
 class Runtime(ABC):
@@ -75,11 +86,13 @@ class Runtime(ABC):
 
     @abstractmethod
     def stop(self, name: str) -> None:
-        """Stop the instance gracefully; missing instances are ignored."""
+        """Stop the instance gracefully. A missing / already stopped instance is success; any other failure
+        raises, because the instance may still be running."""
 
     @abstractmethod
     def remove(self, name: str) -> None:
-        """Remove whatever is left of the instance (container, pid file); missing is ignored."""
+        """Remove whatever is left of the instance (container, pid file). Missing is success; any other failure
+        raises."""
 
     @abstractmethod
     def instance_id(self, name: str, running_only: bool = False) -> Optional[str]:

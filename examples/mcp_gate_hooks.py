@@ -1,7 +1,7 @@
-"""MCPCenterVerifier: FastMCP's JWTVerifier plus MCP Center's revocation feed and usage reports.
+"""MCPGateVerifier: FastMCP's JWTVerifier plus MCP Gate's revocation feed and usage reports.
 
 A plain ``JWTVerifier`` checks tokens offline against the JWKS, which is fast but has two gaps: a token the
-owner revoked keeps working until it expires, and MCP Center never learns that the token was used. This
+owner revoked keeps working until it expires, and MCP Gate never learns that the token was used. This
 verifier closes both without introspecting every request:
 
 * every ``poll_interval`` seconds it fetches ``POST <issuer>/oauth/revoked`` (revoked, not yet expired
@@ -9,23 +9,25 @@ verifier closes both without introspecting every request:
 * every ``flush_interval`` seconds it reports how often each jti was verified to
   ``POST <issuer>/oauth/usage``, which feeds the token's "last used" and the dashboard statistics.
 
-Both endpoints require a *confidential* client registered in the MCP Center console (OAuth Clients ->
-Register trusted client). Give the verifier either that client's secret or, for ``private_key_jwt``
+Both endpoints require a *confidential* client registered in the MCP Gate console (OAuth Clients ->
+Register trusted client) and bound to this server as its resource server (``resource_service_id`` when
+registering it, or ``PUT /api/oauth/clients/{client_id}/resource-server``); the feed and usage reports then
+cover only tokens whose audience is this server. Give the verifier either that client's secret or, for ``private_key_jwt``
 clients, the private key PEM and its kid.
 
 Usage::
 
     from fastmcp.server.auth import RemoteAuthProvider
-    from mcp_center_hooks import MCPCenterVerifier
+    from mcp_gate_hooks import MCPGateVerifier
 
     auth = RemoteAuthProvider(
-        token_verifier=MCPCenterVerifier(
+        token_verifier=MCPGateVerifier(
             jwks_uri="https://auth.example.com/.well-known/jwks.json",
             issuer="https://auth.example.com",
             audience="https://mcp.example.com/mcp",
             client_id="mcpc_...", client_secret="...",
         ),
-        authorization_servers=[AnyHttpUrl("https://auth.example.com")],
+        authorization_servers=["https://auth.example.com"],
         base_url="https://mcp.example.com",
     )
 
@@ -46,10 +48,10 @@ import httpx
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 
 ASSERTION_TYPE = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
-logger = logging.getLogger("mcp_center_hooks")
+logger = logging.getLogger("mcp_gate_hooks")
 
 
-class MCPCenterVerifier(JWTVerifier):
+class MCPGateVerifier(JWTVerifier):
     def __init__(
         self,
         *,
@@ -64,9 +66,9 @@ class MCPCenterVerifier(JWTVerifier):
         **jwt_verifier_kwargs: Any,
     ):
         if not client_secret and not private_key_pem:
-            raise ValueError("MCPCenterVerifier needs client_secret or private_key_pem")
+            raise ValueError("MCPGateVerifier needs client_secret or private_key_pem")
         if not jwt_verifier_kwargs.get("issuer") or isinstance(jwt_verifier_kwargs["issuer"], list):
-            raise ValueError("MCPCenterVerifier needs a single issuer (the MCP Center URL)")
+            raise ValueError("MCPGateVerifier needs a single issuer (the MCP Gate URL)")
         super().__init__(http_client=http_client, **jwt_verifier_kwargs)
         self.center = str(jwt_verifier_kwargs["issuer"]).rstrip("/")
         self.client_id = client_id
@@ -88,6 +90,11 @@ class MCPCenterVerifier(JWTVerifier):
         self._ensure_running()
         result = await super().verify_token(token)
         if result is None:
+            return None
+        if (result.claims or {}).get("token_use") != "access":
+            # Only access tokens authorize requests. MCP Gate's refresh tokens name its token endpoint as their
+            # audience, but refresh tokens from releases before 1.2 carried this server's audience.
+            logger.info("Bearer token rejected for client %s: not an access token", result.client_id)
             return None
         jti = (result.claims or {}).get("jti")
         if jti and jti in self._revoked:
@@ -120,7 +127,7 @@ class MCPCenterVerifier(JWTVerifier):
                     await self.flush_usage()
                     next_flush = now + self.flush_interval
             except Exception as e:  # keep the loop alive; the next tick retries
-                logger.warning("MCP Center sync failed: %s", e)
+                logger.warning("MCP Gate sync failed: %s", e)
             await asyncio.sleep(max(0.5, min(next_poll, next_flush) - time.monotonic()))
 
     async def close(self) -> None:

@@ -6,51 +6,16 @@ Implemented with a sliding-window algorithm.
 
 import asyncio
 import time
-import ipaddress
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
+from src.utils.client_ip import is_ip_in_whitelist, resolve_client_ip
 
-def is_ip_in_whitelist(client_ip: str, whitelist: List[str]) -> bool:
-    """Check whether an IP is in the whitelist (CIDR notation supported).
-
-    Args:
-        client_ip: Client IP address
-        whitelist: Whitelist entries; may contain single IPs or CIDR ranges
-
-    Returns:
-        True if the IP is in the whitelist
-    """
-    # Direct match
-    if client_ip in whitelist:
-        return True
-
-    try:
-        ip = ipaddress.ip_address(client_ip)
-        for entry in whitelist:
-            # Skip entries that are not IP formatted (e.g. "localhost")
-            if entry in ("localhost", "::1"):
-                continue
-            try:
-                # Try to parse as a network range
-                if "/" in entry:
-                    network = ipaddress.ip_network(entry, strict=False)
-                    if ip in network:
-                        return True
-                else:
-                    # Parse as a single IP
-                    if ip == ipaddress.ip_address(entry):
-                        return True
-            except ValueError:
-                continue
-    except ValueError:
-        pass
-
-    return False
+__all__ = ["is_ip_in_whitelist", "RateLimitConfig", "RateLimiter", "RateLimitMiddleware"]
 
 
 @dataclass
@@ -58,7 +23,6 @@ class RateLimitConfig:
     """Rate limit configuration"""
     requests_per_minute: int = 60  # Maximum requests per minute
     requests_per_hour: int = 1000  # Maximum requests per hour
-    burst_size: int = 10  # Allowed burst size
     enabled: bool = True
     # Whitelisted IPs (not rate limited)
     whitelist: list = field(default_factory=lambda: ["127.0.0.1", "localhost"])
@@ -89,26 +53,32 @@ class SlidingWindowCounter:
         return len(self.requests[key])
 
     def get_count(self, key: str) -> int:
-        """Get the request count within the current window."""
-        now = time.time()
-        window_start = now - self.window_size
+        """Get the request count within the current window. A read never creates a key."""
+        if key not in self.requests:
+            return 0
+        window_start = time.time() - self.window_size
         self.requests[key] = [t for t in self.requests[key] if t > window_start]
         return len(self.requests[key])
 
-    def cleanup(self):
-        """Purge all expired records."""
-        now = time.time()
+    def cleanup(self) -> int:
+        """Purge all expired records, dropping keys with nothing left in the window. Returns the keys dropped."""
+        window_start = time.time() - self.window_size
+        dropped = 0
         for key in list(self.requests.keys()):
-            window_start = now - self.window_size
             self.requests[key] = [t for t in self.requests[key] if t > window_start]
             if not self.requests[key]:
                 del self.requests[key]
+                dropped += 1
+        return dropped
 
 
 class RateLimiter:
     """Rate limiter instance"""
 
     _instance: Optional['RateLimiter'] = None
+    # Every client IP leaves keys behind; idle ones are swept at most this often (lazily, from is_allowed), so
+    # memory follows the clients seen in the last hour, not every client ever seen.
+    CLEANUP_INTERVAL_SECONDS = 60
 
     def __init__(self, config: RateLimitConfig = None):
         self.config = config or RateLimitConfig()
@@ -116,6 +86,17 @@ class RateLimiter:
         self.hour_counter = SlidingWindowCounter(window_size=3600)
         self.blocked_until: Dict[str, float] = {}  # Blocked IPs
         self._lock = asyncio.Lock()  # Guards concurrent access
+        self._next_cleanup = time.time() + self.CLEANUP_INTERVAL_SECONDS
+
+    def cleanup(self) -> int:
+        """Drop idle counter keys and expired blocks. Returns how many keys were dropped."""
+        now = time.time()
+        dropped = self.minute_counter.cleanup() + self.hour_counter.cleanup()
+        for key in [k for k, until in self.blocked_until.items() if until <= now]:
+            del self.blocked_until[key]
+            dropped += 1
+        self._next_cleanup = now + self.CLEANUP_INTERVAL_SECONDS
+        return dropped
 
     @classmethod
     def get_instance(cls, config: RateLimitConfig = None) -> 'RateLimiter':
@@ -133,6 +114,12 @@ class RateLimiter:
         """
         Check whether a request is allowed.
 
+        Two independent budgets apply. Every request counts towards the IP's global per-minute and
+        per-hour limits; exceeding those blocks the whole IP. A path listed in `path_limits` (e.g. the
+        login endpoint) additionally has its own per-minute bucket per IP; exhausting it blocks only that
+        path for that IP, so a brute-force attempt on the login form is slowed down without locking the
+        rest of the console, and console polling cannot use up the login budget.
+
         Returns:
             (allowed, reason, retry_after)
         """
@@ -143,44 +130,49 @@ class RateLimiter:
         if is_ip_in_whitelist(client_ip, self.config.whitelist):
             return True, "", 0
 
+        path_limit = self.config.path_limits.get(path) if path else None
+        path_key = f"{client_ip}:path:{path}" if path_limit is not None else None
+
         async with self._lock:
-            # Check whether temporarily blocked
-            if client_ip in self.blocked_until:
-                if time.time() < self.blocked_until[client_ip]:
-                    retry_after = int(self.blocked_until[client_ip] - time.time())
-                    return False, "too_many_requests", retry_after
-                else:
-                    del self.blocked_until[client_ip]
+            if time.time() >= self._next_cleanup:
+                self.cleanup()
+            # Blocked IP-wide, or blocked for this path only
+            for key in (client_ip, path_key):
+                if key is None or key not in self.blocked_until:
+                    continue
+                remaining = self.blocked_until[key] - time.time()
+                if remaining > 0:
+                    return False, "too_many_requests", max(1, int(remaining))
+                del self.blocked_until[key]
 
-            # Get the limit values
-            minute_limit = self.config.requests_per_minute
-            hour_limit = self.config.requests_per_hour
+            # The path's own bucket, counted per (IP, path)
+            if path_key is not None and self.minute_counter.add_request(path_key) > path_limit:
+                self.blocked_until[path_key] = time.time() + 60
+                return False, "rate_limit_path", 60
 
-            # Specific paths may have custom limits
-            if path and path in self.config.path_limits:
-                minute_limit = self.config.path_limits[path]
-
-            # Check the per-minute limit
-            minute_count = self.minute_counter.add_request(f"{client_ip}:minute")
-            if minute_count > minute_limit:
-                # Limit exceeded; block temporarily for 60 seconds
+            # The IP's global per-minute limit, counting every path
+            if self.minute_counter.add_request(f"{client_ip}:minute") > self.config.requests_per_minute:
                 self.blocked_until[client_ip] = time.time() + 60
                 return False, "rate_limit_minute", 60
 
-            # Check the per-hour limit
-            hour_count = self.hour_counter.add_request(f"{client_ip}:hour")
-            if hour_count > hour_limit:
-                # Hourly limit exceeded; block until the next hour
+            # The IP's global per-hour limit
+            if self.hour_counter.add_request(f"{client_ip}:hour") > self.config.requests_per_hour:
                 self.blocked_until[client_ip] = time.time() + 300  # 5 minutes
                 return False, "rate_limit_hour", 300
 
             return True, "", 0
 
-    def get_stats(self, client_ip: str) -> dict:
-        """Get request statistics for a client."""
+    def get_stats(self, client_ip: str, path: str = None) -> dict:
+        """Get request statistics for a client; for a path with its own limit, that bucket's numbers."""
+        path_limit = self.config.path_limits.get(path) if path else None
+        if path_limit is not None:
+            minute_count, minute_limit = self.minute_counter.get_count(f"{client_ip}:path:{path}"), path_limit
+        else:
+            minute_count = self.minute_counter.get_count(f"{client_ip}:minute")
+            minute_limit = self.config.requests_per_minute
         return {
-            "minute_count": self.minute_counter.get_count(f"{client_ip}:minute"),
-            "minute_limit": self.config.requests_per_minute,
+            "minute_count": minute_count,
+            "minute_limit": minute_limit,
             "hour_count": self.hour_counter.get_count(f"{client_ip}:hour"),
             "hour_limit": self.config.requests_per_hour,
             "is_blocked": client_ip in self.blocked_until,
@@ -225,7 +217,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         # Add rate limit headers
         response = await call_next(request)
-        stats = self.limiter.get_stats(client_ip)
+        stats = self.limiter.get_stats(client_ip, request.url.path)
         response.headers["X-RateLimit-Limit"] = str(stats["minute_limit"])
         response.headers["X-RateLimit-Remaining"] = str(
             max(0, stats["minute_limit"] - stats["minute_count"])
@@ -236,25 +228,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     def _get_client_ip(self, request: Request) -> str:
         """Get the client's real IP.
 
-        Security consideration: X-Forwarded-For / X-Real-IP headers are only parsed when the directly
-        connected IP belongs to a trusted proxy.
-        This prevents attackers from bypassing rate limiting by forging those headers.
+        Forwarded headers are only honoured when the direct peer is a trusted proxy, and X-Forwarded-For is
+        read right to left (see src.utils.client_ip), so a forged header can neither dodge the limit nor
+        frame another address.
         """
-        # Get the directly connected IP
-        direct_ip = request.client.host if request.client else "unknown"
-
-        # Only parse forwarded headers for requests from trusted proxies
-        if is_ip_in_whitelist(direct_ip, self.config.trusted_proxies):
-            # Prefer X-Forwarded-For
-            forwarded = request.headers.get("X-Forwarded-For")
-            if forwarded:
-                # Take the first IP (the original client IP)
-                return forwarded.split(",")[0].strip()
-
-            # Fall back to X-Real-IP
-            real_ip = request.headers.get("X-Real-IP")
-            if real_ip:
-                return real_ip
-
-        # Untrusted proxy or no forwarded header: use the directly connected IP
-        return direct_ip
+        return resolve_client_ip(request, self.config.trusted_proxies) or "unknown"

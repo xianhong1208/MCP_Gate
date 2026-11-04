@@ -12,10 +12,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from db.models import (
-    AdminUser, AuditLog, ManagedMcpProcess, MCPTool, OAuthAuthorizationCode,
+    AdminSession, AdminUser, AuditLog, ManagedMcpProcess, MCPTool, OAuthAuthorizationCode,
     OAuthAuthorizationRequest, OAuthClient, OAuthConsent, OAuthScope, OAuthSigningKey,
-    OAuthToken, Service, ServiceScope, TokenUsage, UserMcpDefinition, local_now,
+    OAuthToken, Service, ServiceScope, TokenUsage, UserMcpDefinition, local_now, utc_now,
 )
+from src.utils.field_limits import clip, column_limit
 
 # Loopback aliases -> always stored / looked up as 127.0.0.1
 _LOOPBACK_ALIASES = {"localhost", "0.0.0.0", "127.0.0.1", "::1", "[::1]"}
@@ -205,7 +206,8 @@ class ServiceCRUD:
         service.health_status = status
         service.health_last_checked = local_now()
         service.health_response_time_ms = response_time_ms
-        service.health_error_message = error_message
+        # The message is relayed from the remote server (e.g. a JSON-RPC error) and has no length bound
+        service.health_error_message = clip(error_message, column_limit(Service.health_error_message))
         if reset_fail_count:
             service.health_fail_count = 0
         elif increment_fail_count:
@@ -243,12 +245,6 @@ class MCPToolCRUD:
     @staticmethod
     def get_by_name(db: Session, service_id: str, name: str) -> Optional[MCPTool]:
         return db.query(MCPTool).filter(MCPTool.service_id == _uuid(service_id), MCPTool.name == name).first()
-
-    @staticmethod
-    def delete_by_service(db: Session, service_id: str) -> int:
-        count = db.query(MCPTool).filter(MCPTool.service_id == _uuid(service_id)).delete()
-        db.commit()
-        return count
 
     @staticmethod
     def sync_tools(db: Session, service_id: str, tools: List[dict]) -> List[MCPTool]:
@@ -311,16 +307,16 @@ class TokenUsageCRUD:
         buckets: dict = {}
         for row in TokenUsageCRUD._query(db, start, service_id, audience, event).all():
             key = row.used_at.strftime("%Y-%m-%d")
-            b = buckets.setdefault(key, {"total": 0, "success": 0})
-            b["total"] += row.count
-            b["success"] += row.count if row.success else 0
+            bucket = buckets.setdefault(key, {"total": 0, "success": 0})
+            bucket["total"] += row.count
+            bucket["success"] += row.count if row.success else 0
         stats = []
         current = start.date()
         while current <= end.date():
             key = current.strftime("%Y-%m-%d")
-            b = buckets.get(key, {"total": 0, "success": 0})
-            stats.append({"date": key, "total": b["total"], "success": b["success"],
-                          "failed": b["total"] - b["success"]})
+            bucket = buckets.get(key, {"total": 0, "success": 0})
+            stats.append({"date": key, "total": bucket["total"], "success": bucket["success"],
+                          "failed": bucket["total"] - bucket["success"]})
             current += timedelta(days=1)
         return stats
 
@@ -347,13 +343,13 @@ class TokenUsageCRUD:
         buckets: dict = {}
         for row in TokenUsageCRUD._query(db, start).all():
             key = row.audience or "-"
-            b = buckets.setdefault(key, {"total": 0, "success": 0, "clients": set(), "service_id": None})
-            b["total"] += row.count
-            b["success"] += row.count if row.success else 0
+            bucket = buckets.setdefault(key, {"total": 0, "success": 0, "clients": set(), "service_id": None})
+            bucket["total"] += row.count
+            bucket["success"] += row.count if row.success else 0
             if row.client_id:
-                b["clients"].add(row.client_id)
+                bucket["clients"].add(row.client_id)
             if row.service_id:
-                b["service_id"] = str(row.service_id)
+                bucket["service_id"] = str(row.service_id)
         return [
             {"audience": k, "service_id": v["service_id"], "total": v["total"], "success": v["success"],
              "failed": v["total"] - v["success"], "clients": len(v["clients"])}
@@ -387,6 +383,45 @@ class TokenUsageCRUD:
 
 
 # ==================== Console users ====================
+
+class OwnerSlotTaken(Exception):
+    """First-time setup lost the race: another request created the owner first."""
+
+
+class AdminSessionCRUD:
+
+    @staticmethod
+    def create(db: Session, *, session_id: str, user_id, created_at: datetime, expires_at: datetime) -> AdminSession:
+        row = AdminSession(id=session_id, user_id=_uuid(user_id), created_at=created_at, expires_at=expires_at)
+        db.add(row)
+        db.commit()
+        return row
+
+    @staticmethod
+    def get(db: Session, session_id: str) -> Optional[AdminSession]:
+        if not session_id:
+            return None
+        return db.query(AdminSession).filter(AdminSession.id == session_id).first()
+
+    @staticmethod
+    def delete(db: Session, session_id: str) -> int:
+        deleted = db.query(AdminSession).filter(AdminSession.id == session_id).delete(synchronize_session=False)
+        db.commit()
+        return deleted
+
+    @staticmethod
+    def delete_for_user(db: Session, user_id) -> int:
+        deleted = db.query(AdminSession).filter(AdminSession.user_id == _uuid(user_id)).delete(
+            synchronize_session=False)
+        db.commit()
+        return deleted
+
+    @staticmethod
+    def delete_expired(db: Session) -> int:
+        deleted = db.query(AdminSession).filter(AdminSession.expires_at < utc_now()).delete(synchronize_session=False)
+        db.commit()
+        return deleted
+
 
 class AdminUserCRUD:
 
@@ -423,17 +458,22 @@ class AdminUserCRUD:
 
     @staticmethod
     def create(db: Session, *, email: str, username: str, password_hash: Optional[str],
-               auth_provider: str = "local", provider_sub: Optional[str] = None) -> AdminUser:
+               auth_provider: str = "local", provider_sub: Optional[str] = None,
+               owner: bool = False) -> AdminUser:
+        """``owner=True`` takes the single owner slot; raises OwnerSlotTaken if another account already has it."""
         user = AdminUser(
             email=email, username=username, password_hash=password_hash,
             auth_provider=auth_provider, provider_sub=provider_sub, is_active=True,
             password_changed_at=local_now() if password_hash else None,
+            owner_slot=1 if owner else None,
         )
         db.add(user)
         try:
             db.commit()
         except IntegrityError:
             db.rollback()
+            if owner and db.query(AdminUser).filter(AdminUser.owner_slot == 1).first() is not None:
+                raise OwnerSlotTaken("The owner account already exists")
             raise ValueError(f"Email '{email}' already exists")
         db.refresh(user)
         return user
@@ -571,6 +611,71 @@ class OAuthClientCRUD:
         client.last_used_at = local_now()
         db.commit()
 
+    @staticmethod
+    def mark_feed_polled(db: Session, client: OAuthClient, min_interval: timedelta = timedelta(seconds=30)) -> None:
+        """Record a revocation-feed poll. Verifiers poll every few seconds: write at most once per
+        ``min_interval``."""
+        now = local_now()
+        if client.revocation_polled_at is None or now - client.revocation_polled_at >= min_interval:
+            client.revocation_polled_at = now
+            db.commit()
+
+    @staticmethod
+    def list_resource_servers(db: Session, audience: str) -> List[OAuthClient]:
+        """Active console-registered confidential clients bound to ``audience`` as its resource server."""
+        return db.query(OAuthClient).filter(
+            OAuthClient.resource_audience == audience, OAuthClient.is_active.is_(True),
+            OAuthClient.created_via == "manual", OAuthClient.token_endpoint_auth_method != "none",
+        ).order_by(OAuthClient.created_at).all()
+
+    @staticmethod
+    def upsert_metadata_client(db: Session, client_id: str, fields: dict, *, is_approved: bool) -> tuple:
+        """Create or refresh the row of a client identified by its metadata document (created_via = cimd) from
+        the document's validated ``fields``. A new row takes ``is_approved``; an existing one keeps its approval
+        and active state (a client the owner revoked stays revoked whatever its document says).
+
+        Returns (client, changed) where ``changed`` lists the fields whose stored value differed."""
+        now = local_now()
+        client = OAuthClientCRUD.get(db, client_id)
+        if client is None:
+            client = OAuthClient(client_id=client_id, created_via="cimd", is_approved=is_approved, is_active=True,
+                                 metadata_fetched_at=now, **fields)
+            db.add(client)
+            try:
+                db.commit()
+                db.refresh(client)
+                return client, []
+            except IntegrityError:  # created concurrently by another request: refresh that row instead
+                db.rollback()
+                client = OAuthClientCRUD.get(db, client_id)
+                if client is None:
+                    raise
+        changed = [name for name, value in fields.items() if getattr(client, name) != value]
+        for name in changed:
+            setattr(client, name, fields[name])
+        client.metadata_fetched_at = now
+        db.commit()
+        db.refresh(client)
+        return client, changed
+
+    @staticmethod
+    def delete_unused_dcr(db: Session, older_than: timedelta) -> int:
+        """Delete clients nobody registered by hand that never obtained a token (no last use, no token record)
+        and were created before ``older_than`` ago: dynamically registered ones, and active clients first seen
+        through their metadata document (a revoked one is kept: it is how the owner blocks that URL). Their
+        pending requests, codes and consents go with them."""
+        has_tokens = db.query(OAuthToken.jti).filter(OAuthToken.client_id == OAuthClient.client_id).exists()
+        unregistered = or_(OAuthClient.created_via == "dcr",
+                           (OAuthClient.created_via == "cimd") & OAuthClient.is_active.is_(True))
+        stale = db.query(OAuthClient).filter(
+            unregistered, OAuthClient.last_used_at.is_(None),
+            OAuthClient.created_at < local_now() - older_than, ~has_tokens,
+        ).all()
+        for client in stale:
+            db.delete(client)
+        db.commit()
+        return len(stale)
+
 
 class OAuthAuthRequestCRUD:
 
@@ -616,9 +721,15 @@ class OAuthCodeCRUD:
                 .filter(OAuthAuthorizationCode.code_hash == code_hash).first())
 
     @staticmethod
-    def mark_used(db: Session, code: OAuthAuthorizationCode) -> None:
-        code.used_at = local_now()
-        db.commit()
+    def claim(db: Session, code_hash: str) -> bool:
+        """Mark a code used unless something already has: a conditional UPDATE (``WHERE used_at IS NULL``), so of
+        two concurrent redemptions exactly one gets True. Not committed: the winner commits once the tokens it
+        issues are in place (OAuthTokenCRUD.commit_grant), so a loser that waited on the row lock and then
+        revokes the family sees those tokens."""
+        claimed = db.query(OAuthAuthorizationCode).filter(
+            OAuthAuthorizationCode.code_hash == code_hash, OAuthAuthorizationCode.used_at.is_(None),
+        ).update({OAuthAuthorizationCode.used_at: local_now()}, synchronize_session=False)
+        return claimed == 1
 
     @staticmethod
     def delete_expired(db: Session) -> int:
@@ -709,16 +820,26 @@ class ServiceScopeCRUD:
 class OAuthTokenCRUD:
 
     @staticmethod
-    def create(db: Session, **fields) -> OAuthToken:
+    def create(db: Session, commit: bool = True, **fields) -> OAuthToken:
+        """Record an issued token. ``commit=False`` only flushes, for a grant that commits its tokens together
+        with the claim on the code / refresh token they were exchanged for (commit_grant)."""
         if fields.get("client_id") and not fields.get("client_name_snapshot"):
             client = db.query(OAuthClient).filter(OAuthClient.client_id == fields["client_id"]).first()
             if client:
                 fields["client_name_snapshot"] = client.client_name
         token = OAuthToken(**fields)
         db.add(token)
+        if not commit:
+            db.flush()
+            return token
         db.commit()
         db.refresh(token)
         return token
+
+    @staticmethod
+    def commit_grant(db: Session) -> None:
+        """Commit a redemption: the claim (OAuthCodeCRUD.claim / rotate) and the tokens issued for it."""
+        db.commit()
 
     @staticmethod
     def get(db: Session, jti: str) -> Optional[OAuthToken]:
@@ -748,15 +869,30 @@ class OAuthTokenCRUD:
 
     @staticmethod
     def list_revoked_unexpired(db: Session, *, since: Optional[datetime] = None,
-                               kinds: tuple = ("access", "pat")) -> List[OAuthToken]:
+                               kinds: tuple = ("access", "pat"), audience: Optional[str] = None) -> List[OAuthToken]:
         """Revoked tokens an offline verifier would otherwise still accept: revoked, not yet expired.
-        Bounded by the access-token lifetime, so the feed never grows without limit."""
+        Bounded by the access-token lifetime, so the feed never grows without limit. ``audience`` limits it to
+        the tokens of one server."""
         q = db.query(OAuthToken).filter(
             OAuthToken.revoked_at.isnot(None), OAuthToken.expires_at >= local_now(), OAuthToken.kind.in_(kinds),
+            # a refresh token rotated away in the normal course of things is not a revocation
+            or_(OAuthToken.kind != "refresh", OAuthToken.revoke_reason.is_(None),
+                OAuthToken.revoke_reason != "rotated"),
         )
+        if audience is not None:
+            q = q.filter(OAuthToken.audience == audience)
         if since is not None:
             q = q.filter(OAuthToken.revoked_at >= since)
         return q.order_by(OAuthToken.revoked_at.asc()).all()
+
+    @staticmethod
+    def any_live_issued_between(db: Session, start: datetime, end: datetime,
+                                kinds: tuple = ("access", "pat")) -> bool:
+        """Is any recorded, unrevoked, unexpired token of ``kinds`` issued within [start, end]?"""
+        return db.query(OAuthToken.jti).filter(
+            OAuthToken.kind.in_(kinds), OAuthToken.revoked_at.is_(None), OAuthToken.expires_at >= local_now(),
+            OAuthToken.issued_at >= start, OAuthToken.issued_at <= end,
+        ).first() is not None
 
     @staticmethod
     def apply_usage(db: Session, token: OAuthToken, *, count: int, last_seen: Optional[datetime]) -> OAuthToken:
@@ -775,6 +911,15 @@ class OAuthTokenCRUD:
             token.revoke_reason = reason
             db.commit()
         return token
+
+    @staticmethod
+    def rotate(db: Session, jti: str) -> bool:
+        """Revoke a refresh token as rotated unless it already is revoked: a conditional UPDATE
+        (``WHERE revoked_at IS NULL``), so of two concurrent refreshes with the same token exactly one gets True.
+        Not committed (see OAuthCodeCRUD.claim)."""
+        rotated = db.query(OAuthToken).filter(OAuthToken.jti == jti, OAuthToken.revoked_at.is_(None)).update(
+            {OAuthToken.revoked_at: local_now(), OAuthToken.revoke_reason: "rotated"}, synchronize_session=False)
+        return rotated == 1
 
     @staticmethod
     def revoke_family(db: Session, parent_jti: str, reason: str) -> int:
@@ -872,6 +1017,13 @@ class OAuthConsentCRUD:
         db.delete(consent)
         db.commit()
         return snapshot
+
+    @staticmethod
+    def delete_for_client(db: Session, client_id: str) -> int:
+        """Forget every remembered consent of one client (all users), e.g. after its metadata changed."""
+        deleted = db.query(OAuthConsent).filter(OAuthConsent.client_id == client_id).delete(synchronize_session=False)
+        db.commit()
+        return deleted
 
 
 # ==================== Managed / BYO MCP ====================
@@ -973,18 +1125,6 @@ class ManagedMcpProcessCRUD:
         if not process:
             return None
         process.desired_state = desired_state
-        db.commit()
-        db.refresh(process)
-        return process
-
-    @staticmethod
-    def append_log_lines(db: Session, process_id: str, new_lines: List[str],
-                         max_lines: int = 200) -> Optional[ManagedMcpProcess]:
-        process = ManagedMcpProcessCRUD.get_by_id(db, process_id)
-        if not process:
-            return None
-        existing = process.last_log_lines.split("\n") if process.last_log_lines else []
-        process.last_log_lines = "\n".join((existing + new_lines)[-max_lines:])
         db.commit()
         db.refresh(process)
         return process

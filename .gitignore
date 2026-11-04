@@ -1,9 +1,9 @@
-# Environment variables (IMPORTANT: never commit!)
+# --- Local secrets: environment files stay on the machine that made them ---
 .env
 .env.local
 .env.*.local
 
-# Python
+# --- Python bytecode, packaging and build output ---
 __pycache__/
 *.py[cod]
 *$py.class
@@ -25,64 +25,65 @@ wheels/
 .installed.cfg
 *.egg
 
-# Virtual environments
+# --- Virtualenvs (uv creates .venv/) ---
 .venv/
 venv/
 ENV/
 
-# IDE
+# --- Editor and IDE state ---
 .idea/
 .vscode/
 *.swp
 *.swo
 *~
 
-# Testing
+# --- Test runners and coverage reports ---
 .pytest_cache/
 .coverage
 htmlcov/
 .tox/
 .nox/
 
-# Logs
+# --- Log output ---
 logs/
 *.log
 
-# Database
+# --- Local database files (SQLite) ---
 *.db
 *.sqlite3
 
-# Node.js (frontend)
+# --- Console frontend: dependencies, Vite output, local env ---
 frontend/node_modules/
 frontend/dist/
 frontend/.env
 
-# Build artifacts
+# --- Packaged deployment output ---
+MCP_Gate_Deployed
 
-MCP_Center_Deployed
-# License (private keys and license files must not be committed)
+# --- Key material ---
 keys/
 *.lic
 license_private.pem
 
-# OS
+# --- OS metadata and stray packaging artifacts ---
 .DS_Store
 Thumbs.db
 artifact/
 
-# marketplace 離線 image tars(大檔不進 git,README 除外)
+# --- Marketplace image tarballs for offline installs are too large for git;
+#     only the README in that folder is tracked ---
 catalog/images/*
 !catalog/images/README.md
 
-# pytest conftest 產生的測試設定(每次測試重寫,不進 git)
+# --- Scratch config left behind by local test runs ---
 config/test_config.yaml
 
-# MCP Center 執行期資料(SQLite、自動產生的密鑰)
+# --- Runtime state: SQLite database and secrets generated on first start ---
 data/
 
-# Local screenshots / Playwright MCP artifacts
+# --- Screenshots and browser-automation leftovers in the repo root ---
 /*.png
 .playwright-mcp/
 
-# Claude Code local config and skills
+# --- Claude Code per-machine settings ---
 .claude/

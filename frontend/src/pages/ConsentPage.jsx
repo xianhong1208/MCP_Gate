@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { Bot, ArrowLeft } from 'lucide-react'
@@ -8,6 +8,7 @@ import AuthShell from '../components/AuthShell'
 import { formatTime } from '../utils/format'
 import { describeScope } from '../utils/scopes'
 import { Button, Badge, CheckRow, Alert, Spinner, SectionLabel } from '../components/ui'
+import { safeHttpUrl } from '../utils/url'
 
 /**
  * OAuth consent page: /consent?rid=<authorization request id>
@@ -54,6 +55,22 @@ export default function ConsentPage() {
     })
   }
 
+  // Consent may be skipped (remembered, or a console-registered client): approve without asking. The backend no
+  // longer does this inside /oauth/authorize, which only has the cookie (see src/api/oauth_routes.py).
+  // Runs once per request (a ref, not effect cleanup: StrictMode re-runs effects, and a second decision would fail).
+  const autoApproved = useRef(false)
+  useEffect(() => {
+    if (!req?.can_skip || !rid || autoApproved.current) return
+    autoApproved.current = true
+    setDeciding('approve')
+    oauthApi.authorizeRequest.decide(rid, { approve: true, scopes: null, remember: false })
+      .then((result) => {
+        if (result?.redirect_to) window.location.assign(result.redirect_to)
+        else { setError(t('consent.noRedirect')); setDeciding(null) }
+      })
+      .catch((err) => { setError(err.message || t('consent.decideFailed')); setDeciding(null) })
+  }, [req, rid, t])
+
   const decide = async (approve) => {
     setDeciding(approve ? 'approve' : 'deny')
     setError('')
@@ -75,7 +92,7 @@ export default function ConsentPage() {
     }
   }
 
-  if (isLoading) {
+  if (isLoading || (req?.can_skip && deciding === 'approve' && !error)) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background text-subtle-foreground">
         <Spinner size="lg" />
@@ -97,20 +114,21 @@ export default function ConsentPage() {
 
   const client = req.client || {}
   const scopes = req.scopes || []
-  const viaLabel = client.created_via === 'dcr'
-    ? t('consent.viaDcr')
-    : client.created_via === 'system' ? t('consent.viaSystem') : t('consent.viaManual')
+  const viaLabel = {
+    dcr: t('consent.viaDcr'),
+    cimd: t('consent.viaCimd'),
+    system: t('consent.viaSystem'),
+  }[client.created_via] || t('consent.viaManual')
+  const selfAsserted = client.created_via === 'dcr' || client.created_via === 'cimd'
 
   return (
     <AuthShell maxWidth="max-w-md">
       {/* Client */}
       <div className="flex items-start gap-3">
         <span className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-md border border-border bg-muted text-muted-foreground">
-          {client.logo_uri ? (
-            <img src={client.logo_uri} alt="" className="h-full w-full object-cover" />
-          ) : (
-            <Bot className="h-5 w-5" aria-hidden="true" />
-          )}
+          {/* The client's logo_uri is never loaded: fetching it would tell whoever registered the client
+              that (and from where) the owner is looking at this page (H-16). */}
+          <Bot className="h-5 w-5" aria-hidden="true" />
         </span>
         <div className="min-w-0">
           <h2 className="text-lg font-semibold leading-tight text-foreground">
@@ -118,20 +136,31 @@ export default function ConsentPage() {
           </h2>
           <p className="mt-1 text-sm text-muted-foreground">{t('consent.subtitle', { email: user?.email || '' })}</p>
           <div className="mt-2 flex flex-wrap items-center gap-2">
-            <Badge tone={client.created_via === 'dcr' ? 'warning' : 'success'}>{viaLabel}</Badge>
-            {client.client_uri && (
+            <Badge tone={selfAsserted ? 'warning' : 'success'}>{viaLabel}</Badge>
+            {client.client_uri && (safeHttpUrl(client.client_uri) ? (
               <a
-                href={client.client_uri}
+                href={safeHttpUrl(client.client_uri)}
                 target="_blank"
-                rel="noreferrer"
+                rel="noopener noreferrer"
                 className="max-w-[240px] truncate font-mono text-xs text-muted-foreground transition-colors duration-200 hover:text-link"
               >
                 {client.client_uri}
               </a>
-            )}
+            ) : (
+              <span className="max-w-[240px] truncate font-mono text-xs text-muted-foreground">{client.client_uri}</span>
+            ))}
           </div>
         </div>
       </div>
+
+      {/* A client identified by its metadata document: everything above is what that URL serves, unverified.
+          The host is what actually identifies it (draft-ietf-oauth-client-id-metadata-document §10.6). */}
+      {client.metadata_document && (
+        <Alert tone="warning" className="mt-5" title={t('consent.cimdIdentity', { host: client.identity_host })}>
+          <p className="break-all font-mono text-xs text-foreground">{client.client_id}</p>
+          <p className="mt-1">{t('consent.cimdNotice', { host: client.identity_host })}</p>
+        </Alert>
+      )}
 
       {error && <Alert tone="danger" className="mt-5">{error}</Alert>}
 
@@ -146,7 +175,13 @@ export default function ConsentPage() {
         {req.resource && (
           <p className="mt-0.5 break-all font-mono text-xs text-muted-foreground">{req.resource}</p>
         )}
+        <SectionLabel className="mt-3">{t('consent.redirectTitle')}</SectionLabel>
+        <p className="mt-1 break-all font-mono text-sm text-foreground">{req.redirect_host}</p>
       </div>
+
+      {req.redirect_loopback_only && (
+        <Alert tone="warning" className="mt-3">{t('consent.loopbackWarning', { host: req.redirect_host })}</Alert>
+      )}
 
       {/* Scopes */}
       <div className="mt-5">
@@ -200,14 +235,11 @@ export default function ConsentPage() {
         </Button>
       </div>
 
-      <div className="mt-5 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-4 text-xs text-muted-foreground">
-        <span className="min-w-0 truncate">{t('consent.redirectTo', { host: req.redirect_host })}</span>
-        {req.expires_at && (
-          <span className="shrink-0 tabular-nums">
-            {t('consent.expiresAt', { time: formatTime(req.expires_at) })}
-          </span>
-        )}
-      </div>
+      {req.expires_at && (
+        <div className="mt-5 border-t border-border pt-4 text-xs text-muted-foreground">
+          <span className="tabular-nums">{t('consent.expiresAt', { time: formatTime(req.expires_at) })}</span>
+        </div>
+      )}
     </AuthShell>
   )
 }

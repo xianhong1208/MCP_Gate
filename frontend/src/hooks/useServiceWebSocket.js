@@ -1,10 +1,12 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
+import { getBinding, wsProtocols } from '../utils/sessionBinding'
 
 /**
- * WebSocket hook for real-time service updates (/ws/services, authenticated via the session cookie)
+ * WebSocket hook for real-time service updates (/ws/services, authenticated via the session cookie plus the
+ * session binding, offered as a subprotocol)
  *
  * Handles:
- *   health_update / service_added / service_removed / service_updated / pong
+ *   health_update / service_added / pong
  *
  * Reconnect strategy:
  *   - close code 1000 (normal): no reconnect -- the user closed it
@@ -16,7 +18,7 @@ import { useEffect, useRef, useCallback, useState } from 'react'
  *   - the reconnect timeout is cleared on disconnect / re-effect
  *   - isMountedRef prevents setState after unmount
  */
-export function useServiceWebSocket({ onHealthUpdate, onServiceAdded, onServiceRemoved, onServiceUpdated, enabled = true }) {
+export function useServiceWebSocket({ onHealthUpdate, onServiceAdded, enabled = true }) {
   const wsRef = useRef(null)
   const reconnectTimeoutRef = useRef(null)
   const reconnectAttemptsRef = useRef(0)
@@ -51,7 +53,8 @@ export function useServiceWebSocket({ onHealthUpdate, onServiceAdded, onServiceR
 
     let ws
     try {
-      ws = new WebSocket(wsUrl)
+      // The session binding rides as a subprotocol: a browser WebSocket cannot send custom headers
+      ws = new WebSocket(wsUrl, wsProtocols(getBinding()))
     } catch (err) {
       console.error('[WS] Failed to construct WebSocket:', err)
       return
@@ -75,8 +78,6 @@ export function useServiceWebSocket({ onHealthUpdate, onServiceAdded, onServiceR
         switch (message.type) {
           case 'health_update': onHealthUpdate?.(message); break
           case 'service_added': onServiceAdded?.(message); break
-          case 'service_removed': onServiceRemoved?.(message); break
-          case 'service_updated': onServiceUpdated?.(message); break
           case 'pong': break
           default: break
         }
@@ -104,7 +105,7 @@ export function useServiceWebSocket({ onHealthUpdate, onServiceAdded, onServiceR
       const delay = Math.min(1000 * 2 ** (reconnectAttemptsRef.current - 1), 30000)
       reconnectTimeoutRef.current = setTimeout(connect, delay)
     }
-  }, [enabled, onHealthUpdate, onServiceAdded, onServiceRemoved, onServiceUpdated, closeExistingWs, clearReconnectTimer])
+  }, [enabled, onHealthUpdate, onServiceAdded, closeExistingWs, clearReconnectTimer])
 
   const disconnect = useCallback(() => {
     clearReconnectTimer()

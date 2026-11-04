@@ -21,10 +21,12 @@ from src.api.schemas import (
     ServiceInfo, ServiceListResponse, ServiceUpdateRequest,
 )
 from src.audit import ActorType, AuditAction, AuditService, AuditStatus, ResourceType
-from src.identity import get_current_user
+from src.identity import get_current_user, get_optional_current_user
 from src.logging import get_logger
 from src.scheduler import get_scheduler
 from src.utils.crypto import encrypt_token
+from src.utils.field_limits import FieldTooLongError, check_max_length
+from src.utils.mcp_target import InvalidTargetError
 from src.version import __build_commit__, __build_time__, __version__
 
 logger = get_logger("api")
@@ -33,6 +35,19 @@ router = APIRouter()
 
 def _adapter_exc(e: AdapterError) -> HTTPException:
     return HTTPException(status_code=e.status_code, detail=e.to_detail())
+
+
+# A static bearer token for a server MCP Gate does not protect: long enough for any realistic JWT, short enough to
+# stop absurd payloads (it is stored encrypted, in a TEXT column)
+MAX_STATIC_TOKEN_LENGTH = 8192
+
+
+def _encrypt_static_token(token: str) -> str:
+    try:
+        check_max_length("auth_token", token, MAX_STATIC_TOKEN_LENGTH)
+    except FieldTooLongError as e:
+        raise HTTPException(status_code=400, detail=e.to_detail())
+    return encrypt_token(token)
 
 
 def _tool_info(t) -> MCPToolInfo:
@@ -65,12 +80,14 @@ def _audit(db, request, user, action, resource_type, resource_id, details=None, 
 @router.get("/health", response_model=HealthResponse, tags=["Health"])
 async def health_check():
     """Liveness probe. Public."""
-    return HealthResponse(status="ok", service="mcp-center")
+    return HealthResponse(status="ok", service="mcp-gate")
 
 
 @router.get("/api/system/version", tags=["System"])
-async def get_version():
-    """Version and build information. Public."""
+def get_version(user: Optional[AdminUser] = Depends(get_optional_current_user)):
+    """Version and build information. The app version is public; build, Python and OS details need a session."""
+    if user is None:
+        return {"version": __version__}
     return {
         "version": __version__, "build_time": __build_time__, "build_commit": __build_commit__,
         "python_version": platform.python_version(), "platform": platform.system(),
@@ -101,7 +118,7 @@ async def create_service(request: ServiceCreateRequest, http_request: Request, d
         service = ServiceAdapter.create_checked(
             db, name=request.name, description=request.description, host=request.host, port=request.port,
             protocol=request.protocol, mcp_path=request.mcp_path,
-            auth_token_encrypted=encrypt_token(request.auth_token) if request.auth_token else None,
+            auth_token_encrypted=_encrypt_static_token(request.auth_token) if request.auth_token else None,
             tags=request.tags, source="manual", requires_auth=request.requires_auth,
             oauth_audience=request.oauth_audience, oauth_scopes=request.oauth_scopes,
         )
@@ -129,7 +146,7 @@ async def update_service(service_id: str, request: ServiceUpdateRequest, http_re
     """Update an MCP server. Send `auth_token` as an empty string to clear a stored static bearer token."""
     auth_token_encrypted = None
     if request.auth_token is not None:
-        auth_token_encrypted = encrypt_token(request.auth_token) if request.auth_token else ""
+        auth_token_encrypted = _encrypt_static_token(request.auth_token) if request.auth_token else ""
     try:
         service = ServiceAdapter.update_existing(
             db, service_id, name=request.name, description=request.description, is_active=request.is_active,
@@ -147,13 +164,12 @@ async def update_service(service_id: str, request: ServiceUpdateRequest, http_re
 @router.delete("/api/services/{service_id}", tags=["Services"])
 async def delete_service(service_id: str, http_request: Request, db: Session = Depends(get_db),
                          user: AdminUser = Depends(get_current_user)):
-    """Delete an MCP server and its tool list and token events."""
+    """Delete an MCP server and its tool list and token events. A server run by a managed instance answers 409
+    `service.managed_use_uninstall`: uninstall it from the Marketplace instead, which also stops it."""
     try:
-        service = ServiceAdapter.get_existing(db, service_id)
+        name = ServiceAdapter.delete_unmanaged(db, service_id)
     except AdapterError as e:
         raise _adapter_exc(e)
-    name = service.name
-    ServiceAdapter.delete(db, service_id)
     _audit(db, http_request, user, AuditAction.DELETE_SERVICE, ResourceType.SERVICE, service_id, {"name": name})
     return {"message": f"Service '{name}' deleted"}
 
@@ -176,7 +192,7 @@ async def refresh_service_tools(service_id: str, http_request: Request, body: Op
                                 db: Session = Depends(get_db), user: AdminUser = Depends(get_current_user)):
     """Connect to the service, fetch its tools list and sync it.
 
-    By default services protected by MCP Center OAuth are inspected with the anonymous scanner token. A server
+    By default services protected by MCP Gate OAuth are inspected with the anonymous scanner token. A server
     that shows different tools per caller can be inspected as one of its issued tokens (`identity=token` +
     `jti`): a short-lived copy of that token's claims is signed and presented.
     """
@@ -208,6 +224,8 @@ async def refresh_service_tools(service_id: str, http_request: Request, body: Op
             host=service.host, port=service.port, path=service.mcp_path, protocol=service.protocol,
             auth_token=auth_token,
         )
+    except InvalidTargetError as e:
+        raise HTTPException(status_code=400, detail={"error": e.code, "fallback": e.fallback})
     except PermissionError:
         raise HTTPException(status_code=502, detail={"error": "service.remote_permission_denied",
                                                      "fallback": "Permission denied by remote MCP service."})
@@ -268,13 +286,10 @@ async def check_service_health(service_id: str, db: Session = Depends(get_db), _
         # A generated placeholder name (from a scan that could not read the server) is replaced by the
         # real name; a name the operator chose is never touched.
         adopted = ServiceAdapter.adopt_server_name(db, service, result.server_name)
-        # Refresh the description only for auto-discovered services (or when it is empty); a description
-        # the operator wrote is theirs.
-        if result.server_name and result.server_name != "(requires auth)" \
-                and (not service.description or service.source == "auto_discovered"):
-            desc = result.server_description or f"{result.server_name}" + (
-                f" v{result.server_version}" if result.server_version else "")
-            ServiceAdapter.update(db, service_id, description=desc)
+        # Likewise the description is filled from serverInfo only while it is empty or generated; a
+        # description the operator wrote is theirs.
+        ServiceAdapter.adopt_server_description(db, service, result.server_name, result.server_version,
+                                                result.server_description)
         ServiceAdapter.update_health(db, service_id, status=new_status, response_time_ms=result.response_time_ms,
                                      error_message=None, reset_fail_count=True)
     else:
@@ -421,7 +436,17 @@ async def get_dashboard_overview(db: Session = Depends(get_db), _: AdminUser = D
 async def run_cleanup_now(http_request: Request, db: Session = Depends(get_db),
                           user: AdminUser = Depends(get_current_user)):
     """Run the retention clean-up jobs now."""
-    results = await get_scheduler().run_all_cleanup_now()
+    report = await get_scheduler().run_all_cleanup_now()
+    results, errors = report["results"], report["errors"]
+    if errors:
+        # A failed job used to be counted as 0 and reported as success (#23)
+        _audit(db, http_request, user, AuditAction.CLEANUP_EXPIRED, ResourceType.SYSTEM, None,
+               {"results": results, "errors": errors}, status=AuditStatus.FAILURE)
+        jobs = ", ".join(sorted(errors))
+        raise HTTPException(status_code=500, detail={
+            "error": "system.cleanup_failed", "params": {"jobs": jobs}, "results": results, "errors": errors,
+            "fallback": f"Cleanup failed for: {jobs}. See the server log.",
+        })
     _audit(db, http_request, user, AuditAction.CLEANUP_EXPIRED, ResourceType.SYSTEM, None, results)
     return {"message": "Cleanup completed", "results": results}
 

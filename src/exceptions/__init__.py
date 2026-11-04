@@ -1,8 +1,8 @@
-"""MCP Center custom exceptions."""
+"""MCP Gate custom exceptions."""
 
 from src.exceptions.base import (
-    MCPCenterError,
-    MCPCenterHTTPException,
+    MCPGateError,
+    MCPGateHTTPException,
 )
 from src.exceptions.auth import (
     AuthenticationError,
@@ -27,8 +27,8 @@ from src.exceptions.database import (
 
 __all__ = [
     # Base
-    "MCPCenterError",
-    "MCPCenterHTTPException",
+    "MCPGateError",
+    "MCPGateHTTPException",
     # Auth
     "AuthenticationError",
     "TokenNotFoundError",

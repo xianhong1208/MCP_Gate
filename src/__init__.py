@@ -1,1 +1,1 @@
-"""MCP Center source package."""
+"""MCP Gate source package."""

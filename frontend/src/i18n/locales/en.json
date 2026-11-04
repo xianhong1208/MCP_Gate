@@ -10,9 +10,9 @@
     "audit": "Audit Logs"
   },
   "layout": {
-    "appName": "MCP Center",
+    "appName": "MCP Gate",
     "subtitle": "OAUTH AUTHORITY",
-    "version": "MCP Center v{{version}}",
+    "version": "MCP Gate v{{version}}",
     "systemOnline": "System Online",
     "systemOffline": "System Offline",
     "profile": "View profile",
@@ -51,7 +51,7 @@
     }
   },
   "auth": {
-    "appName": "MCP Center",
+    "appName": "MCP Gate",
     "tagline": "OAuth 2.1 authorization server for MCP",
     "login": {
       "title": "Sign in",
@@ -67,7 +67,7 @@
     },
     "setup": {
       "title": "Welcome — create your account",
-      "subtitle": "This is a fresh install. The first account becomes the owner of this MCP Center.",
+      "subtitle": "This is a fresh install. The first account becomes the owner of this MCP Gate.",
       "email": "Email",
       "username": "Display name",
       "usernamePlaceholder": "Optional — defaults to your email",
@@ -100,7 +100,10 @@
     "deleteTitle": "Delete Confirmation",
     "deleteMessage": "Are you sure you want to delete {{item}}? This action cannot be undone.",
     "revokeTitle": "Revoke Confirmation",
-    "revokeMessage": "Are you sure you want to revoke {{item}}? This will immediately invalidate the token.",
+    "revokeMessage": "Are you sure you want to revoke {{item}}? MCP Gate stops accepting it immediately (introspection, refresh).",
+    "revokeFeedActive": "{{server}} polls the revocation feed (last poll {{when}}), so it stops accepting this token within seconds.",
+    "revokeFeedStale": "{{server}} last polled the revocation feed at {{when}}: until it polls again it keeps accepting this token.",
+    "revokeFeedNotWired": "{{server}} is not wired to the revocation feed: if it verifies tokens offline, it keeps accepting this token until it expires ({{expires}}).",
     "batchDeleteTitle": "Batch Delete Confirmation",
     "batchDeleteMessage": "Are you sure you want to delete {{count}} {{item}}? This action cannot be undone.",
     "batchDeleteButton": "Delete {{count}} {{item}}",
@@ -112,6 +115,7 @@
     "title": "{{name}} wants to access your MCP server",
     "subtitle": "Signed in as {{email}}",
     "viaDcr": "Dynamically registered client",
+    "viaCimd": "Identified by its metadata URL",
     "viaManual": "Trusted client",
     "viaSystem": "Built-in client",
     "targetService": "Target service",
@@ -125,7 +129,10 @@
     "approve": "Approve",
     "deny": "Deny",
     "deciding": "Working...",
-    "redirectTo": "You will be sent back to {{host}}",
+    "redirectTitle": "Sends you back to",
+    "loopbackWarning": "Every address this app can receive the authorization on is on this computer ({{host}}). Approve only if you started this app here yourself just now: any program listening on that port receives the authorization.",
+    "cimdIdentity": "This app is identified only by {{host}}",
+    "cimdNotice": "It did not register here: its name and details come from a document published at the address above and are not verified by MCP Gate. Approve only if you trust {{host}} and started this app yourself.",
     "expiresAt": "Request expires at {{time}}",
     "missingRid": "Missing authorization request id. Start the flow again from your MCP client.",
     "loadFailed": "This authorization request has expired or was already decided.",
@@ -206,10 +213,18 @@
       "hint": "Dynamically registered clients cannot obtain tokens until approved.",
       "review": "Review"
     },
+    "weakSecrets": {
+      "title": "A server secret is weak",
+      "reasonPlaceholder": "is a known placeholder value",
+      "reasonTooShort": "is shorter than 32 characters",
+      "reasonLowVariety": "uses too few distinct characters",
+      "fix": "Set it to at least 32 random characters (python -c \"import secrets; print(secrets.token_urlsafe(32))\") and restart. Changing SESSION_SECRET_KEY only signs everyone out; changing ENCRYPTION_KEY makes the stored private keys unreadable, so read SECURITY.md before you rotate it."
+    },
     "issuerMismatch": {
       "title": "{{n}} host(s) reached the OAuth endpoints without matching OAUTH_ISSUER ({{issuer}})",
       "hint": "Tokens carry the issuer above and discovery advertises its URLs, so clients using these addresses will fail verification or reach the wrong endpoints:",
       "seen": "{{n}} request(s)",
+      "untrusted": "(named by an internet client; the Host header may be forged)",
       "fix": "Either set OAUTH_ISSUER to the address clients actually use, or reach the server through the issuer host and list your reverse proxy in security.trusted_proxies. See docs/troubleshooting.md."
     },
     "chart": {
@@ -527,7 +542,9 @@
       "toolsCount": "{{n}} tools",
       "registered": "Registered",
       "alreadyExists": "Already exists",
-      "protectedLabel": "protected by MCP Center"
+      "registerFailed": "Not registered",
+      "skippedHosts": "Skipped hosts",
+      "protectedLabel": "protected by MCP Gate"
     },
     "detail": {
       "backToServices": "Back to Services",
@@ -540,6 +557,12 @@
       "copy": "Copy",
       "copied": "Copied!",
       "authRequired": "Auth Required",
+      "revocationFeed": "Revocation feed",
+      "feedActive": "Wired, last poll",
+      "feedStale": "Stopped polling, last poll",
+      "feedNeverPolled": "Resource server bound, but it has never polled",
+      "feedNotWired": "Not wired: revoked tokens stay valid until they expire",
+      "feedHint": "A server that verifies tokens offline learns about revocations only by polling POST /oauth/revoked: bind a resource server under OAuth Clients and poll with MCPGateVerifier.",
       "yes": "Yes",
       "no": "No",
       "responseTime": "Response Time",
@@ -629,7 +652,7 @@
       "noScopesDefined": "No scopes defined yet. Add some on the OAuth Clients page.",
       "staticToken": "Static bearer token (optional)",
       "staticTokenHint": "Only for external servers with their own token. Used for health checks and tool discovery; never shown again.",
-      "staticTokenPlaceholder": "Leave empty if this server is protected by MCP Center",
+      "staticTokenPlaceholder": "Leave empty if this server is protected by MCP Gate",
       "staticTokenKeep": "Leave empty to keep the stored token",
       "staticTokenClear": "Remove the stored token"
     },
@@ -658,6 +681,7 @@
     },
     "via": {
       "dcr": "Dynamic registration",
+      "cimd": "Metadata document",
       "manual": "Registered here",
       "system": "Built-in"
     },
@@ -707,7 +731,7 @@
       "grantTypes": "Grant types",
       "authMethod": "Token endpoint authentication",
       "authMethodHint": "Choose a client-secret method for server-side apps; the secret is shown once after registration.",
-      "jwksIntro": "The client signs a short-lived JWT with its private key on every token request; MCP Center verifies it against the public keys below. No secret is issued.",
+      "jwksIntro": "The client signs a short-lived JWT with its private key on every token request; MCP Gate verifies it against the public keys below. No secret is issued.",
       "jwksUri": "JWKS URI",
       "jwksUriHint": "HTTPS URL of the client's JSON Web Key Set. Fetched on first use and cached; an unknown kid triggers a refetch, so keys can be rotated.",
       "jwks": "JWKS document",
@@ -766,7 +790,23 @@
       "created": "created {{date}}",
       "active": "active",
       "inactive": "retired",
-      "empty": "No signing keys"
+      "empty": "No signing keys",
+      "published": "retired, still published",
+      "publishedHint": "No longer signs new tokens, but stays in the JWKS until the last token it signed has expired.",
+      "retiredHint": "No longer in the JWKS: tokens it signed are no longer accepted."
+    },
+    "resourceServer": {
+      "label": "Resource server for",
+      "hint": "The MCP server this client speaks for. Only a bound client may read the revocation feed, introspect tokens and report usage, and only for tokens of that server.",
+      "none": "Not a resource server",
+      "title": "Resource server: {{name}}",
+      "action": "Resource server…",
+      "boundTo": "Resource server for {{name}}",
+      "current": "Currently bound to",
+      "save": "Save",
+      "saveFailed": "Failed to update the resource-server binding",
+      "bound": "{{name}} is now a resource server",
+      "unbound": "{{name}} is no longer a resource server"
     }
   },
   "marketplace": {
@@ -825,7 +865,7 @@
     "connection": {
       "title": "{{name}} is ready",
       "connectionUrl": "Connection URL",
-      "connectionUrlHint": "Agent calls this URL from the MCP Center host",
+      "connectionUrlHint": "Agent calls this URL from the MCP Gate host",
       "agentConfigExample": "Agent config (example)",
       "statusLabel": "Status: {{state}}",
       "containerLabel": "Container:",
@@ -890,7 +930,9 @@
       "registering_service": "Registering service",
       "stopping_container": "Stopping container",
       "loading_image": "Loading image (docker load)",
-      "verifying_image": "Verifying image"
+      "verifying_image": "Verifying image",
+      "waiting_ready": "Waiting for the MCP server to answer",
+      "starting_process": "Starting process"
     }
   },
   "audit": {
@@ -953,6 +995,11 @@
       "oauth_scope_upsert": "Scope Saved",
       "oauth_scope_delete": "Scope Deleted",
       "oauth_key_rotate": "Signing Key Rotated",
+      "oauth_client_auth_failed": "Client Authentication Failed",
+      "oauth_consent_approve": "Consent Approved",
+      "oauth_consent_deny": "Consent Denied",
+      "oauth_code_replay": "Authorization Code Replayed",
+      "oauth_refresh_replay": "Refresh Token Reused",
       "refresh_tools": "Tools Refreshed",
       "scan_services": "Network Scan",
       "admin_setup": "Initial Setup",
@@ -963,7 +1010,8 @@
       "admin_logout": "Admin Logout",
       "admin_update": "Admin Update",
       "cleanup_expired": "Cleanup Expired",
-      "rate_limit_exceeded": "Rate Limit"
+      "rate_limit_exceeded": "Rate Limit",
+      "oauth_client_bind": "Client Resource Server Set"
     },
     "detail": {
       "title": "Audit Log Details",
@@ -1003,14 +1051,17 @@
       "local_login_disabled": "Password sign-in is disabled on this server.",
       "external_login_failed": "Sign-in with the external provider failed. Please try again.",
       "external_not_allowed": "This account is not allowed to sign in here.",
+      "external_email_unverified": "Your email address is not verified with this provider, so it cannot be used to sign in to an existing account. Verify it with the provider, or sign in with your password.",
       "provider_not_enabled": "This sign-in provider is not enabled.",
       "setup_already_done": "Setup has already been completed. Please sign in.",
       "invalid_current_password": "Current password is incorrect",
       "validation_email_invalid": "A valid email address is required",
       "validation_username_required": "Display name is required",
       "validation_password_short": "Password must be at least 8 characters",
+      "validation_password_too_long": "Password is too long (max 72 bytes, about 24 Chinese characters)",
       "authentication_required": "Please sign in",
-      "session_expired": "Your session has expired. Please sign in again."
+      "session_expired": "Your session has expired. Please sign in again.",
+      "csrf_origin_denied": "Request refused: it did not come from this console. Reload the page and try again."
     },
     "oauth": {
       "consent_not_found": "Consent record not found",
@@ -1028,16 +1079,32 @@
       "unsupported_grant_type": "Unsupported grant type",
       "server_error": "Authorization server error"
     },
+    "validation": {
+      "too_long": "\"{{field}}\" is too long (maximum {{max}} characters)."
+    },
     "service": {
+      "managed_use_uninstall": "\"{{name}}\" is run by the managed instance \"{{process_name}}\". Uninstall it from the Marketplace instead; that stops it and removes the service.",
       "not_found": "Service not found",
       "duplicate": "A service with the same name and host:port already exists.",
       "no_host_port": "Service has no host or port configured",
       "remote_permission_denied": "Permission denied by the remote MCP server.",
-      "remote_unreachable": "Could not reach the MCP server."
+      "remote_unreachable": "Could not reach the MCP server.",
+      "invalid_protocol": "Protocol must be http or https.",
+      "invalid_mcp_path": "The MCP path must start with a single \"/\" and may not contain @, ?, #, \\ or spaces.",
+      "invalid_host": "The host must be a bare host name or IP address (no scheme, port, path or @).",
+      "invalid_port": "The port must be between 1 and 65535."
     },
     "discovery": {
       "scan_failed": "Scan failed",
-      "verify_failed": "Verification failed"
+      "verify_failed": "Verification failed",
+      "no_hosts": "At least one host is required.",
+      "no_ports": "At least one port is required.",
+      "invalid_port": "Port {{port}} is out of range (1-65535).",
+      "invalid_port_range": "The port range must satisfy 1 ≤ start ≤ end ≤ 65535.",
+      "too_many_probes": "Scan too large: {{hosts}} hosts × {{ports}} ports exceeds the limit of {{limit}} probes.",
+      "invalid_host": "\"{{host}}\" is not a bare host name or IP address.",
+      "address_blocked": "{{host}} resolves to a blocked address (link-local or cloud metadata) and was skipped.",
+      "register_failed": "This server could not be registered; see the server log."
     },
     "managed": {
       "env_vars_unknown": "Unknown env vars for {{catalog_id}}: {{extras}}",
@@ -1053,7 +1120,9 @@
       "image_load_failed": "Failed to load image: {{reason}}",
       "image_not_installed": "Image \"{{image}}\" is not installed yet. Click Install in the Marketplace first",
       "image_tar_mismatch": "Image tar mismatch: expected {{expected}}, loaded {{loaded}}. Check the tar contents or the catalog image/tag",
-      "image_tar_not_found": "Image tar not found: {{path}}. Place the tar at that path and retry"
+      "image_tar_not_found": "Image tar not found: {{path}}. Place the tar at that path and retry",
+      "runtime_unavailable": "The managed-server runtime is unavailable (is the Docker daemon running?): {{reason}}",
+      "uninstall_stop_failed": "Uninstall aborted: the instance could not be stopped and may still be running: {{reason}}"
     },
     "byo": {
       "invalid_command": "Launch command violates the security policy: {{reason}}",
@@ -1061,6 +1130,9 @@
       "definition_not_found": "Custom MCP definition not found",
       "definition_in_use": "This definition still has a deployed instance. Uninstall it before deleting",
       "unknown_env_vars": "Environment variables not declared in the definition: {{extras}}"
+    },
+    "system": {
+      "cleanup_failed": "Cleanup failed for: {{jobs}}. See the server log."
     },
     "generic": {
       "serverError": "An unexpected error occurred. Please try again.",

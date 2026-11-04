@@ -68,13 +68,6 @@ class NotFoundError(AdapterError):
     fallback = "Resource not found"
 
 
-class PermissionDeniedError(AdapterError):
-    """Insufficient permission / not the owner."""
-    status_code = 403
-    code = "permission.denied"
-    fallback = "Permission denied"
-
-
 class ConflictError(AdapterError):
     """State conflict (e.g. duplicate, already exists)."""
     status_code = 409

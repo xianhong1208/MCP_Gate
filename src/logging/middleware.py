@@ -16,6 +16,7 @@ from src.logging.logger import (
     clear_request_context,
     generate_request_id,
 )
+from src.utils.client_ip import resolve_client_ip
 
 logger = get_logger("http")
 
@@ -76,23 +77,8 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
             clear_request_context()
 
     def _get_client_ip(self, request: Request) -> str:
-        """Extract client IP from request, considering proxies"""
-        # Check X-Forwarded-For header first
-        forwarded_for = request.headers.get("X-Forwarded-For")
-        if forwarded_for:
-            # Take the first IP in the chain
-            return forwarded_for.split(",")[0].strip()
-
-        # Check X-Real-IP header
-        real_ip = request.headers.get("X-Real-IP")
-        if real_ip:
-            return real_ip
-
-        # Fall back to direct client IP
-        if request.client:
-            return request.client.host
-
-        return "unknown"
+        """Client IP; forwarded headers are honoured only from trusted proxies (src.utils.client_ip)."""
+        return resolve_client_ip(request) or "unknown"
 
     def _log_request(
         self,

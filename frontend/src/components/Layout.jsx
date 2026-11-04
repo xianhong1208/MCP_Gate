@@ -29,7 +29,7 @@ import { IconButton, Avatar, Wordmark } from './ui'
  * App shell (standard admin layout, as in GitHub / Vercel / Supabase):
  *
  *   ┌──────────────────────────────────────────────────────────────┐
- *   │ [≡] 🛡 MCP Center   [🔍 search]            ⚙ ☀ A │ 👤 name  ⎋ │  top bar 56px, full width
+ *   │ [≡] 🛡 MCP Gate   [🔍 search]            ⚙ ☀ A │ 👤 name  ⎋ │  top bar 56px, full width
  *   ├────────────┬─────────────────────────────────────────────────┤
  *   │ nav        │ page title                     [primary action] │
  *   │ …          │ content                                         │

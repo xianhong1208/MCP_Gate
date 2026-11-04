@@ -1,6 +1,6 @@
-"""Admin-console identity (who may log in to the MCP Center admin console).
+"""Admin-console identity (who may log in to the MCP Gate admin console).
 
-This is separate from `src/oauth` (MCP Center acting as an OAuth 2.1 Authorization Server that issues tokens to MCP
+This is separate from `src/oauth` (MCP Gate acting as an OAuth 2.1 Authorization Server that issues tokens to MCP
 clients): this package answers "who is the person", that one answers "what may a client do against which MCP server".
 
 - passwords    bcrypt

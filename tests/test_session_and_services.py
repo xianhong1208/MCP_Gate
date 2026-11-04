@@ -31,15 +31,12 @@ def test_setup_rejects_weak_password_and_bad_email(client):
 
 
 def test_change_password_invalidates_old_session(owner_client):
-    import time
-
     old_cookie = owner_client.cookies.get("mcp_session")
-    time.sleep(1.1)  # iat in the same second as password_changed_at still counts as valid (so a login right after a
-    # password change is not misjudged)
     r = owner_client.put("/api/session/me/password", json={"current_password": OWNER_PASSWORD,
                                                            "new_password": "new-password-456"})
     assert r.status_code == 200
     # The response set a new cookie; putting the old cookie back must be rejected
+    owner_client.cookies.clear()  # httpx2 (used by TestClient when installed) keeps the new cookie next to a set() one
     owner_client.cookies.set("mcp_session", old_cookie)
     assert owner_client.get("/api/session/me").status_code == 401
     login = owner_client.post("/api/session/login", json={"email": OWNER_EMAIL, "password": "new-password-456"})
@@ -94,3 +91,14 @@ def test_audit_logs_recorded(owner_client, service):
     logs = owner_client.get("/api/audit/logs").json()
     actions = {entry["action"] for entry in logs["logs"]}
     assert {"admin_setup", "create_service"} <= actions
+
+
+def test_system_version_hides_platform_details_without_a_session(client):
+    """H-18: only the app version is public; Python version, OS and build details need a session."""
+    body = client.get("/api/system/version").json()
+    assert set(body) == {"version"} and body["version"]
+
+
+def test_system_version_shows_details_to_the_owner(owner_client):
+    body = owner_client.get("/api/system/version").json()
+    assert {"version", "build_time", "build_commit", "python_version", "platform"} <= set(body)

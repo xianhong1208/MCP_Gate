@@ -6,15 +6,22 @@ from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket
 from sqlalchemy.orm import Session
 
 from db import get_db
-from db.models import AdminUser
-from src.adapters import MCPToolAdapter, ServiceAdapter, fallback_service_name, sanitize_server_name
+from db.models import AdminUser, Service
+from src.adapters import (
+    ServiceAdapter, describe_server, fallback_service_description, fallback_service_name,
+    sanitize_server_name,
+)
+from src.adapters.exceptions import AdapterError
 from src.api.schemas import DiscoveredServiceInfo, ScanRequest, ScanResponse, VerifyRequest, VerifyResponse
 from src.audit import ActorType, AuditService, AuditStatus, ResourceType
 from src.discovery.scanner import get_scanner
 from src.oauth import service as oauth_service
 from src.discovery.websocket_manager import get_ws_manager
 from src.identity import get_current_user
-from src.identity.session import SESSION_COOKIE, resolve_user_from_token
+from src.identity.session import SESSION_COOKIE, WS_PROTOCOL, resolve_user_from_token, session_manager
+from src.middleware.origin_check import request_origin_allowed
+from src.utils.field_limits import FieldTooLongError, check_max_length, column_limit
+from src.utils.mcp_target import InvalidTargetError, build_mcp_url, validate_host
 
 logger = logging.getLogger(__name__)
 
@@ -39,20 +46,70 @@ def _scanner_token_factory(db: Session):
     return mint
 
 
+# Upper bound on hosts x ports per scan request: one full port range on one host. Each probe is a TCP
+# connect, so an unbounded request (e.g. port_range_end=10**9) would build a huge list and tie the
+# server up for hours.
+MAX_SCAN_PROBES = 65536
+_MIN_PORT, _MAX_PORT = 1, 65535
+
+
+def _scan_error(code: str, fallback: str, **params) -> HTTPException:
+    return HTTPException(status_code=422, detail={"error": f"discovery.{code}", "params": params,
+                                                  "fallback": fallback})
+
+
+def _scan_ports(request: ScanRequest) -> list:
+    """Validate the scan request and return the sorted, de-duplicated ports to probe.
+
+    Checked here rather than with pydantic constraints so the console gets the usual
+    `{error, params, fallback}` envelope (a pydantic 422 is a bare list it cannot show).
+    """
+    if not request.hosts or any(not h or not h.strip() for h in request.hosts):
+        raise _scan_error("no_hosts", "At least one host is required.")
+    for host in request.hosts:
+        try:
+            validate_host(host.strip())
+        except InvalidTargetError:
+            raise _scan_error("invalid_host", f"'{host}' is not a bare host name or IP address.", host=host)
+    # Found servers are registered under these values: they have to fit the service columns
+    try:
+        for host in request.hosts:
+            check_max_length("hosts", host.strip(), column_limit(Service.host))
+        check_max_length("service_name", request.service_name, column_limit(Service.name))
+    except FieldTooLongError as e:
+        raise HTTPException(status_code=422, detail=e.to_detail())
+    for port in request.ports:
+        if not _MIN_PORT <= port <= _MAX_PORT:
+            raise _scan_error("invalid_port", f"Port {port} is out of range (1-65535).", port=port)
+    start, end = request.port_range_start, request.port_range_end
+    ports = set(request.ports)
+    if start is not None or end is not None:
+        if start is None or end is None or not _MIN_PORT <= start <= end <= _MAX_PORT:
+            raise _scan_error("invalid_port_range",
+                              "Port range must have 1 <= start <= end <= 65535.", start=start, end=end)
+        ports.update(range(start, end + 1))
+    if not ports:
+        raise _scan_error("no_ports", "At least one port is required.")
+    probes = len(request.hosts) * len(ports)
+    if probes > MAX_SCAN_PROBES:
+        raise _scan_error("too_many_probes",
+                          f"Scan too large: {len(request.hosts)} hosts x {len(ports)} ports exceeds "
+                          f"the limit of {MAX_SCAN_PROBES} probes.",
+                          hosts=len(request.hosts), ports=len(ports), limit=MAX_SCAN_PROBES)
+    return sorted(ports)
+
+
 @router.post("/scan", response_model=ScanResponse)
 async def scan_services(request: ScanRequest, http_request: Request, db: Session = Depends(get_db),
                         current_user: AdminUser = Depends(get_current_user)):
     """Scan hosts / ports to find MCP servers, optionally registering them automatically."""
+    ports = _scan_ports(request)  # validated outside the try: its 422s must not become a 500
     try:
         scanner = get_scanner()
-        ports = list(request.ports)
-        if request.port_range_start and request.port_range_end:
-            ports.extend(range(request.port_range_start, request.port_range_end + 1))
-        ports = sorted(set(ports))
-
+        skipped_hosts: list = []
         discovered = await scanner.discover_services(
             hosts=request.hosts, ports=ports, verify=True, get_tools=True, auth_token=request.auth_token,
-            token_factory=_scanner_token_factory(db),
+            token_factory=_scanner_token_factory(db), host_errors=skipped_hosts,
         )
 
         discovered_info = []
@@ -70,7 +127,8 @@ async def scan_services(request: ScanRequest, http_request: Request, db: Session
                 if request.service_name:
                     service_name = request.service_name
                 elif vr and vr.server_name and vr.server_name != "(requires auth)":
-                    service_name = sanitize_server_name(vr.server_name)
+                    service_name = (sanitize_server_name(vr.server_name)
+                                    or fallback_service_name(svc.host, svc.port))
                 else:
                     service_name = fallback_service_name(svc.host, svc.port)
 
@@ -80,33 +138,34 @@ async def scan_services(request: ScanRequest, http_request: Request, db: Session
                     info.service_name = existing.name
                     info.service_id = str(existing.id)
                 else:
-                    if vr and vr.server_description:
-                        description = vr.server_description
-                    elif vr and vr.server_name:
-                        description = f"{vr.server_name}{' v' + vr.server_version if vr.server_version else ''}"
+                    description = (describe_server(vr.server_name, vr.server_version, vr.server_description)
+                                   if vr else None) or fallback_service_description(svc.host, svc.port)
+                    # One server failing to register is reported on its row; the scan goes on (#20)
+                    try:
+                        new_service = ServiceAdapter.register_discovered(
+                            db, name=service_name, description=description, host=svc.host, port=svc.port,
+                            protocol=svc.protocol, mcp_path=svc.mcp_path, source="auto_discovered",
+                            requires_auth=svc.requires_auth,
+                            tools=[{"name": t.name, "description": t.description, "input_schema": t.input_schema}
+                                   for t in svc.tools],
+                            response_time_ms=vr.response_time_ms if vr else None,
+                        )
+                    except AdapterError as e:
+                        info.register_error = e.to_detail()
+                        logger.warning(f"Scan: {svc.host}:{svc.port} not registered: {e.code}")
+                    except Exception as e:
+                        info.register_error = {"error": "discovery.register_failed", "params": {},
+                                               "fallback": "This server could not be registered."}
+                        logger.error(f"Scan: registering {svc.host}:{svc.port} failed: {e}")
                     else:
-                        description = f"MCP service at {svc.host}:{svc.port}"
-                    new_service = ServiceAdapter.create(
-                        db=db, name=service_name, description=description, host=svc.host, port=svc.port,
-                        protocol=svc.protocol, mcp_path=svc.mcp_path, source="auto_discovered",
-                        requires_auth=svc.requires_auth,
-                    )
-                    if svc.tools:
-                        MCPToolAdapter.sync_tools(db, str(new_service.id), [
-                            {"name": t.name, "description": t.description, "input_schema": t.input_schema}
-                            for t in svc.tools
-                        ])
-                    ServiceAdapter.update_health(db=db, service_id=str(new_service.id), status="online",
-                                                 response_time_ms=vr.response_time_ms if vr else None,
-                                                 reset_fail_count=True)
-                    info.registered = True
-                    info.service_name = service_name
-                    info.service_id = str(new_service.id)
-                    registered_count += 1
-                    await get_ws_manager().broadcast_service_added(
-                        service_id=str(new_service.id), service_name=service_name,
-                        service_data={"host": svc.host, "port": svc.port, "tools_count": len(svc.tools)},
-                    )
+                        info.registered = True
+                        info.service_name = service_name
+                        info.service_id = str(new_service.id)
+                        registered_count += 1
+                        await get_ws_manager().broadcast_service_added(
+                            service_id=str(new_service.id), service_name=service_name,
+                            service_data={"host": svc.host, "port": svc.port, "tools_count": len(svc.tools)},
+                        )
             discovered_info.append(info)
 
         AuditService.log_from_request(
@@ -114,12 +173,14 @@ async def scan_services(request: ScanRequest, http_request: Request, db: Session
             status=AuditStatus.SUCCESS, actor_type=ActorType.ADMIN, actor_id=str(current_user.id),
             actor_name=current_user.audit_name,
             details={"hosts": request.hosts, "ports_count": len(ports), "discovered_count": len(discovered_info),
-                     "registered_count": registered_count},
+                     "registered_count": registered_count,
+                     "register_failed_count": sum(1 for i in discovered_info if i.register_error),
+                     "skipped_hosts": [h["host"] for h in skipped_hosts]},
         )
         return ScanResponse(
             success=True, message=f"Scan completed. Found {len(discovered_info)} MCP services.",
             scanned_hosts=len(request.hosts), scanned_ports=len(ports), discovered=discovered_info,
-            registered_count=registered_count,
+            registered_count=registered_count, skipped_hosts=skipped_hosts,
         )
     except Exception as e:
         logger.error(f"Scan error: {e}")
@@ -130,6 +191,10 @@ async def scan_services(request: ScanRequest, http_request: Request, db: Session
 async def verify_service(request: VerifyRequest, db: Session = Depends(get_db),
                          _: AdminUser = Depends(get_current_user)):
     """Check whether host:port serves MCP and return its server info."""
+    try:
+        build_mcp_url(request.protocol, request.host, request.port, request.mcp_path)
+    except InvalidTargetError as e:
+        raise HTTPException(status_code=400, detail={"error": e.code, "fallback": e.fallback})
     try:
         result = await get_scanner().verify_mcp_service(
             host=request.host, port=request.port, path=request.mcp_path, protocol=request.protocol,
@@ -150,16 +215,26 @@ ws_router = APIRouter(tags=["WebSocket"])
 
 @ws_router.websocket("/ws/services")
 async def websocket_services(websocket: WebSocket):
-    """Real-time service status push. Auth: session cookie (SPA) or ?token= (session JWT)."""
+    """Real-time service status push. Auth: the console's session cookie plus its session binding (offered as the
+    ``mcp-gate.v1.binding.<value>`` subprotocol; ``mcp-gate.v1`` is the one accepted), from the console's own origin.
+
+    The cookie is attached to any page's WebSocket handshake (WebSockets are not covered by CORS), so a
+    handshake whose Origin is not the console's is refused before the cookie is looked at. A token in the
+    query string is not accepted: URLs end up in proxy and access logs.
+    """
     from db.database import make_session
 
-    token = websocket.cookies.get(SESSION_COOKIE) or websocket.query_params.get("token")
+    if not request_origin_allowed(websocket.scope):
+        await websocket.close(code=1008, reason="Origin not allowed")
+        return
+    token = websocket.cookies.get(SESSION_COOKIE)
     db = make_session()
     try:
-        user = resolve_user_from_token(db, token)
+        # A browser cannot set headers on a WebSocket handshake: the session binding comes as a subprotocol entry
+        user = resolve_user_from_token(db, token, session_manager.binding_from_ws_protocols(websocket.scope))
     finally:
         db.close()
     if user is None:
         await websocket.close(code=4001, reason="Authentication required")
         return
-    await get_ws_manager().handle_connection(websocket)
+    await get_ws_manager().handle_connection(websocket, subprotocol=WS_PROTOCOL)

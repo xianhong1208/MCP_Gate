@@ -5,7 +5,7 @@ Symptoms are listed as you would see them in a client, a server log or the conso
 ## Client cannot connect
 
 **`invalid_target: unknown resource: http://…/mcp`** (in the client, or as `error=invalid_target` on the redirect)
-MCP Center only issues tokens for servers it knows. Register the server in **Services** and make sure its audience — `oauth_audience`, or the MCP URL if unset — matches what the client sent as `resource`. Trailing slashes and `localhost` vs `127.0.0.1` count as different audiences.
+MCP Gate only issues tokens for servers it knows. Register the server in **Services** and make sure its audience — `oauth_audience`, or the MCP URL if unset — matches what the client sent as `resource`. Trailing slashes and `localhost` vs `127.0.0.1` count as different audiences.
 
 **`unauthorized_client: client is pending approval`**
 `OAUTH_DCR_AUTO_APPROVE=false` and the client has not been approved. Open **OAuth Clients → Pending** and approve it, or set the variable to `true`.
@@ -16,8 +16,11 @@ The client is reusing a stale `client_id` whose redirect URIs changed. Delete th
 **Consent screen never appears; client times out**
 The browser cannot reach `OAUTH_ISSUER`. Check that the issuer is the address your browser can open, not an internal one, and that `/oauth/authorize` is proxied.
 
+**`Authorization server metadata issuer mismatch: http://host:4568 != http://host:4568/`**
+The MCP server advertises MCP Gate with a trailing slash in `/.well-known/oauth-protected-resource`, and the client (mcp 2 and later) compares it with `OAUTH_ISSUER` as an exact string. This happens when the server passes `AnyHttpUrl(issuer)` to `RemoteAuthProvider(authorization_servers=...)`: pydantic adds the slash. Pass the issuer as a plain string (fastmcp 4 keeps it as-is), as the **Integration** panel snippet does.
+
 **`401` from the MCP server after a successful login**
-The server's `JWTVerifier` settings do not match MCP Center: `issuer` must equal `OAUTH_ISSUER` exactly, `audience` must equal the audience shown on the service page, and `jwks_uri` must be reachable from the server. Compare with the **Integration** panel.
+The server's `JWTVerifier` settings do not match MCP Gate: `issuer` must equal `OAUTH_ISSUER` exactly, `audience` must equal the audience shown on the service page, and `jwks_uri` must be reachable from the server. Compare with the **Integration** panel.
 
 ## Console
 
@@ -40,28 +43,37 @@ EOF
 The console bundle is missing. Run `cd frontend && npm install && npm run build`, then restart.
 
 **Scan does not find a server that is clearly running**
-The scanner sends a JSON-RPC `initialize` to `/mcp`. A server that answers `401` with `WWW-Authenticate: Bearer …` (any FastMCP server with `RemoteAuthProvider`) is recognised as MCP behind OAuth; if it trusts this MCP Center, the scanner mints a short-lived token for `http://<host>:<port>/mcp` and reads the real name and tools. That token only matches when the host you scan is exactly the one the server uses as its audience (`127.0.0.1` vs `localhost` matters). Servers protected by a different authorization server, or by a static bearer token, show up as *requires authentication* — register them and add the token on the service page. A `401` without a Bearer challenge or JSON-RPC body is not treated as MCP.
+The scanner sends a JSON-RPC `initialize` to `/mcp`. A server that answers `401` with `WWW-Authenticate: Bearer …` (any FastMCP server with `RemoteAuthProvider`) is recognised as MCP behind OAuth; if it trusts this MCP Gate, the scanner mints a short-lived token for `http://<host>:<port>/mcp` and reads the real name and tools. That token only matches when the host you scan is exactly the one the server uses as its audience (`127.0.0.1` vs `localhost` matters). Servers protected by a different authorization server, or by a static bearer token, show up as *requires authentication* — register them and add the token on the service page. A `401` without a Bearer challenge or JSON-RPC body is not treated as MCP.
 
 **A platform's OAuth module demands a client secret, or fails with `PKCE code_challenge (S256) is required` / `invalid_target`**
 The platform runs a classic OAuth 2.0 flow (client_id + client_secret, no PKCE, no `resource`). Register it in **OAuth Clients → Register trusted client** with a client-secret auth method and tick **Classic OAuth client**; pick the server it should get tokens for as the **default resource**. Fill its `client_id` / `client_secret` into the platform, with `<issuer>/oauth/authorize`, `<issuer>/oauth/token` and the scopes you want. Everything else (Claude Code, Cursor, FastMCP) should keep using PKCE and dynamic registration.
 
 **The scanned server logs `Invalid HTTP request received`**
-That was the scanner's HTTPS probe hitting a plain-HTTP port; since 1.0.0 it is skipped whenever the HTTP probe got any answer. Update MCP Center if you still see it.
+That was the scanner's HTTPS probe hitting a plain-HTTP port; since 1.0.0 it is skipped whenever the HTTP probe got any answer. Update MCP Gate if you still see it.
 
 **Signed out unexpectedly**
-Sessions expire after 12 hours, after 30 minutes idle in the UI, and immediately when the password changes. Behind HTTPS, `SECURE_COOKIE=true` is required or the cookie is dropped.
+Sessions expire after 12 hours, after 30 minutes idle in the UI, and immediately on logout or when the password changes. Behind HTTPS, `SECURE_COOKIE=true` is required or the cookie is dropped. Each session also needs the binding secret the console keeps in the browser's `localStorage` for that exact origin: clearing site data, a private window that was closed, or opening the console under another address (`127.0.0.1` instead of `localhost`, a different port) means signing in again there. Upgrading from a version without server-side sessions signs everyone out once.
+
+**Every change fails with `403 auth.csrf_origin_denied`**
+The request's `Origin` is not the address the server sees. Behind a reverse proxy, keep `Host` (or send `X-Forwarded-Host`) and list the proxy in `security.trusted_proxies` (see [deploy.md](deploy.md#3-reverse-proxy)). If another site is meant to call the console API, add its origin to `CORS_ALLOWED_ORIGINS`.
+
+**`421 http.host_not_allowed`**
+The request used a host name MCP Gate does not answer to (DNS-rebinding protection): only the `OAUTH_ISSUER` host, `localhost`, `*.localhost` and IP addresses are served by default. Add other names (a container service name, an internal alias) to `ALLOWED_HOSTS`; the log names the refused host once.
 
 ## Server
 
 ### "OAuth request to … arrived via X but OAUTH_ISSUER is Y"
 
-MCP Center writes `OAUTH_ISSUER` into every token's `iss` claim and into the discovery document, so clients and MCP servers treat it as this server's identity. The warning means a request to `/.well-known/*` or `/oauth/*` came in through a different scheme, host or port than the issuer says. It is logged once per distinct host, and the console's `GET /api/oauth/overview` lists them under `issuer_mismatches`.
+MCP Gate writes `OAUTH_ISSUER` into every token's `iss` claim and into the discovery document, so clients and MCP servers treat it as this server's identity. The warning means a request to `/.well-known/*` or `/oauth/*` came in through a different scheme, host or port than the issuer says. It is logged once per distinct host, and the console's `GET /api/oauth/overview` lists them under `issuer_mismatches`.
 
 Typical causes and fixes:
 
 - **Reached by IP or another hostname** (`http://192.168.1.20:4568` while the issuer is `http://localhost:4568`): pick the address clients will actually use and set `OAUTH_ISSUER` to it. Tokens issued under the old issuer stop verifying, so do this before clients are configured.
 - **Behind a reverse proxy** (`http://127.0.0.1:4568` while the issuer is `https://auth.example.com`): the proxy must send `X-Forwarded-Proto` and `X-Forwarded-Host`, and its IP must be listed in `security.trusted_proxies` in `config/config.yaml`; forwarded headers from any other peer are ignored on purpose. See [deploy.md](deploy.md).
 - **`localhost` versus `127.0.0.1`**: browsers and MCP clients treat them as different origins. Use one consistently in the issuer, the client configuration and the service audiences.
+- **"OAuth request to … from <ip> named host X, which is not OAUTH_ISSUER"**: the request came straight from an internet address, so the `Host` header is whatever that client chose. Unless your clients really use X, ignore it. These hosts carry `plausible: false` in `issuer_mismatches`, get no "set OAUTH_ISSUER to …" advice, and their warnings are capped at 20 an hour.
+
+The list keeps at most 20 hosts (internet-named ones are dropped first, then the least recently seen), forgets a host 24 hours after it was last seen, and ignores values that are not a valid `host[:port]`.
 
 
 **`Address already in use`**
@@ -73,7 +85,7 @@ Changing `OAUTH_ISSUER` or `ENCRYPTION_KEY` invalidates tokens: the first change
 **Health shows `error` / `offline` for a server that works**
 The health check connects with a self-minted token for servers that require auth. If the server uses its own static bearer token instead, set it on the service (**Edit → Static bearer token**). For servers without auth, untick **Requires authentication**.
 
-**Marketplace: `Image 'mcp-runtime:1' 尚未安裝` / bring-your-own deploy fails**
+**Marketplace: `Image 'mcp-runtime:1' is not installed yet` / bring-your-own deploy fails**
 Build the runtime image once: `docker build -t mcp-runtime:1 deploy/mcp-runtime`. See [deploy.md](deploy.md#6-optional-marketplace-and-bring-your-own-servers).
 
 ## Get more detail

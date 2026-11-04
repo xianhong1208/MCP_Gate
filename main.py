@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""MCP Center startup script.
+"""MCP Gate startup script.
 
 OAuth 2.1 Authorization Server + MCP server admin console.
 
@@ -13,6 +13,7 @@ import argparse
 import hashlib
 import os
 import sys
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -34,9 +35,11 @@ from src.discovery.websocket_manager import get_ws_manager  # noqa: E402
 from src.exceptions.handlers import register_exception_handlers  # noqa: E402
 from src.logging import RequestLoggingMiddleware, get_logger, setup_logging  # noqa: E402
 from src.middleware import (  # noqa: E402
-    IssuerMismatchMiddleware, PublicOAuthCORSMiddleware, RateLimitConfig, RateLimitMiddleware, SecurityHeadersMiddleware,
+    CSRFOriginMiddleware, IssuerMismatchMiddleware, PublicOAuthCORSMiddleware, RateLimitConfig, RateLimitMiddleware,
+    SecurityHeadersMiddleware, TrustedHostMiddleware,
 )
 from src.scheduler import get_scheduler  # noqa: E402
+from src.utils.db_url import mask_db_url, redact_url_credentials  # noqa: E402
 from src.version import __build_commit__, __build_time__, __version__  # noqa: E402
 
 logger = get_logger("main")
@@ -50,6 +53,7 @@ API_PREFIXES = ("api/", "oauth/", ".well-known/", "ws/", "health", "docs", "redo
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     scheduler = get_scheduler()
+    scheduler.configure(**Config.get_scheduler_config().model_dump())
     scheduler.set_ws_manager(get_ws_manager())
     scheduler.start()
 
@@ -63,6 +67,20 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Marketplace catalog preload skipped: {e}")
 
+    # Off the startup path: reconcile restarts every dead managed server one after another (a stdio cold start can
+    # take up to 300 s each), and the authorization server must answer from the first second.
+    reconcile = start_managed_reconcile()
+
+    yield
+    scheduler.stop()
+    reconcile.join(timeout=RECONCILE_SHUTDOWN_WAIT_SECONDS)
+
+
+RECONCILE_SHUTDOWN_WAIT_SECONDS = 2
+
+
+def reconcile_managed_servers() -> None:
+    """Align managed servers with their desired state (src/orchestrator/manager.py reconcile). Never raises."""
     try:
         from src.orchestrator.manager import get_orchestrator
         db = make_session()
@@ -70,17 +88,23 @@ async def lifespan(app: FastAPI):
             get_orchestrator().reconcile(db)
         finally:
             db.close()
+        logger.info("Managed MCP reconcile finished")
     except Exception as e:
         logger.warning(f"Managed MCP reconcile skipped: {e}")
 
-    yield
-    scheduler.stop()
+
+def start_managed_reconcile() -> threading.Thread:
+    """Run reconcile_managed_servers in a daemon thread (it blocks on the runtime and the database, so not on the
+    event loop) and return the thread."""
+    thread = threading.Thread(target=reconcile_managed_servers, name="managed-reconcile", daemon=True)
+    thread.start()
+    return thread
 
 
 def create_app() -> FastAPI:
     enable_docs = os.environ.get("ENABLE_API_DOCS", "").lower() == "true"
     app = FastAPI(
-        title="MCP Center",
+        title="MCP Gate",
         description="OAuth 2.1 Authorization Server and control plane for MCP servers",
         version=__version__,
         docs_url="/docs" if enable_docs else None,
@@ -88,8 +112,6 @@ def create_app() -> FastAPI:
         openapi_url="/openapi.json" if enable_docs else None,
         lifespan=lifespan,
     )
-
-    app.add_middleware(SecurityHeadersMiddleware)
 
     cors = Config.get_cors_config()
     app.add_middleware(
@@ -99,17 +121,24 @@ def create_app() -> FastAPI:
     # Added after the console policy so it runs outside it: the OAuth protocol surface
     # (discovery, registration, token) is open to any origin, without credentials.
     app.add_middleware(PublicOAuthCORSMiddleware)
+    # Cookie-authenticated state changes must come from the console's own origin (CSRF); see middleware/csrf.py
+    app.add_middleware(CSRFOriginMiddleware)
 
     rl = Config.get_rate_limit_config()
     sec = Config.get_security_config()
     # Warn (once per host) when OAuth requests arrive through a host that is not OAUTH_ISSUER
     app.add_middleware(IssuerMismatchMiddleware, issuer=Config.get_oauth_config().issuer,
                        trusted_proxies=sec.trusted_proxies)
+    # DNS rebinding: refuse foreign Host names before anything else looks at the request (outside the issuer check,
+    # so a rebinding name is never recorded as an "issuer mismatch" or suggested as OAUTH_ISSUER)
+    app.add_middleware(TrustedHostMiddleware)
     app.add_middleware(RateLimitMiddleware, config=RateLimitConfig(
         enabled=rl.enabled, requests_per_minute=rl.requests_per_minute, requests_per_hour=rl.requests_per_hour,
         whitelist=rl.whitelist, path_limits=rl.path_limits, trusted_proxies=sec.trusted_proxies,
     ))
     app.add_middleware(RequestLoggingMiddleware, exclude_paths=["/health", "/docs", "/redoc", "/openapi.json"])
+    # Added last = outermost, so 429s from the rate limiter and CORS preflight answers get the headers too
+    app.add_middleware(SecurityHeadersMiddleware)
 
     register_exception_handlers(app)
 
@@ -172,8 +201,28 @@ def _mount_spa(app: FastAPI) -> None:
         return _serve_index(request)
 
 
+def warn_if_multiple_workers(env=None) -> bool:
+    """MCP Gate must run as a single process: the rate limiter counts in memory and APScheduler runs the purge
+    and health-check jobs in-process. Warn when the environment asks for more workers. Returns True if warned."""
+    env = os.environ if env is None else env
+    for name in ("WEB_CONCURRENCY", "UVICORN_WORKERS"):
+        raw = (env.get(name) or "").strip()
+        try:
+            workers = int(raw)
+        except ValueError:
+            continue
+        if workers > 1:
+            logger.warning(
+                f"{name}={workers}, but MCP Gate supports a single process only: the rate limiter keeps its counters "
+                "in memory and the scheduler runs in-process, so extra workers would multiply the rate limit and run "
+                "every scheduled job once per worker. Run one process."
+            )
+            return True
+    return False
+
+
 def parse_args():
-    parser = argparse.ArgumentParser(description="MCP Center")
+    parser = argparse.ArgumentParser(description="MCP Gate")
     parser.add_argument("--config", type=str, default="config/config.yaml")
     parser.add_argument("--host", type=str)
     parser.add_argument("--port", type=int)
@@ -199,6 +248,11 @@ def init_database(*, run_migrations: bool = True) -> dict:
     identity = Config.get_identity_config()
     db = make_session()
     try:
+        # Weak SESSION_SECRET_KEY / ENCRYPTION_KEY: warned always, refused only while the install is new (no
+        # signing key yet, so nothing is encrypted with it); see src/utils/secret_policy.py
+        from src.adapters import OAuthKeyAdapter
+        from src.utils.secret_policy import check_startup_secrets
+        check_startup_secrets(fresh_install=not OAuthKeyAdapter.list_all(db))
         summary = seed_database(db, bootstrap_email=identity.bootstrap_admin_email,
                                 bootstrap_password=identity.bootstrap_admin_password)
         from src.oauth.signing_keys import ensure_active_signing_key
@@ -208,6 +262,29 @@ def init_database(*, run_migrations: bool = True) -> dict:
     finally:
         db.close()
 
+
+
+def _print_banner(summary: dict, host: str, port: int) -> None:
+    """Startup banner. The database URL is printed with its password masked (N1)."""
+    config = Config.get_config_model()
+    issuer = config.oauth.issuer
+    logger.info("")
+    logger.info("╔══════════════════════════════════════════════════════╗")
+    logger.info("║   MCP Gate — OAuth 2.1 AS for your MCP servers     ║")
+    logger.info("╚══════════════════════════════════════════════════════╝")
+    logger.info(f"  Version:    {__version__} ({__build_commit__}, {__build_time__})")
+    logger.info(f"  Address:    http://{host}:{port}")
+    logger.info(f"  Issuer:     {issuer}")
+    logger.info(f"  Database:   {mask_db_url(config.database.url)}")
+    logger.info(f"  Metadata:   {issuer}/.well-known/oauth-authorization-server")
+    logger.info(f"  JWKS:       {issuer}/.well-known/jwks.json  (kid={summary.get('signing_kid', '?')[:12]}…)")
+    if summary.get("users", 0) == 0:
+        logger.warning(f"  No admin account yet → open http://localhost:{port}/setup to create the owner")
+    elif summary.get("owner_created"):
+        logger.info("  Owner account created from ADMIN_EMAIL / ADMIN_PASSWORD")
+    if os.environ.get("ENABLE_API_DOCS", "").lower() == "true":
+        logger.info(f"  API Docs:   http://{host}:{port}/docs")
+    logger.info("")
 
 def main():
     args = parse_args()
@@ -222,6 +299,7 @@ def main():
     setup_logging(level=log_config.level, format_type=log_config.format, log_dir=log_config.log_dir,
                   rotation=log_config.rotation, rotation_max_size=log_config.rotation_max_size,
                   retention=log_config.retention, compression=log_config.compression)
+    warn_if_multiple_workers()
 
     if args.migrate_only:
         from db.migrate import run_migration_command
@@ -229,39 +307,28 @@ def main():
         ensure_database_ready(Config.get_database_config().url, logger)
         sys.exit(0 if run_migration_command(args.migrate_only, args.message, args.revision) else 1)
 
+    from src.utils.secret_policy import WeakSecretError
     try:
         summary = init_database(run_migrations=not args.no_migrate)
+    except WeakSecretError as e:
+        logger.error(str(e))
+        sys.exit(1)
     except Exception as e:
-        logger.error(f"Failed to initialize database: {e}")
+        logger.error(f"Failed to initialize database: {redact_url_credentials(str(e))}")
         sys.exit(1)
 
     app = create_app()
     host = args.host or config.server.host
     port = args.port or config.effective_port
-    issuer = config.oauth.issuer
-
-    logger.info("")
-    logger.info("╔══════════════════════════════════════════════════════╗")
-    logger.info("║   MCP Center — OAuth 2.1 AS for your MCP servers     ║")
-    logger.info("╚══════════════════════════════════════════════════════╝")
-    logger.info(f"  Version:    {__version__} ({__build_commit__}, {__build_time__})")
-    logger.info(f"  Address:    http://{host}:{port}")
-    logger.info(f"  Issuer:     {issuer}")
-    logger.info(f"  Database:   {config.database.url}")
-    logger.info(f"  Metadata:   {issuer}/.well-known/oauth-authorization-server")
-    logger.info(f"  JWKS:       {issuer}/.well-known/jwks.json  (kid={summary.get('signing_kid', '?')[:12]}…)")
-    if summary.get("users", 0) == 0:
-        logger.warning(f"  No admin account yet → open http://localhost:{port}/setup to create the owner")
-    elif summary.get("owner_created"):
-        logger.info("  Owner account created from ADMIN_EMAIL / ADMIN_PASSWORD")
-    if os.environ.get("ENABLE_API_DOCS", "").lower() == "true":
-        logger.info(f"  API Docs:   http://{host}:{port}/docs")
-    logger.info("")
+    _print_banner(summary, host, port)
 
     if args.reload:
-        uvicorn.run("main:create_app", host=host, port=port, reload=True, factory=True, log_config=None)
+        uvicorn.run("main:create_app", host=host, port=port, reload=True, factory=True, log_config=None,
+                    access_log=False)
     else:
-        uvicorn.run(app, host=host, port=port, log_config=None)
+        # log_config=None: uvicorn's loggers propagate to the loguru InterceptHandler installed by setup_logging.
+        # access_log=False: RequestLoggingMiddleware already logs every request.
+        uvicorn.run(app, host=host, port=port, log_config=None, access_log=False)
 
 
 if __name__ == "__main__":

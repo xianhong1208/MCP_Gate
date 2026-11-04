@@ -1,15 +1,15 @@
 """Marketplace catalog Pydantic schema
 
 Each catalog/*.yaml file maps to one CatalogEntry describing an MCP service template that
-can be installed from the MCP Center UI. The "Install" form the vendor sees is generated
+can be installed from the MCP Gate console. The console's "Install" form is generated
 dynamically from this schema.
 
 Design principles:
-  - extra='forbid' -- unknown fields raise immediately, so a vendor's typo in a field name never fails silently
+  - extra='forbid' -- unknown fields raise immediately, so a typo in a catalog field name never fails silently
   - the secret + required flags tell the UI how to render the field (password / plain input)
   - docker.tag should be pinned by us to a verified version; shipping with latest is not recommended
 """
-from typing import List, Optional
+from typing import List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # Single source of truth for the docker argv policy. The same rules are applied again by the
@@ -59,9 +59,12 @@ class DockerSpec(BaseModel):
         default_factory=lambda: ["--rm"],
         description="docker run args",
     )
-    transport: str = Field(
+    # Catalog images must ship their own HTTP server: the orchestrator has no inner command to bridge for a
+    # catalog entry, so anything else could only fail at start time. Rejected at load time instead (the loader
+    # skips the file and records why). stdio servers are deployed as BYO definitions.
+    transport: Literal["http"] = Field(
         "http",
-        description="stdio = needs the supergateway bridge; http = the image ships its own HTTP server",
+        description="Must be 'http': the image ships its own HTTP server (stdio servers go through BYO definitions)",
     )
     container_port: int = Field(
         8080,
@@ -156,8 +159,3 @@ class CatalogEntry(BaseModel):
         instead of blowing up with a 500 in image_tar_name() only when the marketplace listing is requested."""
         self.image_tar_name()
         return self
-
-    def public_dict(self) -> dict:
-        """Used by the API to return the entry to the frontend; currently identical to model_dump().
-        Adjust here if internal fields ever need to be hidden"""
-        return self.model_dump()

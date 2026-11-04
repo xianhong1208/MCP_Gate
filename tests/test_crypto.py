@@ -188,7 +188,7 @@ class TestCryptoSpecCoverage:
         from src.utils.crypto import TokenCrypto
 
         monkeypatch.delenv("ENCRYPTION_KEY", raising=False)
-        monkeypatch.setenv("MCP_CENTER_SECRETS_FILE", str(tmp_path / "secrets.json"))
+        monkeypatch.setenv("MCP_GATE_SECRETS_FILE", str(tmp_path / "secrets.json"))
         secrets_store.reset_cache()
         first = TokenCrypto()
         secrets_store.reset_cache()

@@ -4,7 +4,8 @@
  * Covers the shapes users actually copy from MCP marketplaces: the Claude Desktop mcpServers wrapper,
  * multi-path args, multiple servers, a single server object, invalid input, and unsupported commands.
  */
-import { parseMcpConfigJson, BYO_COMMANDS } from '../src/utils/mcpConfig.js'
+import { readFileSync } from 'node:fs'
+import { parseMcpConfigJson, BYO_COMMANDS, BYO_MCP_PATH, byoEndpointPreview } from '../src/utils/mcpConfig.js'
 let fail = 0
 const eq = (label, got, want) => {
   const ok = JSON.stringify(got) === JSON.stringify(want)
@@ -58,6 +59,12 @@ const dk = parseMcpConfigJson('{"mcpServers":{"x":{"command":"docker","args":["r
 eq('docker parsed', dk.command, 'docker')
 eq('docker not allowed', BYO_COMMANDS.includes(dk.command), false)
 
+// 7. BYO endpoint preview: the bridge serves Streamable HTTP on the backend's STDIO_HTTP_PATH, never legacy /sse
+const runtimePy = readFileSync(new URL('../../src/orchestrator/runtime.py', import.meta.url), 'utf8')
+eq('byo path = STDIO_HTTP_PATH', BYO_MCP_PATH, runtimePy.match(/^STDIO_HTTP_PATH\s*=\s*"([^"]+)"/m)?.[1])
+eq('byo preview', byoEndpointPreview(9100, 'auto'), '127.0.0.1:9100/mcp')
+eq('byo preview auto port', byoEndpointPreview('', 'auto'), '127.0.0.1:auto/mcp')
+
 console.log(fail === 0 ? '\nALL PASS' : `\n${fail} FAILED`)
 process.exit(fail ? 1 : 0)
 
@@ -72,3 +79,4 @@ process.exit(fail ? 1 : 0)
     throw new Error('secured config must carry a Bearer placeholder')
   console.log('ok   buildAgentConfig')
 }
+

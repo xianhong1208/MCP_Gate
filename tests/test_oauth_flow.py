@@ -24,6 +24,16 @@ def _register(client, **overrides):
     return r.json()
 
 
+def _register_console(client, **overrides):
+    """A client the owner registers in the console (the only way to get client_credentials)."""
+    body = {"client_name": "Console client", "redirect_uris": [], "grant_types": ["client_credentials"],
+            "token_endpoint_auth_method": "client_secret_basic"}
+    body.update(overrides)
+    r = client.post("/api/oauth/clients", json=body)
+    assert r.status_code == 201, r.text
+    return r.json()
+
+
 def _authorize_and_consent(client, client_id, *, scope=None, resource=RESOURCE, remember=False):
     verifier, challenge = make_pkce()
     params = {
@@ -97,8 +107,7 @@ def test_dcr_rejects_bad_redirect(client):
 
 
 def test_dcr_confidential_client_gets_secret_once(client):
-    reg = _register(client, token_endpoint_auth_method="client_secret_post",
-                    grant_types=["client_credentials"], redirect_uris=[])
+    reg = _register(client, token_endpoint_auth_method="client_secret_post")
     assert reg["client_secret"]
     r = client.get("/oauth/register")  # no such GET
     assert r.status_code in (404, 405)
@@ -218,9 +227,13 @@ def test_consent_remembered_skips_second_time(owner_client, service):
         "response_type": "code", "client_id": reg["client_id"], "redirect_uri": REDIRECT_URI,
         "code_challenge": challenge, "code_challenge_method": "S256", "resource": RESOURCE, "state": "again",
     }, follow_redirects=False)
-    # The second time the client is redirected with the code directly, without passing through /consent
-    assert r.status_code == 302 and r.headers["location"].startswith(REDIRECT_URI)
-    assert "code=" in r.headers["location"]
+    # The second time the consent page may skip the question: it sees can_skip and approves on its own (the code is
+    # never issued by /oauth/authorize itself, which only has the cookie, see test_session_binding.py)
+    assert r.status_code == 302 and r.headers["location"].startswith("/consent?")
+    rid = parse_qs(urlparse(r.headers["location"]).query)["rid"][0]
+    assert owner_client.get(f"/oauth/authorize/requests/{rid}").json()["can_skip"] is True
+    d = owner_client.post(f"/oauth/authorize/requests/{rid}/decision", json={"approve": True})
+    assert d.json()["redirect_to"].startswith(REDIRECT_URI) and "code=" in d.json()["redirect_to"]
     consents = owner_client.get("/api/oauth/consents").json()["consents"]
     assert len(consents) == 1 and consents[0]["client_id"] == reg["client_id"]
 
@@ -234,12 +247,13 @@ def test_manual_client_skips_consent(owner_client, service):
         "response_type": "code", "client_id": client_id, "redirect_uri": REDIRECT_URI,
         "code_challenge": challenge, "code_challenge_method": "S256", "resource": RESOURCE,
     }, follow_redirects=False)
-    assert r.status_code == 302 and r.headers["location"].startswith(REDIRECT_URI)
+    assert r.status_code == 302 and r.headers["location"].startswith("/consent?")
+    rid = parse_qs(urlparse(r.headers["location"]).query)["rid"][0]
+    assert owner_client.get(f"/oauth/authorize/requests/{rid}").json()["can_skip"] is True
 
 
 def test_client_credentials_grant(owner_client, service):
-    reg = _register(owner_client, token_endpoint_auth_method="client_secret_basic",
-                    grant_types=["client_credentials"], redirect_uris=[])
+    reg = _register_console(owner_client)
     r = owner_client.post("/oauth/token", data={"grant_type": "client_credentials", "resource": RESOURCE,
                                                 "scope": "mcp:tools:read"},
                           auth=(reg["client_id"], reg["client_secret"]))
@@ -319,6 +333,10 @@ def test_key_rotation_keeps_old_tokens_verifiable(owner_client, service):
 def test_snippets(owner_client, service):
     s = owner_client.get(f"/api/oauth/snippets/{service['id']}").json()
     assert "JWTVerifier" in s["fastmcp_server"]
+    # The issuer goes in as a plain string: AnyHttpUrl would publish "http://testserver/", which mcp 2
+    # clients reject as an issuer mismatch
+    assert 'authorization_servers=["http://testserver"]' in s["fastmcp_server"]
+    assert "AnyHttpUrl" not in s["fastmcp_server"]
     assert s["audience"] == RESOURCE and s["issuer"] == "http://testserver"
     assert s["mcp_json_oauth"]["mcpServers"]["demo-mcp"]["url"] == RESOURCE
 

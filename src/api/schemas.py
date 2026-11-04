@@ -1,8 +1,8 @@
 """API request / response models."""
 
-from typing import List, Literal, Optional
+from typing import Annotated, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # ==================== Service ====================
@@ -16,7 +16,7 @@ class ServiceCreateRequest(BaseModel):
     mcp_path: str = "/mcp"
     tags: Optional[List[str]] = None
     requires_auth: bool = True
-    # The external service's own static Bearer token (optional; not needed for services protected by MCP Center OAuth)
+    # The external service's own static Bearer token (optional; not needed for services protected by MCP Gate OAuth)
     auth_token: Optional[str] = None
     # OAuth audience (RFC 8707 resource); falls back to the MCP URL when empty
     oauth_audience: Optional[str] = None
@@ -130,8 +130,10 @@ class AuditLogStatsResponse(BaseModel):
 # ==================== Discovery ====================
 
 class ScanRequest(BaseModel):
-    hosts: List[str] = ["localhost"]
-    ports: List[int] = [3000, 8000, 8080]
+    # Port values, ranges and the hosts x ports budget are checked by the scan route (so the console
+    # gets a readable error); these caps only stop absurd payloads before they are even parsed.
+    hosts: List[Annotated[str, Field(max_length=253)]] = Field(["localhost"], max_length=1024)
+    ports: List[int] = Field([3000, 8000, 8080], max_length=65535)
     port_range_start: Optional[int] = None
     port_range_end: Optional[int] = None
     auto_register: bool = True
@@ -153,6 +155,16 @@ class DiscoveredServiceInfo(BaseModel):
     registered: bool = False
     service_name: Optional[str] = None
     service_id: Optional[str] = None
+    # Set when auto-register failed for this server: {error, params, fallback} (the scan itself succeeds)
+    register_error: Optional[dict] = None
+
+
+class ScanHostError(BaseModel):
+    """A host the scan skipped, e.g. because it resolves to a blocked address."""
+    host: str
+    error: str
+    params: dict = {}
+    fallback: str = ""
 
 
 class ScanResponse(BaseModel):
@@ -162,6 +174,7 @@ class ScanResponse(BaseModel):
     scanned_ports: int
     discovered: List[DiscoveredServiceInfo]
     registered_count: int = 0
+    skipped_hosts: List[ScanHostError] = []
 
 
 class VerifyRequest(BaseModel):

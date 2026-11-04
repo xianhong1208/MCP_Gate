@@ -3,7 +3,7 @@
 Features:
 - Manage WebSocket connections
 - Broadcast health status changes
-- Broadcast service added/removed events
+- Broadcast service-added events
 """
 
 import asyncio
@@ -23,8 +23,6 @@ class WSMessageType(str, Enum):
     """WebSocket message types"""
     HEALTH_UPDATE = "health_update"
     SERVICE_ADDED = "service_added"
-    SERVICE_REMOVED = "service_removed"
-    SERVICE_UPDATED = "service_updated"
     PING = "ping"
     PONG = "pong"
     ERROR = "error"
@@ -45,9 +43,9 @@ class WSMessage:
 
     def to_json(self) -> str:
         """Convert to a JSON string."""
-        d = asdict(self)
-        d["type"] = self.type.value
-        return json.dumps(d)
+        payload = asdict(self)
+        payload["type"] = self.type.value
+        return json.dumps(payload)
 
 
 class WSManager:
@@ -66,13 +64,14 @@ class WSManager:
         """Get the number of connections."""
         return len(self._connections)
 
-    async def connect(self, websocket: WebSocket) -> None:
+    async def connect(self, websocket: WebSocket, subprotocol: Optional[str] = None) -> None:
         """Accept a new WebSocket connection.
 
         Args:
             websocket: WebSocket connection
+            subprotocol: the subprotocol to answer with (a browser that offered any fails the handshake otherwise)
         """
-        await websocket.accept()
+        await websocket.accept(subprotocol=subprotocol)
         async with self._lock:
             self._connections.add(websocket)
         logger.info(f"WebSocket connected. Total connections: {self.connection_count}")
@@ -170,51 +169,6 @@ class WSManager:
         )
         return await self.broadcast(message)
 
-    async def broadcast_service_removed(
-        self,
-        service_id: str,
-        service_name: str
-    ) -> int:
-        """Broadcast a service-removed event.
-
-        Args:
-            service_id: Service ID
-            service_name: Service name
-
-        Returns:
-            Number of connections the message was sent to successfully
-        """
-        message = WSMessage(
-            type=WSMessageType.SERVICE_REMOVED,
-            service_id=service_id,
-            service_name=service_name
-        )
-        return await self.broadcast(message)
-
-    async def broadcast_service_updated(
-        self,
-        service_id: str,
-        service_name: str,
-        service_data: Optional[Dict[str, Any]] = None
-    ) -> int:
-        """Broadcast a service-updated event.
-
-        Args:
-            service_id: Service ID
-            service_name: Service name
-            service_data: Updated service data (optional)
-
-        Returns:
-            Number of connections the message was sent to successfully
-        """
-        message = WSMessage(
-            type=WSMessageType.SERVICE_UPDATED,
-            service_id=service_id,
-            service_name=service_name,
-            data=service_data
-        )
-        return await self.broadcast(message)
-
     async def send_to(self, websocket: WebSocket, message: WSMessage) -> bool:
         """Send a message to a specific connection.
 
@@ -232,15 +186,16 @@ class WSManager:
             logger.warning(f"Failed to send message: {e}")
             return False
 
-    async def handle_connection(self, websocket: WebSocket) -> None:
+    async def handle_connection(self, websocket: WebSocket, subprotocol: Optional[str] = None) -> None:
         """Handle the full lifecycle of a WebSocket connection.
 
         A convenience method that handles connecting, receiving messages, disconnecting, etc.
 
         Args:
             websocket: WebSocket connection
+            subprotocol: passed to accept()
         """
-        await self.connect(websocket)
+        await self.connect(websocket, subprotocol=subprotocol)
         try:
             while True:
                 # Receive a message

@@ -3,22 +3,23 @@
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
-from src.exceptions.base import MCPCenterError
+from src.exceptions.base import MCPGateError
 from src.logging import get_logger
+from src.middleware.security_headers import internal_error_handler
 
 logger = get_logger("exceptions")
 
 
-async def mcp_center_exception_handler(
+async def mcp_gate_exception_handler(
     request: Request,
-    exc: MCPCenterError
+    exc: MCPGateError
 ) -> JSONResponse:
-    """Handle MCPCenterError exceptions
+    """Handle MCPGateError exceptions
 
     Converts our custom exceptions to proper JSON responses.
     """
     logger.warning(
-        f"MCPCenterError: {exc.code}",
+        f"MCPGateError: {exc.code}",
         error_code=exc.code,
         error_message=exc.message,
         path=request.url.path,
@@ -38,4 +39,6 @@ def register_exception_handlers(app):
         app = FastAPI()
         register_exception_handlers(app)
     """
-    app.add_exception_handler(MCPCenterError, mcp_center_exception_handler)
+    app.add_exception_handler(MCPGateError, mcp_gate_exception_handler)
+    # Unhandled exceptions: Starlette's default 500, but with the security headers (see security_headers.py)
+    app.add_exception_handler(Exception, internal_error_handler)

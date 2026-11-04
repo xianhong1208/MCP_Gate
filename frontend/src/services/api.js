@@ -1,7 +1,9 @@
 /**
- * MCP Center API client.
+ * MCP Gate API client.
  *
- * Login state is an httpOnly cookie (mcp_session); the frontend never touches a session token.
+ * Login state is an httpOnly cookie (mcp_session) plus the session binding (utils/sessionBinding.js): the cookie
+ * is never visible to the frontend, the binding is kept in localStorage and sent as X-Session-Binding on every
+ * request. A response that carries `session_binding` (login, setup, password change) replaces it.
  *
  * Error envelope (backend is i18n-aware):
  *   1. HTTPException: detail is a dict {error: "code", params: {...}, fallback: "english"}
@@ -10,6 +12,7 @@
  * The handler auto-detects the shape, prefers the i18n lookup by code (errors.<code>), else uses the fallback.
  */
 import i18n from '../i18n'
+import { BINDING_HEADER, clearBinding, getBinding, setBinding } from '../utils/sessionBinding'
 
 const API_BASE = ''  // same origin
 
@@ -51,18 +54,21 @@ function extractErrorMessage(data) {
 
 async function request(endpoint, options = {}) {
   const url = `${API_BASE}${endpoint}`
+  const binding = getBinding()
   const config = {
-    headers: {
-      'Content-Type': 'application/json',
-      ...options.headers,
-    },
     credentials: 'include',
     ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(binding ? { [BINDING_HEADER]: binding } : {}),
+      ...options.headers,
+    },
   }
 
   try {
     const response = await fetch(url, config)
     const data = await response.json().catch(() => ({}))
+    if (response.ok && typeof data?.session_binding === 'string') setBinding(data.session_binding)
 
     if (!response.ok) {
       if (response.status === 401) {
@@ -111,7 +117,11 @@ export const sessionApi = {
   },
 
   async logout() {
-    return request('/api/session/logout', { method: 'POST' })
+    try {
+      return await request('/api/session/logout', { method: 'POST' })
+    } finally {
+      clearBinding()
+    }
   },
 
   /** Current user (cookie is sent automatically) */
@@ -193,7 +203,7 @@ export const servicesApi = {
     return request(`/api/services/${encodeURIComponent(id)}/tools`)
   },
 
-  /** Connect to the service and fetch tools; for MCP Center protected services the backend self-signs a token */
+  /** Connect to the service and fetch tools; for MCP Gate protected services the backend self-signs a token */
   /** identity: 'scanner' (anonymous scanner token, default) | 'token' (one of this server's issued tokens, by jti)
    *  -- for servers that show different tools per caller */
   async refreshTools(id, { identity = 'scanner', jti = null } = {}) {
@@ -201,10 +211,6 @@ export const servicesApi = {
       method: 'POST',
       body: JSON.stringify({ identity, jti }),
     })
-  },
-
-  async getHealth(id) {
-    return request(`/api/services/${encodeURIComponent(id)}/health`)
   },
 
   async checkHealth(id) {
@@ -233,13 +239,6 @@ export const discoveryApi = {
       }),
     })
   },
-
-  async verify({ host, port, protocol, mcpPath, authToken }) {
-    return request('/api/discovery/verify', {
-      method: 'POST',
-      body: JSON.stringify({ host, port, protocol, mcp_path: mcpPath, auth_token: authToken }),
-    })
-  },
 }
 
 // ==================== Stats ====================
@@ -248,10 +247,6 @@ export const statsApi = {
   /** Daily token event stats; returns {stats: [{date,total,success,failed}], total, days} */
   async daily(days = 7, serviceId = null, event = null) {
     return request(`/api/stats/daily${qs({ days, service_id: serviceId, event })}`)
-  },
-
-  async hourly(hours = 24, serviceId = null, event = null) {
-    return request(`/api/stats/hourly${qs({ hours, service_id: serviceId, event })}`)
   },
 
   async services(days = 7) {
@@ -271,14 +266,6 @@ export const auditApi = {
       action, resource_type: resourceType, actor_name: actorName, status, page, page_size: pageSize,
     })}`)
   },
-
-  async getStats(days = 7) {
-    return request(`/api/audit/stats?days=${days}`)
-  },
-
-  async cleanup(days = 90) {
-    return request(`/api/audit/cleanup?days=${days}`, { method: 'DELETE' })
-  },
 }
 
 // ==================== System ====================
@@ -291,14 +278,6 @@ export const systemApi = {
   async getDashboardOverview() {
     return request('/api/system/dashboard')
   },
-
-  async getSchedulerStatus() {
-    return request('/api/system/scheduler/status')
-  },
-
-  async runCleanup() {
-    return request('/api/system/cleanup/run', { method: 'POST' })
-  },
 }
 
 // ==================== OAuth 2.1 management ====================
@@ -310,7 +289,7 @@ export const oauthApi = {
       return request(`/api/oauth/clients${qs({ status })}`)
     },
     /** Manually register a trusted client from the admin console (approved directly); secret is returned once */
-    async create({ clientName, redirectUris, grantTypes, tokenEndpointAuthMethod, scope, clientUri, requirePkce, defaultResource, jwksUri, jwks }) {
+    async create({ clientName, redirectUris, grantTypes, tokenEndpointAuthMethod, scope, clientUri, requirePkce, defaultResource, jwksUri, jwks, resourceServiceId }) {
       return request('/api/oauth/clients', {
         method: 'POST',
         body: JSON.stringify({
@@ -324,7 +303,15 @@ export const oauthApi = {
           jwks_uri: jwksUri || null,
           jwks: jwks || null,
           default_resource: defaultResource || null,
+          resource_service_id: resourceServiceId || null,
         }),
+      })
+    },
+    /** Bind a console-registered confidential client to the MCP server it speaks for (null = unbind) */
+    async bindResourceServer(clientId, serviceId) {
+      return request(`/api/oauth/clients/${encodeURIComponent(clientId)}/resource-server`, {
+        method: 'PUT',
+        body: JSON.stringify({ service_id: serviceId || null }),
       })
     },
     async get(clientId) {
@@ -396,6 +383,16 @@ export const oauthApi = {
     },
     async revoke(jti) {
       return request(`/api/oauth/tokens/${encodeURIComponent(jti)}/revoke`, { method: 'POST' })
+    },
+  },
+
+  /** Does a revocation reach a server before the token expires (its resource servers' feed polls) */
+  revocationFeed: {
+    async forService(serviceId) {
+      return request(`/api/oauth/services/${encodeURIComponent(serviceId)}/revocation-feed`)
+    },
+    async forAudience(audience) {
+      return request(`/api/oauth/revocation-feed${qs({ audience })}`)
     },
   },
 
@@ -520,13 +517,6 @@ export const managedApi = {
 
   async stop(processId) {
     return request(`/api/managed/${encodeURIComponent(processId)}/stop`, { method: 'POST' })
-  },
-
-  async updateEnvVars(processId, envVars) {
-    return request(`/api/managed/${encodeURIComponent(processId)}/env-vars`, {
-      method: 'PUT',
-      body: JSON.stringify({ env_vars: envVars }),
-    })
   },
 
   async uninstall(processId) {

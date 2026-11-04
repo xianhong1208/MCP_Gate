@@ -6,14 +6,18 @@ CHAR(32), and the code is identical on both.
 
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import (
-    Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, Uuid,
+    Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, Uuid, true as sa_true,
 )
 from sqlalchemy.orm import relationship
 
 from db.database import Base
+
+# OAuth client_id columns: generated ids are short ("mcpc_..."), but a client using a Client ID Metadata Document is
+# identified by the document's https URL
+CLIENT_ID_LENGTH = 255
 
 
 def local_now() -> datetime:
@@ -21,15 +25,16 @@ def local_now() -> datetime:
     return datetime.now()
 
 
+def utc_now() -> datetime:
+    """Current UTC time (naive), for columns that must not move when the host's TZ changes."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
 def format_datetime(dt: datetime) -> str | None:
     """datetime -> ISO 8601 (with timezone)."""
     if dt is None:
         return None
     return dt.astimezone().isoformat()
-
-
-# Backward-compatible alias for the old name
-format_utc_datetime = format_datetime
 
 
 def _json_list(raw: str | None) -> list:
@@ -61,8 +66,12 @@ class AdminUser(Base):
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime, default=local_now, nullable=False)
     last_login = Column(DateTime, nullable=True)
-    # After a password change, sessions whose iat is earlier than this time are treated as revoked
+    # When the password last changed (informational: sessions are revoked by deleting their admin_sessions rows)
     password_changed_at = Column(DateTime, nullable=True)
+    # 1 for the owner created by first-time setup (or ADMIN_EMAIL bootstrap), NULL for every other account. The
+    # unique constraint is what makes setup atomic: of several concurrent /setup requests only one INSERT can take
+    # the slot, on SQLite and PostgreSQL alike (both allow any number of NULLs in a unique column).
+    owner_slot = Column(Integer, nullable=True, unique=True)
 
     def __repr__(self):
         return f"<AdminUser(email={self.email}, provider={self.auth_provider})>"
@@ -82,6 +91,22 @@ class AdminUser(Base):
             "created_at": format_datetime(self.created_at),
             "last_login": format_datetime(self.last_login),
         }
+
+
+class AdminSession(Base):
+    """Server-side record of a console session (the cookie JWT's ``jti``).
+
+    A session cookie is accepted only while its row exists and has not expired: logout deletes the row,
+    a password change deletes every row of that user. Expired rows are purged by the cleanup job.
+    Unlike most tables, the timestamps are naive **UTC** (``utc_now``), so restarting under another TZ cannot
+    make live sessions look expired or expired ones live.
+    """
+    __tablename__ = "admin_sessions"
+
+    id = Column(String(64), primary_key=True)  # = the session JWT's jti
+    user_id = Column(Uuid, ForeignKey("admin_users.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at = Column(DateTime, default=utc_now, nullable=False)
+    expires_at = Column(DateTime, nullable=False, index=True)
 
 
 # ==================== MCP services ====================
@@ -108,7 +133,7 @@ class Service(Base):
     port = Column(Integer, nullable=True)
     protocol = Column(String(16), default="http")
     mcp_path = Column(String(128), default="/mcp")
-    auth_token_encrypted = Column(String(1024), nullable=True)
+    auth_token_encrypted = Column(Text, nullable=True)  # encrypted + base64: a JWT bearer outgrows 1024
     requires_auth = Column(Boolean, default=True, nullable=False)
     tags = Column(String(512), nullable=True)
     source = Column(String(32), default="manual")  # manual / auto_discovered / managed
@@ -224,11 +249,12 @@ class OAuthClient(Base):
 
     A public client (token_endpoint_auth_method=none) relies on PKCE; a confidential client has a secret
     (only its hash is stored). created_via = dcr (dynamic registration) / manual (created in the console) /
-    system (built-in).
+    system (built-in) / cimd (identified by the https URL of its Client ID Metadata Document, which is the
+    client_id; the row mirrors the last valid document and is refreshed from it).
     """
     __tablename__ = "oauth_clients"
 
-    client_id = Column(String(64), primary_key=True)
+    client_id = Column(String(CLIENT_ID_LENGTH), primary_key=True)
     client_secret_hash = Column(String(128), nullable=True)
     client_name = Column(String(128), nullable=False)
     client_uri = Column(String(512), nullable=True)
@@ -245,15 +271,26 @@ class OAuthClient(Base):
     jwks_uri = Column(String(512), nullable=True)
     # Classic-client compatibility (manually registered confidential clients only): PKCE may be skipped and
     # a default resource is assumed when the client sends none. MCP clients never need either.
-    require_pkce = Column(Boolean, default=True, nullable=False)
+    require_pkce = Column(Boolean, default=True, server_default=sa_true(), nullable=False)
     default_resource = Column(String(512), nullable=True)
     created_via = Column(String(16), default="manual", nullable=False)
     is_approved = Column(Boolean, default=True, nullable=False, index=True)
     is_active = Column(Boolean, default=True, nullable=False, index=True)
     owner_id = Column(Uuid, ForeignKey("admin_users.id", ondelete="SET NULL"), nullable=True)
+    # Resource-server binding (console-registered confidential clients only): the audience of the MCP server this
+    # client speaks for. Only a bound client may read the revocation feed, introspect other clients' tokens or
+    # report usage, and it only ever sees tokens carrying this audience. Stored as the audience (not a service
+    # id) so deleting or editing the service can never widen what the client sees. Never set through DCR.
+    resource_audience = Column(String(256), nullable=True)
     created_at = Column(DateTime, default=local_now, nullable=False)
     updated_at = Column(DateTime, default=local_now, onupdate=local_now, nullable=False)
     last_used_at = Column(DateTime, nullable=True)
+    # When this resource server last read the revocation feed (POST /oauth/revoked): tells the console whether a
+    # revocation reaches the server before the token expires
+    revocation_polled_at = Column(DateTime, nullable=True)
+    # created_via = cimd: when the client's metadata document was last fetched and stored (the client_id is the
+    # document's https URL; see src/oauth/client_metadata.py)
+    metadata_fetched_at = Column(DateTime, nullable=True)
 
     def redirect_uri_list(self) -> list:
         return _json_list(self.redirect_uris)
@@ -281,10 +318,13 @@ class OAuthClient(Base):
             "created_via": self.created_via,
             "is_approved": self.is_approved,
             "is_active": self.is_active,
+            "resource_audience": self.resource_audience,
             "owner_id": str(self.owner_id) if self.owner_id else None,
             "created_at": format_datetime(self.created_at),
             "updated_at": format_datetime(self.updated_at),
             "last_used_at": format_datetime(self.last_used_at),
+            "revocation_polled_at": format_datetime(self.revocation_polled_at),
+            "metadata_fetched_at": format_datetime(self.metadata_fetched_at),
         }
 
 
@@ -297,7 +337,7 @@ class OAuthAuthorizationRequest(Base):
     __tablename__ = "oauth_authorization_requests"
 
     id = Column(String(64), primary_key=True)
-    client_id = Column(String(64), ForeignKey("oauth_clients.client_id", ondelete="CASCADE"), nullable=False, index=True)
+    client_id = Column(String(CLIENT_ID_LENGTH), ForeignKey("oauth_clients.client_id", ondelete="CASCADE"), nullable=False, index=True)
     redirect_uri = Column(String(512), nullable=False)
     scope = Column(String(512), nullable=True)
     resource = Column(String(256), nullable=True)
@@ -316,7 +356,7 @@ class OAuthAuthorizationCode(Base):
     __tablename__ = "oauth_authorization_codes"
 
     code_hash = Column(String(64), primary_key=True)
-    client_id = Column(String(64), ForeignKey("oauth_clients.client_id", ondelete="CASCADE"), nullable=False, index=True)
+    client_id = Column(String(CLIENT_ID_LENGTH), ForeignKey("oauth_clients.client_id", ondelete="CASCADE"), nullable=False, index=True)
     user_id = Column(Uuid, ForeignKey("admin_users.id", ondelete="CASCADE"), nullable=False)
     redirect_uri = Column(String(512), nullable=False)
     scope = Column(String(512), nullable=True)
@@ -380,7 +420,7 @@ class OAuthToken(Base):
     jti = Column(String(64), primary_key=True)
     kind = Column(String(16), nullable=False, index=True)
     # Keep token history when a client is deleted (client_id becomes NULL, client_name_snapshot keeps the name)
-    client_id = Column(String(64), ForeignKey("oauth_clients.client_id", ondelete="SET NULL"), nullable=True, index=True)
+    client_id = Column(String(CLIENT_ID_LENGTH), ForeignKey("oauth_clients.client_id", ondelete="SET NULL"), nullable=True, index=True)
     client_name_snapshot = Column(String(128), nullable=True)
     user_id = Column(Uuid, ForeignKey("admin_users.id", ondelete="SET NULL"), nullable=True, index=True)
     sub = Column(String(128), nullable=False)
@@ -388,7 +428,8 @@ class OAuthToken(Base):
     service_id = Column(Uuid, ForeignKey("services.id", ondelete="SET NULL"), nullable=True, index=True)
     scope = Column(String(512), nullable=True)
     label = Column(String(128), nullable=True)
-    parent_jti = Column(String(64), nullable=True)
+    # revoke_family filters on parent_jti (OR jti): replay detection must not scan the whole table
+    parent_jti = Column(String(64), nullable=True, index=True)
     issued_at = Column(DateTime, default=local_now, nullable=False, index=True)
     expires_at = Column(DateTime, nullable=False, index=True)
     revoked_at = Column(DateTime, nullable=True, index=True)
@@ -444,7 +485,7 @@ class OAuthConsent(Base):
     user_id = Column(Uuid, ForeignKey("admin_users.id", ondelete="CASCADE"), nullable=False, index=True)
     # Once the client is deleted there is nothing left to authorize, so consents go with it
     # (token history is kept separately in oauth_tokens)
-    client_id = Column(String(64), ForeignKey("oauth_clients.client_id", ondelete="CASCADE"), nullable=False, index=True)
+    client_id = Column(String(CLIENT_ID_LENGTH), ForeignKey("oauth_clients.client_id", ondelete="CASCADE"), nullable=False, index=True)
     audience = Column(String(256), nullable=True)
     scope = Column(String(512), nullable=True)
     granted_at = Column(DateTime, default=local_now, nullable=False)
@@ -473,7 +514,7 @@ class TokenUsage(Base):
     jti = Column(String(64), nullable=True, index=True)
     event = Column(String(16), nullable=False, default="issued", index=True)  # issued / introspect / revoked
     grant_type = Column(String(32), nullable=True)
-    client_id = Column(String(64), nullable=True, index=True)
+    client_id = Column(String(CLIENT_ID_LENGTH), nullable=True, index=True)
     sub = Column(String(128), nullable=True)
     audience = Column(String(256), nullable=True, index=True)
     service_id = Column(Uuid, ForeignKey("services.id", ondelete="SET NULL"), nullable=True, index=True)
@@ -495,9 +536,10 @@ class AuditLog(Base):
     id = Column(Uuid, primary_key=True, default=uuid.uuid4)
     action = Column(String(64), nullable=False, index=True)
     resource_type = Column(String(32), nullable=False, index=True)
-    resource_id = Column(String(128), nullable=True)
+    # wide enough for a client_id (OAuth clients are audited under their client_id)
+    resource_id = Column(String(CLIENT_ID_LENGTH), nullable=True)
     actor_type = Column(String(32), nullable=False)
-    actor_id = Column(String(128), nullable=True)
+    actor_id = Column(String(CLIENT_ID_LENGTH), nullable=True)
     actor_name = Column(String(128), nullable=True)
     ip_address = Column(String(45), nullable=True)
     user_agent = Column(String(256), nullable=True)
@@ -533,7 +575,7 @@ class AuditLog(Base):
 # ==================== Managed / BYO MCP ====================
 
 class ManagedMcpProcess(Base):
-    """An MCP launched by MCP Center via Docker (from a marketplace catalog entry or a BYO definition)."""
+    """An MCP launched by MCP Gate via Docker (from a marketplace catalog entry or a BYO definition)."""
     __tablename__ = "managed_mcp_processes"
 
     id = Column(Uuid, primary_key=True, default=uuid.uuid4)

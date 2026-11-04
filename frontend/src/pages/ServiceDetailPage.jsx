@@ -15,6 +15,7 @@ import HealthIndicator from '../components/HealthIndicator'
 import ScopeEditor from '../components/ScopeEditor'
 import MarkdownLite from '../components/MarkdownLite'
 import { copyToClipboard } from '../utils/clipboard'
+import { feedTone, revocationReachesServer } from '../utils/revocation'
 import { useConfirm } from '../contexts/ConfirmContext'
 import { useToast } from '../contexts/ToastContext'
 import { KindBadge, StatusBadge, ScopeChips } from './TokensPage'
@@ -40,6 +41,30 @@ function CustomTooltip({ active, payload, label }) {
       <div className="mt-1 flex items-center justify-between gap-4"><span className="flex items-center gap-1.5 text-muted-foreground"><StatusDot tone="danger" />{t('services.detail.chartFailed')}</span><span className="tabular-nums text-foreground">{failed}</span></div>
       <div className="mt-2 flex items-center justify-between gap-4 border-t border-border pt-1.5"><span className="text-muted-foreground">{t('services.detail.totalLabel')}</span><span className="tabular-nums font-medium text-foreground">{success + failed}</span></div>
     </div>
+  )
+}
+
+/** Whether revoking a token reaches this server before the token expires (its resource servers' feed polls) */
+function RevocationFeedStatus({ status }) {
+  const { t } = useTranslation()
+  const polled = status.state === 'active' || status.state === 'stale'
+  return (
+    <span className="block break-normal font-sans">
+      <span className="flex flex-wrap items-center justify-end gap-1.5">
+        <StatusDot tone={feedTone(status.state)} />
+        {polled ? (
+          <>
+            <span>{status.state === 'active' ? t('services.detail.feedActive') : t('services.detail.feedStale')}</span>
+            <LastChecked value={status.last_poll} withIcon={false} className="text-foreground" />
+          </>
+        ) : (
+          <span>{status.state === 'never_polled' ? t('services.detail.feedNeverPolled') : t('services.detail.feedNotWired')}</span>
+        )}
+      </span>
+      {!revocationReachesServer(status.state) && (
+        <span className="mt-1 block text-xs text-muted-foreground">{t('services.detail.feedHint')}</span>
+      )}
+    </span>
   )
 }
 
@@ -185,7 +210,7 @@ export default function ServiceDetailPage() {
   const { t } = useTranslation()
   const { serviceId } = useParams()
   const navigate = useNavigate()
-  const { confirmDelete, confirmRevoke } = useConfirm()
+  const { confirmDelete, confirmTokenRevoke } = useConfirm()
   const toast = useToast()
   const decodedServiceId = decodeURIComponent(serviceId)
 
@@ -210,6 +235,7 @@ export default function ServiceDetailPage() {
   const [isRefreshingTools, setIsRefreshingTools] = useState(false)
   const [showEditModal, setShowEditModal] = useState(false)
   const [revokingJti, setRevokingJti] = useState(null)
+  const [feedStatus, setFeedStatus] = useState(null)
 
   const reloadOwnScopes = useCallback(async () => {
     const res = await oauthApi.serviceScopes.list(decodedServiceId)
@@ -256,9 +282,11 @@ export default function ServiceDetailPage() {
       oauthApi.snippets(decodedServiceId).catch(() => null),
       oauthApi.tokens.list({ serviceId: decodedServiceId }).catch(() => ({ tokens: [] })),
       oauthApi.serviceScopes.list(decodedServiceId).catch(() => ({ own: [] })),
-    ]).then(([svc, sc, sn, tk, own]) => {
+      oauthApi.revocationFeed.forService(decodedServiceId).catch(() => null),
+    ]).then(([svc, sc, sn, tk, own, feed]) => {
       if (cancelled) return
       setService(svc)
+      setFeedStatus(feed)
       setScopes(sc.scopes || [])
       setSnippets(sn)
       setTokens(tk.tokens || [])
@@ -359,7 +387,7 @@ export default function ServiceDetailPage() {
   }
 
   const handleRevokeToken = async (tk) => {
-    const ok = await confirmRevoke(tk.label ? `"${tk.label}"` : `${tk.kind} ${tk.jti.slice(0, 8)}…`)
+    const ok = await confirmTokenRevoke(tk)
     if (!ok) return
     setRevokingJti(tk.jti)
     try {
@@ -479,6 +507,10 @@ export default function ServiceDetailPage() {
                   label: t('services.detail.authRequired'),
                   value: service.requires_auth ? t('services.detail.yes') : t('services.detail.no'),
                 },
+                ...(feedStatus && service.effective_audience ? [{
+                  label: t('services.detail.revocationFeed'),
+                  value: <RevocationFeedStatus status={feedStatus} />,
+                }] : []),
               ]}
             />
             {(service.has_static_token || service.health?.response_time_ms != null || service.health?.last_checked || service.created_at || service.health?.error_message) && (

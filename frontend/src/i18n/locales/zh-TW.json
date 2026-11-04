@@ -10,9 +10,9 @@
     "audit": "稽核日誌"
   },
   "layout": {
-    "appName": "MCP Center",
+    "appName": "MCP Gate",
     "subtitle": "OAUTH 授權中心",
-    "version": "MCP Center v{{version}}",
+    "version": "MCP Gate v{{version}}",
     "systemOnline": "系統運作中",
     "systemOffline": "系統離線",
     "profile": "查看個人資料",
@@ -51,7 +51,7 @@
     }
   },
   "auth": {
-    "appName": "MCP Center",
+    "appName": "MCP Gate",
     "tagline": "專為 MCP 打造的 OAuth 2.1 授權伺服器",
     "login": {
       "title": "登入",
@@ -67,7 +67,7 @@
     },
     "setup": {
       "title": "歡迎,先建立你的帳號",
-      "subtitle": "這是全新安裝。第一個帳號將成為這台 MCP Center 的擁有者。",
+      "subtitle": "這是全新安裝。第一個帳號將成為這台 MCP Gate 的擁有者。",
       "email": "電子郵件",
       "username": "顯示名稱",
       "usernamePlaceholder": "選填,預設使用電子郵件",
@@ -100,7 +100,10 @@
     "deleteTitle": "刪除確認",
     "deleteMessage": "確定要刪除{{item}}嗎?此動作無法復原。",
     "revokeTitle": "撤銷確認",
-    "revokeMessage": "確定要撤銷{{item}}嗎?Token 將立即失效。",
+    "revokeMessage": "確定要撤銷{{item}}嗎?MCP Gate 會立即停止接受它(introspection、refresh)。",
+    "revokeFeedActive": "{{server}} 會輪詢撤銷清單(最後輪詢 {{when}}),幾秒內就會停止接受這個 token。",
+    "revokeFeedStale": "{{server}} 最後一次輪詢撤銷清單是 {{when}}:在它再次輪詢前,仍會接受這個 token。",
+    "revokeFeedNotWired": "{{server}} 沒有串接撤銷清單:如果它離線驗證 token,會一直接受這個 token 直到到期({{expires}})。",
     "batchDeleteTitle": "批次刪除確認",
     "batchDeleteMessage": "確定要刪除 {{count}} 個 {{item}} 嗎?此動作無法復原。",
     "batchDeleteButton": "刪除 {{count}} 個 {{item}}",
@@ -112,6 +115,7 @@
     "title": "{{name}} 想要存取你的 MCP server",
     "subtitle": "目前登入身分:{{email}}",
     "viaDcr": "動態註冊的 client",
+    "viaCimd": "以中繼資料網址識別",
     "viaManual": "受信任的 client",
     "viaSystem": "內建 client",
     "targetService": "目標服務",
@@ -125,7 +129,10 @@
     "approve": "同意",
     "deny": "拒絕",
     "deciding": "處理中...",
-    "redirectTo": "完成後將回到 {{host}}",
+    "redirectTitle": "完成後將回到",
+    "loopbackWarning": "此應用程式能接收授權的位址全都在這台電腦上({{host}})。只有在你剛剛親自在這裡啟動了它時才核准:本機上任何監聽該連接埠的程式都會收到這份授權。",
+    "cimdIdentity": "此應用程式僅以 {{host}} 識別",
+    "cimdNotice": "它並未在此註冊:名稱與其他資訊來自上方網址所發布的文件,MCP Gate 未加驗證。只有在你信任 {{host}} 且是你親自啟動此應用程式時才核准。",
     "expiresAt": "此請求於 {{time}} 逾時",
     "missingRid": "缺少授權請求編號,請從你的 MCP client 重新發起授權。",
     "loadFailed": "這個授權請求已逾時或已處理完畢。",
@@ -206,10 +213,18 @@
       "hint": "動態註冊的 client 在核准前無法取得 token。",
       "review": "前往審核"
     },
+    "weakSecrets": {
+      "title": "伺服器密鑰強度不足",
+      "reasonPlaceholder": "是常見的預設佔位值",
+      "reasonTooShort": "短於 32 個字元",
+      "reasonLowVariety": "使用的不同字元太少",
+      "fix": "請改成至少 32 個隨機字元（python -c \"import secrets; print(secrets.token_urlsafe(32))\"）後重新啟動。更換 SESSION_SECRET_KEY 只會讓所有人重新登入；更換 ENCRYPTION_KEY 會讓已儲存的私鑰無法解密，輪替前請先閱讀 SECURITY.md。"
+    },
     "issuerMismatch": {
       "title": "{{n}} 個 host 在存取 OAuth 端點時與 OAUTH_ISSUER({{issuer}})不一致",
       "hint": "Token 的 iss 與 discovery 公告的網址都是上面的 issuer,透過以下位址存取的 client 會驗證失敗或連到錯的端點:",
       "seen": "{{n}} 次請求",
+      "untrusted": "(由外部網路的 client 指定,Host 標頭可能是偽造的)",
       "fix": "請把 OAUTH_ISSUER 改成 client 實際使用的位址,或改由 issuer 的 host 存取,並把反向代理加入 security.trusted_proxies。詳見 docs/troubleshooting.md。"
     },
     "chart": {
@@ -527,7 +542,9 @@
       "toolsCount": "{{n}} 個 tools",
       "registered": "已註冊",
       "alreadyExists": "已存在",
-      "protectedLabel": "由 MCP Center 保護"
+      "registerFailed": "未註冊",
+      "skippedHosts": "已略過的主機",
+      "protectedLabel": "由 MCP Gate 保護"
     },
     "detail": {
       "backToServices": "返回服務列表",
@@ -540,6 +557,12 @@
       "copy": "複製",
       "copied": "已複製!",
       "authRequired": "需要認證",
+      "revocationFeed": "撤銷清單",
+      "feedActive": "已串接,最後輪詢",
+      "feedStale": "已停止輪詢,最後一次",
+      "feedNeverPolled": "已綁定 resource server,但從未輪詢",
+      "feedNotWired": "未串接:已撤銷的 token 在到期前仍然有效",
+      "feedHint": "離線驗證 token 的 server 只有輪詢 POST /oauth/revoked 才會知道撤銷;請在 OAuth Clients 綁定一個 resource server,並用 MCPGateVerifier 輪詢。",
       "yes": "是",
       "no": "否",
       "responseTime": "回應時間",
@@ -629,7 +652,7 @@
       "noScopesDefined": "尚未定義任何 scope,請到「OAuth Client」頁新增。",
       "staticToken": "靜態 Bearer token(選填)",
       "staticTokenHint": "只給自帶認證的外部 server 使用,供健康檢查與抓取 tools;儲存後不會再顯示。",
-      "staticTokenPlaceholder": "受 MCP Center 保護的 server 請留空",
+      "staticTokenPlaceholder": "受 MCP Gate 保護的 server 請留空",
       "staticTokenKeep": "留空則保留目前儲存的 token",
       "staticTokenClear": "移除已儲存的 token"
     },
@@ -658,6 +681,7 @@
     },
     "via": {
       "dcr": "動態註冊",
+      "cimd": "中繼資料文件",
       "manual": "手動登記",
       "system": "內建"
     },
@@ -707,7 +731,7 @@
       "grantTypes": "Grant type",
       "authMethod": "Token endpoint 認證方式",
       "authMethodHint": "伺服器端應用請選 client secret 方式;secret 只會在登記完成後顯示一次。",
-      "jwksIntro": "Client 每次向 token 端點請求時,用自己的私鑰簽一個短效 JWT;MCP Center 以下方的公鑰驗證。不會核發 secret。",
+      "jwksIntro": "Client 每次向 token 端點請求時,用自己的私鑰簽一個短效 JWT;MCP Gate 以下方的公鑰驗證。不會核發 secret。",
       "jwksUri": "JWKS URI",
       "jwksUriHint": "Client 的 JSON Web Key Set 網址(HTTPS)。第一次使用時抓取並快取;遇到未知的 kid 會重新抓取,因此可以輪替金鑰。",
       "jwks": "JWKS 文件",
@@ -766,7 +790,23 @@
       "created": "建立於 {{date}}",
       "active": "使用中",
       "inactive": "已退役",
-      "empty": "沒有簽章金鑰"
+      "empty": "沒有簽章金鑰",
+      "published": "已停用，仍公開",
+      "publishedHint": "不再簽發新 token，但會留在 JWKS 中，直到它簽過的最後一個 token 過期。",
+      "retiredHint": "已不在 JWKS 中：它簽過的 token 不再被接受。"
+    },
+    "resourceServer": {
+      "label": "代表的資源伺服器",
+      "hint": "此 client 代表的 MCP 伺服器。只有綁定後的 client 能讀取撤銷清單、內省 token 與回報使用量，而且只限該伺服器的 token。",
+      "none": "不是資源伺服器",
+      "title": "資源伺服器：{{name}}",
+      "action": "資源伺服器…",
+      "boundTo": "代表 {{name}} 的資源伺服器",
+      "current": "目前綁定到",
+      "save": "儲存",
+      "saveFailed": "更新資源伺服器綁定失敗",
+      "bound": "{{name}} 已設為資源伺服器",
+      "unbound": "{{name}} 已不再是資源伺服器"
     }
   },
   "marketplace": {
@@ -825,7 +865,7 @@
     "connection": {
       "title": "{{name}} 已就緒",
       "connectionUrl": "Connection URL",
-      "connectionUrlHint": "Agent 從 MCP Center 所在 host 呼叫此 URL",
+      "connectionUrlHint": "Agent 從 MCP Gate 所在 host 呼叫此 URL",
       "agentConfigExample": "Agent config(範例)",
       "statusLabel": "狀態:{{state}}",
       "containerLabel": "Container:",
@@ -890,7 +930,9 @@
       "registering_service": "註冊服務",
       "stopping_container": "停止容器",
       "loading_image": "載入 image(docker load)",
-      "verifying_image": "驗證 image"
+      "verifying_image": "驗證 image",
+      "waiting_ready": "等待 MCP 伺服器回應",
+      "starting_process": "啟動程序"
     }
   },
   "audit": {
@@ -953,6 +995,11 @@
       "oauth_scope_upsert": "儲存 Scope",
       "oauth_scope_delete": "刪除 Scope",
       "oauth_key_rotate": "輪替簽章金鑰",
+      "oauth_client_auth_failed": "用戶端驗證失敗",
+      "oauth_consent_approve": "同意授權",
+      "oauth_consent_deny": "拒絕授權",
+      "oauth_code_replay": "授權碼重複使用",
+      "oauth_refresh_replay": "Refresh Token 重複使用",
       "refresh_tools": "重新整理 Tools",
       "scan_services": "網路掃描",
       "admin_setup": "初始設定",
@@ -963,7 +1010,8 @@
       "admin_logout": "管理員登出",
       "admin_update": "管理員更新",
       "cleanup_expired": "清除過期項目",
-      "rate_limit_exceeded": "速率限制"
+      "rate_limit_exceeded": "速率限制",
+      "oauth_client_bind": "設定 Client 資源伺服器"
     },
     "detail": {
       "title": "稽核日誌詳情",
@@ -1003,14 +1051,17 @@
       "local_login_disabled": "此伺服器已停用密碼登入。",
       "external_login_failed": "第三方登入失敗,請再試一次。",
       "external_not_allowed": "此帳號不允許在這裡登入。",
+      "external_email_unverified": "此登入服務尚未驗證你的電子郵件，無法用它登入既有帳號。請先在該服務完成驗證，或改用密碼登入。",
       "provider_not_enabled": "此登入方式未啟用。",
       "setup_already_done": "初始設定已完成,請直接登入。",
       "invalid_current_password": "目前的密碼錯誤",
       "validation_email_invalid": "請輸入有效的電子郵件",
       "validation_username_required": "請填寫顯示名稱",
       "validation_password_short": "密碼至少需要 8 個字元",
+      "validation_password_too_long": "密碼太長（上限 72 bytes，約 24 個中文字）",
       "authentication_required": "請先登入",
-      "session_expired": "登入已逾時,請重新登入。"
+      "session_expired": "登入已逾時,請重新登入。",
+      "csrf_origin_denied": "請求被拒絕：它不是從此主控台發出的。請重新整理頁面後再試一次。"
     },
     "oauth": {
       "consent_not_found": "找不到同意紀錄",
@@ -1028,16 +1079,32 @@
       "unsupported_grant_type": "不支援的 grant type",
       "server_error": "授權伺服器錯誤"
     },
+    "validation": {
+      "too_long": "「{{field}}」太長（最多 {{max}} 個字元）。"
+    },
     "service": {
+      "managed_use_uninstall": "「{{name}}」由託管伺服器「{{process_name}}」執行，請改到「市集」解除安裝；這會先停止它，再一併移除服務。",
       "not_found": "找不到服務",
       "duplicate": "已存在同名稱與 host:port 的服務。",
       "no_host_port": "服務未設定 host 或 port",
       "remote_permission_denied": "遠端 MCP server 拒絕授權。",
-      "remote_unreachable": "無法連線到 MCP server。"
+      "remote_unreachable": "無法連線到 MCP server。",
+      "invalid_protocol": "通訊協定只能是 http 或 https。",
+      "invalid_mcp_path": "MCP 路徑必須以單一個「/」開頭，且不能包含 @、?、#、\\ 或空白。",
+      "invalid_host": "主機只能填主機名稱或 IP 位址（不含通訊協定、連接埠、路徑或 @）。",
+      "invalid_port": "連接埠必須介於 1 到 65535 之間。"
     },
     "discovery": {
       "scan_failed": "掃描失敗",
-      "verify_failed": "驗證失敗"
+      "verify_failed": "驗證失敗",
+      "no_hosts": "至少需要一個主機。",
+      "no_ports": "至少需要一個連接埠。",
+      "invalid_port": "連接埠 {{port}} 超出範圍（1-65535）。",
+      "invalid_port_range": "連接埠範圍須符合 1 ≤ 起始 ≤ 結束 ≤ 65535。",
+      "too_many_probes": "掃描範圍過大：{{hosts}} 個主機 × {{ports}} 個連接埠，超過 {{limit}} 次探測的上限。",
+      "invalid_host": "「{{host}}」不是有效的主機名稱或 IP 位址。",
+      "address_blocked": "{{host}} 解析到被封鎖的位址（link-local 或雲端 metadata），已略過。",
+      "register_failed": "無法註冊此伺服器，詳情請見伺服器日誌。"
     },
     "managed": {
       "env_vars_unknown": "{{catalog_id}} 含有未知的環境變數:{{extras}}",
@@ -1053,7 +1120,9 @@
       "image_load_failed": "載入 image 失敗:{{reason}}",
       "image_not_installed": "image「{{image}}」尚未安裝,請先在市集按「安裝」",
       "image_tar_mismatch": "安裝檔內容不符:期望 {{expected}},實際載入 {{loaded}}。請確認 tar 內容或 catalog 的 image/tag 設定",
-      "image_tar_not_found": "找不到安裝檔:{{path}}。請將 image tar 放至該路徑後重試"
+      "image_tar_not_found": "找不到安裝檔:{{path}}。請將 image tar 放至該路徑後重試",
+      "runtime_unavailable": "受管服務的執行環境無法使用(Docker daemon 是否在執行?):{{reason}}",
+      "uninstall_stop_failed": "已中止解除安裝:無法停止執行個體,它可能仍在執行:{{reason}}"
     },
     "byo": {
       "invalid_command": "啟動指令不符合安全政策:{{reason}}",
@@ -1061,6 +1130,9 @@
       "definition_not_found": "找不到這個自訂 MCP 定義",
       "definition_in_use": "此定義仍有已部署的實例,請先解除安裝後再刪除",
       "unknown_env_vars": "含有定義中未宣告的環境變數:{{extras}}"
+    },
+    "system": {
+      "cleanup_failed": "清理工作失敗：{{jobs}}。詳情請見伺服器日誌。"
     },
     "generic": {
       "serverError": "發生未預期的錯誤,請稍後再試",

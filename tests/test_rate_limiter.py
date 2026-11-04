@@ -258,8 +258,59 @@ class TestRateLimiter:
         # The /admin/login path has a limit of 2
         await limiter.is_allowed("10.0.0.2", "/admin/login")
         await limiter.is_allowed("10.0.0.2", "/admin/login")
-        allowed, _, _ = await limiter.is_allowed("10.0.0.2", "/admin/login")
-        assert allowed is False
+        allowed, reason, _ = await limiter.is_allowed("10.0.0.2", "/admin/login")
+        assert allowed is False and reason == "rate_limit_path"
+
+    @pytest.mark.asyncio
+    async def test_exhausted_path_bucket_does_not_block_other_paths(self):
+        """Hitting the login limit used to block the whole IP for 60 s (the bucket was the IP's total)."""
+        from src.middleware.rate_limiter import RateLimiter, RateLimitConfig
+
+        limiter = RateLimiter(RateLimitConfig(requests_per_minute=100, path_limits={"/api/session/login": 3},
+                                              whitelist=[]))
+        for _ in range(3):
+            assert (await limiter.is_allowed("10.0.0.3", "/api/session/login"))[0] is True
+        assert (await limiter.is_allowed("10.0.0.3", "/api/session/login"))[:2] == (False, "rate_limit_path")
+        # still blocked on login, but the rest of the console keeps working
+        assert (await limiter.is_allowed("10.0.0.3", "/api/session/login"))[0] is False
+        assert (await limiter.is_allowed("10.0.0.3", "/api/services"))[0] is True
+        # and another IP's login bucket is untouched
+        assert (await limiter.is_allowed("10.0.0.4", "/api/session/login"))[0] is True
+
+    @pytest.mark.asyncio
+    async def test_other_traffic_does_not_use_up_the_path_bucket(self):
+        """Console polling from the same IP must not count against the login limit."""
+        from src.middleware.rate_limiter import RateLimiter, RateLimitConfig
+
+        limiter = RateLimiter(RateLimitConfig(requests_per_minute=100, path_limits={"/api/session/login": 2},
+                                              whitelist=[]))
+        for _ in range(30):
+            assert (await limiter.is_allowed("10.0.0.5", "/api/stats/summary"))[0] is True
+        assert (await limiter.is_allowed("10.0.0.5", "/api/session/login"))[0] is True
+
+    @pytest.mark.asyncio
+    async def test_global_limit_still_counts_path_limited_requests(self):
+        from src.middleware.rate_limiter import RateLimiter, RateLimitConfig
+
+        limiter = RateLimiter(RateLimitConfig(requests_per_minute=3, path_limits={"/oauth/token": 10},
+                                              whitelist=[]))
+        for _ in range(3):
+            assert (await limiter.is_allowed("10.0.0.6", "/oauth/token"))[0] is True
+        # the path bucket has room, but the IP's global budget is spent -> everything is blocked
+        assert (await limiter.is_allowed("10.0.0.6", "/oauth/token"))[:2] == (False, "rate_limit_minute")
+        assert (await limiter.is_allowed("10.0.0.6", "/api/services"))[0] is False
+
+    @pytest.mark.asyncio
+    async def test_stats_report_the_path_bucket(self):
+        from src.middleware.rate_limiter import RateLimiter, RateLimitConfig
+
+        limiter = RateLimiter(RateLimitConfig(requests_per_minute=100, path_limits={"/login": 5}, whitelist=[]))
+        await limiter.is_allowed("10.0.0.7", "/login")
+        await limiter.is_allowed("10.0.0.7", "/other")
+        assert limiter.get_stats("10.0.0.7", "/login")["minute_limit"] == 5
+        assert limiter.get_stats("10.0.0.7", "/login")["minute_count"] == 1
+        assert limiter.get_stats("10.0.0.7", "/other")["minute_limit"] == 100
+        assert limiter.get_stats("10.0.0.7")["minute_count"] == 2
 
 
 class TestRateLimiterSingleton:
@@ -290,3 +341,54 @@ class TestRateLimitIntegration:
         # The health check endpoint should be accessible
         response = client.get("/health")
         assert response.status_code == 200
+
+
+class TestIdleKeysAreSwept:
+    """Every client IP used to leave its counter keys (and expired blocks) in memory forever."""
+
+    @pytest.mark.asyncio
+    async def test_idle_keys_disappear(self, monkeypatch):
+        from src.middleware import rate_limiter
+        from src.middleware.rate_limiter import RateLimitConfig, RateLimiter
+
+        now = [1_000_000.0]
+        monkeypatch.setattr(rate_limiter.time, "time", lambda: now[0])
+        limiter = RateLimiter(RateLimitConfig(requests_per_minute=1, requests_per_hour=100, whitelist=[],
+                                              path_limits={"/oauth/token": 5}))
+        for i in range(50):
+            await limiter.is_allowed(f"203.0.113.{i}", "/oauth/token")
+        await limiter.is_allowed("203.0.113.0", "/oauth/token")  # over the per-minute limit: blocked
+        assert len(limiter.minute_counter.requests) == 100 and len(limiter.hour_counter.requests) == 50
+        assert limiter.blocked_until
+
+        now[0] += 3601  # every window and block has expired; the next request sweeps lazily
+        assert (await limiter.is_allowed("198.51.100.1", "/"))[0]
+        assert set(limiter.minute_counter.requests) == {"198.51.100.1:minute"}
+        assert set(limiter.hour_counter.requests) == {"198.51.100.1:hour"}
+        assert limiter.blocked_until == {}
+
+    @pytest.mark.asyncio
+    async def test_sweep_is_rate_limited(self, monkeypatch):
+        from src.middleware import rate_limiter
+        from src.middleware.rate_limiter import RateLimitConfig, RateLimiter
+
+        now = [1_000_000.0]
+        monkeypatch.setattr(rate_limiter.time, "time", lambda: now[0])
+        limiter = RateLimiter(RateLimitConfig(whitelist=[]))
+        calls = []
+        original = limiter.cleanup
+        monkeypatch.setattr(limiter, "cleanup", lambda: calls.append(1) or original())
+        for _ in range(10):
+            await limiter.is_allowed("203.0.113.9")
+        assert calls == []
+        now[0] += RateLimiter.CLEANUP_INTERVAL_SECONDS
+        await limiter.is_allowed("203.0.113.9")
+        await limiter.is_allowed("203.0.113.9")
+        assert calls == [1]
+
+    def test_reading_stats_creates_no_keys(self):
+        from src.middleware.rate_limiter import RateLimitConfig, RateLimiter
+
+        limiter = RateLimiter(RateLimitConfig(whitelist=[]))
+        limiter.get_stats("203.0.113.7", "/x")
+        assert not limiter.minute_counter.requests and not limiter.hour_counter.requests

@@ -1,4 +1,4 @@
-# MCP Center configuration file
+# MCP Gate configuration file
 #
 # Environment variable syntax:
 #   ${VAR_NAME}           required
@@ -31,13 +31,30 @@ oauth:
   # Written into the iss of every JWT and the /.well-known documents; for public deployments use the public URL
   issuer: "${OAUTH_ISSUER:-http://localhost:4568}"
   signing_key_bits: ${OAUTH_SIGNING_KEY_BITS:-2048}
-  access_expire_minutes: ${OAUTH_ACCESS_EXPIRE_MINUTES:-60}
+  # OAuth access tokens only (PATs choose their own lifetime, up to pat_max_days); clients renew with refresh tokens
+  access_expire_minutes: ${OAUTH_ACCESS_EXPIRE_MINUTES:-15}
   refresh_expire_days: ${OAUTH_REFRESH_EXPIRE_DAYS:-30}
   auth_code_ttl_seconds: 120
   # Whether dynamically registered (RFC 7591) clients are usable without review (the human consent page is the
   # real gate)
   dcr_auto_approve: ${OAUTH_DCR_AUTO_APPROVE:-true}
   pat_max_days: 365
+  # Client ID Metadata Documents (MCP authorization 2026-07-28): a client may use an https URL as its client_id;
+  # MCP Gate fetches the client's metadata from that URL instead of the client registering. DCR keeps working.
+  cimd:
+    enabled: ${OAUTH_CIMD_ENABLED:-true}
+    # Whether a client first seen through its metadata document is usable without review (consent still applies)
+    auto_approve: ${OAUTH_CIMD_AUTO_APPROVE:-true}
+    # Trust policy: only client_id URLs on these hosts ("example.com", "*.example.com"); empty = any public host
+    allowed_hosts: "${OAUTH_CIMD_ALLOWED_HOSTS:-}"
+    # Development / intranet only: hosts whose document may be fetched from a private address (loopback only
+    # while the issuer is on loopback). Every other host must resolve to public addresses.
+    private_network_hosts: "${OAUTH_CIMD_PRIVATE_NETWORK_HOSTS:-}"
+    fetch_timeout_seconds: 5
+    max_document_bytes: 5120          # the draft recommends 5 KB
+    cache_min_seconds: 60             # HTTP Cache-Control max-age is honoured within these bounds
+    cache_max_seconds: 86400
+    failure_backoff_seconds: 30       # a URL whose fetch failed is not fetched again for this long
 
 # Admin console authentication
 identity:
@@ -69,6 +86,7 @@ rate_limit:
   path_limits:
     "/oauth/token": 60
     "/oauth/register": 20
+    "/oauth/authorize": 60            # may fetch a client metadata document
     "/api/session/login": 20
     "/api/session/setup": 5
 
@@ -79,14 +97,29 @@ security:
   # Set to true when deploying over HTTPS
   secure_cookie: ${SECURE_COOKIE:-false}
   cookie_samesite: "${COOKIE_SAMESITE:-lax}"
+  # Host names to answer to besides the OAUTH_ISSUER host, localhost and IP addresses (DNS-rebinding protection):
+  # comma-separated, e.g. ALLOWED_HOSTS=mcp-gate,*.internal.example for container service names; "*" turns it off.
+  allowed_hosts: "${ALLOWED_HOSTS:-}"
 
 cors:
-  allowed_origins:
-    - "http://localhost:4568"
-    - "http://localhost:5173"
+  # Origins (besides the console's own) allowed credentialed access to the admin API: comma-separated, e.g.
+  # CORS_ALLOWED_ORIGINS=https://admin.example.com. Empty by default; the Vite dev server does not need an entry
+  # (it proxies with the backend's own Origin, see frontend/vite.config.js).
+  allowed_origins: "${CORS_ALLOWED_ORIGINS:-}"
   allow_methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
-  allow_headers: ["Content-Type", "Authorization", "X-Requested-With"]
+  allow_headers: ["Content-Type", "Authorization", "X-Requested-With", "X-Session-Binding"]
   allow_credentials: true
+
+# Background jobs (run inside the server process)
+scheduler:
+  oauth_cleanup_hours: 6              # purge expired OAuth codes / requests / tokens and console sessions
+  usage_retention_days: 30            # token events behind the dashboard statistics
+  audit_retention_days: ${AUDIT_RETENTION_DAYS:-90}
+  health_check_enabled: true
+  health_check_seconds: ${HEALTH_CHECK_SECONDS:-30}
+  health_check_concurrency: 8         # services checked at the same time
+  health_check_timeout_seconds: 10    # a check taking longer counts as failed
+  health_write_interval_minutes: 5    # an unchanged health status is rewritten at most this often
 
 logging:
   level: "${LOG_LEVEL:-INFO}"

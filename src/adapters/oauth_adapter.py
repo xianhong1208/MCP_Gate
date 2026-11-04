@@ -13,13 +13,30 @@ from db.crud import (
     TokenUsageCRUD,
 )
 from src.adapters.exceptions import NotFoundError
+from src.utils import public_cache
 
 
 class OAuthKeyAdapter(OAuthSigningKeyCRUD):
-    """Signing keys."""
+    """Signing keys. Writes drop the cached JWKS (src/utils/public_cache.py)."""
+
+    @classmethod
+    def create(cls, db, **kwargs):
+        key = super().create(db, **kwargs)
+        public_cache.invalidate()
+        return key
+
+    @classmethod
+    def delete(cls, db, kid):
+        deleted = super().delete(db, kid)
+        public_cache.invalidate()
+        return deleted
 
 
 class OAuthClientAdapter(OAuthClientCRUD):
+
+    # Fields of a metadata-document client whose change voids every remembered consent: where the code goes, how
+    # the client authenticates and with which keys (draft-ietf-oauth-client-id-metadata-document §10.5)
+    METADATA_CONSENT_FIELDS = ("redirect_uris", "grant_types", "token_endpoint_auth_method", "jwks", "jwks_uri")
 
     @classmethod
     def get_existing(cls, db, client_id):
@@ -27,6 +44,17 @@ class OAuthClientAdapter(OAuthClientCRUD):
         if not client:
             raise NotFoundError(code="oauth.client_not_found", fallback="OAuth client not found")
         return client
+
+    @classmethod
+    def store_metadata_client(cls, db, client_id, fields, *, is_approved):
+        """Create or refresh a client from its validated metadata document. When the document changed where codes
+        are sent, how the client authenticates or its keys, remembered consents are forgotten so the owner is
+        asked again. Returns (client, changed fields, consents forgotten)."""
+        client, changed = cls.upsert_metadata_client(db, client_id, fields, is_approved=is_approved)
+        forgotten = 0
+        if any(name in cls.METADATA_CONSENT_FIELDS for name in changed):
+            forgotten = OAuthConsentCRUD.delete_for_client(db, client_id)
+        return client, changed, forgotten
 
 
 class OAuthAuthRequestAdapter(OAuthAuthRequestCRUD):
@@ -38,10 +66,24 @@ class OAuthCodeAdapter(OAuthCodeCRUD):
 
 
 class OAuthScopeAdapter(OAuthScopeCRUD):
-    """Scope registry."""
+    """Scope registry. Writes drop the cached discovery metadata (scopes_supported)."""
+
+    @classmethod
+    def upsert(cls, db, **kwargs):
+        scope = super().upsert(db, **kwargs)
+        public_cache.invalidate()
+        return scope
+
+    @classmethod
+    def delete(cls, db, name):
+        deleted = super().delete(db, name)
+        public_cache.invalidate()
+        return deleted
 
 
 class OAuthTokenAdapter(OAuthTokenCRUD):
+    """Tokens. A live token keeps the retired key that signed it in the JWKS, so revoking or purging tokens drops
+    the cached JWKS (src/utils/public_cache.py)."""
 
     @classmethod
     def get_existing(cls, db, jti):
@@ -49,6 +91,36 @@ class OAuthTokenAdapter(OAuthTokenCRUD):
         if not token:
             raise NotFoundError(code="oauth.token_not_found", fallback="Token not found")
         return token
+
+    @classmethod
+    def revoke(cls, db, token, reason="revoked"):
+        out = super().revoke(db, token, reason)
+        public_cache.invalidate()
+        return out
+
+    @classmethod
+    def rotate(cls, db, jti):
+        out = super().rotate(db, jti)
+        public_cache.invalidate()
+        return out
+
+    @classmethod
+    def revoke_family(cls, db, parent_jti, reason):
+        out = super().revoke_family(db, parent_jti, reason)
+        public_cache.invalidate()
+        return out
+
+    @classmethod
+    def revoke_by_client(cls, db, client_id, reason="client_revoked"):
+        out = super().revoke_by_client(db, client_id, reason)
+        public_cache.invalidate()
+        return out
+
+    @classmethod
+    def delete_expired(cls, db, **kwargs):
+        out = super().delete_expired(db, **kwargs)
+        public_cache.invalidate()
+        return out
 
 
 class OAuthConsentAdapter(OAuthConsentCRUD):
@@ -64,4 +136,16 @@ class AuditLogAdapter(AuditLogCRUD):
 
 
 class ServiceScopeAdapter(ServiceScopeCRUD):
-    """Scopes declared by one MCP server."""
+    """Scopes declared by one MCP server. Writes drop the cached discovery metadata (scopes_supported)."""
+
+    @classmethod
+    def upsert(cls, db, service_id, **kwargs):
+        scope = super().upsert(db, service_id, **kwargs)
+        public_cache.invalidate()
+        return scope
+
+    @classmethod
+    def delete(cls, db, service_id, name):
+        deleted = super().delete(db, service_id, name)
+        public_cache.invalidate()
+        return deleted

@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from db import get_db
-from db.models import AdminUser
+from db.models import AdminUser, OAuthScope, format_datetime
 from src.adapters import (
     OAuthClientAdapter, OAuthConsentAdapter, OAuthKeyAdapter, OAuthScopeAdapter, OAuthTokenAdapter,
     ServiceAdapter, ServiceScopeAdapter, TokenUsageAdapter,
@@ -22,9 +22,12 @@ from src.audit import ActorType, AuditAction, AuditService, AuditStatus, Resourc
 from src.config import Config
 from src.identity import get_current_user
 from src.middleware.issuer_check import observed_mismatches
+from src.utils.secret_policy import weak_secrets
 from src.oauth import service as oauth
 from src.oauth import signing_keys
 from src.oauth.errors import OAuthError
+from src.utils.field_limits import FieldTooLongError, check_max_length, column_limit
+from src.utils.snippets import py_str, shell_command, snippet_server_name
 
 router = APIRouter(prefix="/api/oauth", tags=["OAuth Admin"])
 
@@ -61,6 +64,13 @@ class ClientCreateRequest(BaseModel):
     # private_key_jwt: exactly one of these
     jwks_uri: Optional[str] = None
     jwks: Optional[dict] = None
+    # Resource-server binding: the MCP server this confidential client speaks for (revocation feed,
+    # introspection, usage reports). Without it the client is not a resource server.
+    resource_service_id: Optional[str] = None
+
+
+class ResourceServerBindingRequest(BaseModel):
+    service_id: Optional[str] = None
 
 
 @router.get("/clients")
@@ -85,7 +95,7 @@ async def create_client(body: ClientCreateRequest, request: Request, db: Session
     return oauth.registration_response(client, secret)
 
 
-@router.get("/clients/{client_id}")
+@router.get("/clients/{client_id:path}")
 async def get_client(client_id: str, db: Session = Depends(get_db), _: AdminUser = Depends(get_current_user)):
     """One client with its count of active tokens."""
     try:
@@ -97,10 +107,11 @@ async def get_client(client_id: str, db: Session = Depends(get_db), _: AdminUser
     return data
 
 
-@router.post("/clients/{client_id}/approve")
+@router.post("/clients/{client_id:path}/approve")
 async def approve_client(client_id: str, request: Request, db: Session = Depends(get_db),
                          user: AdminUser = Depends(get_current_user)):
-    """Approve a dynamically registered client (only needed when OAUTH_DCR_AUTO_APPROVE=false)."""
+    """Approve a dynamically registered client, or one first seen through its metadata document (only needed when
+    OAUTH_DCR_AUTO_APPROVE / OAUTH_CIMD_AUTO_APPROVE is false)."""
     try:
         client = OAuthClientAdapter.get_existing(db, client_id)
     except AdapterError as e:
@@ -112,7 +123,7 @@ async def approve_client(client_id: str, request: Request, db: Session = Depends
     return client.to_dict()
 
 
-@router.post("/clients/{client_id}/revoke")
+@router.post("/clients/{client_id:path}/revoke")
 async def revoke_client(client_id: str, request: Request, db: Session = Depends(get_db),
                         user: AdminUser = Depends(get_current_user)):
     """Deactivate the client and revoke all of its tokens."""
@@ -130,18 +141,48 @@ async def revoke_client(client_id: str, request: Request, db: Session = Depends(
     return {**client.to_dict(), "tokens_revoked": revoked}
 
 
-@router.delete("/clients/{client_id}")
+@router.put("/clients/{client_id:path}/resource-server")
+async def bind_resource_server(client_id: str, body: ResourceServerBindingRequest, request: Request,
+                               db: Session = Depends(get_db), user: AdminUser = Depends(get_current_user)):
+    """Bind a console-registered confidential client to the MCP server it speaks for (or unbind with
+    `service_id: null`). Only a bound client may read the revocation feed, introspect other clients' tokens and
+    report usage, and it only ever sees tokens whose audience is that server."""
+    try:
+        client = OAuthClientAdapter.get_existing(db, client_id)
+    except AdapterError as e:
+        raise _adapter_exc(e)
+    if client.created_via != "manual":
+        raise HTTPException(status_code=400, detail={
+            "error": "oauth.invalid_client_metadata",
+            "fallback": "Only clients registered in the console can act as a resource server"})
+    audience = None
+    if body.service_id:
+        try:
+            audience = oauth.resource_server_audience_for(db, body.service_id, client.token_endpoint_auth_method)
+        except OAuthError as e:
+            raise _oauth_exc(e)
+    client.resource_audience = audience
+    OAuthClientAdapter.save(db, client)
+    _audit(db, request, user, AuditAction.OAUTH_CLIENT_BIND, ResourceType.OAUTH_CLIENT, client_id,
+           {"resource_audience": audience})
+    return client.to_dict()
+
+
+@router.delete("/clients/{client_id:path}")
 async def delete_client(client_id: str, request: Request, db: Session = Depends(get_db),
                         user: AdminUser = Depends(get_current_user)):
-    """Delete a client. Its token history is kept with the client name snapshotted; its remembered consents are removed."""
+    """Delete a client. Its tokens are revoked first (as Revoke does), then kept as history with the client name
+    snapshotted; its remembered consents are removed."""
     try:
         client = OAuthClientAdapter.get_existing(db, client_id)
     except AdapterError as e:
         raise _adapter_exc(e)
     if client.created_via == "system":
         raise HTTPException(status_code=400, detail={"error": "oauth.system_client", "fallback": "Built-in client"})
+    revoked = OAuthTokenAdapter.revoke_by_client(db, client_id, reason="client_deleted")
     OAuthClientAdapter.delete(db, client_id)
-    _audit(db, request, user, AuditAction.OAUTH_CLIENT_DELETE, ResourceType.OAUTH_CLIENT, client_id)
+    _audit(db, request, user, AuditAction.OAUTH_CLIENT_DELETE, ResourceType.OAUTH_CLIENT, client_id,
+           {"tokens_revoked": revoked})
     return {"message": "Client deleted"}
 
 
@@ -164,7 +205,16 @@ def _scope_name(name: str) -> str:
     name = name.strip()
     if not name or " " in name:
         raise HTTPException(status_code=400, detail={"error": "oauth.invalid_scope_name", "fallback": "Invalid scope name"})
-    return name
+    return _checked_length("name", name, column_limit(OAuthScope.name))
+
+
+def _checked_length(field: str, value: Optional[str], limit: int) -> Optional[str]:
+    """400 validation.too_long instead of a database error (PostgreSQL enforces String(n), SQLite does not).
+    Global and per-server scopes share the same column sizes."""
+    try:
+        return check_max_length(field, value, limit)
+    except FieldTooLongError as e:
+        raise HTTPException(status_code=400, detail=e.to_detail())
 
 
 @router.put("/scopes/{name}")
@@ -173,6 +223,7 @@ async def upsert_scope(name: str, body: ScopeUpsertRequest, request: Request, db
     """Create or update a global scope and whether it is granted by default. A name some server already declares
     as its own scope is refused, so global and per-server names stay disjoint."""
     name = _scope_name(name)
+    _checked_length("description", body.description, column_limit(OAuthScope.description))
     if OAuthScopeAdapter.get(db, name) is None and ServiceScopeAdapter.names_in_use(db, name):
         raise HTTPException(status_code=409, detail={"error": "oauth.scope_owned_by_service",
                                                      "fallback": "A server already declares a scope with this name"})
@@ -205,6 +256,25 @@ async def list_service_scopes(service_id: str, db: Session = Depends(get_db), _:
     return {"own": own, "effective": oauth.effective_scopes(db, service), "total": len(own)}
 
 
+@router.get("/services/{service_id}/revocation-feed")
+def service_revocation_feed(service_id: str, db: Session = Depends(get_db), _: AdminUser = Depends(get_current_user)):
+    """Whether revoking a token for this server takes effect there before the token expires: the resource servers
+    bound to it and when they last polled the revocation feed (`state`: active | stale | never_polled |
+    not_wired)."""
+    try:
+        service = ServiceAdapter.get_existing(db, service_id)
+    except AdapterError as e:
+        raise _adapter_exc(e)
+    return oauth.revocation_feed_status(db, service.effective_audience)
+
+
+@router.get("/revocation-feed")
+def revocation_feed_for_audience(audience: str = Query(..., max_length=512), db: Session = Depends(get_db),
+                                 _: AdminUser = Depends(get_current_user)):
+    """The same revocation-feed status for a token audience (the revoke dialog asks with the token's `aud`)."""
+    return oauth.revocation_feed_status(db, audience)
+
+
 @router.put("/services/{service_id}/scopes/{name}")
 async def upsert_service_scope(service_id: str, name: str, body: ScopeUpsertRequest, request: Request,
                                db: Session = Depends(get_db), user: AdminUser = Depends(get_current_user)):
@@ -214,6 +284,7 @@ async def upsert_service_scope(service_id: str, name: str, body: ScopeUpsertRequ
     except AdapterError as e:
         raise _adapter_exc(e)
     name = _scope_name(name)
+    _checked_length("description", body.description, column_limit(OAuthScope.description))
     if OAuthScopeAdapter.get(db, name) is not None:
         raise HTTPException(status_code=409, detail={"error": "oauth.scope_is_global",
                                                      "fallback": "This name is a global scope; edit it in the registry"})
@@ -262,7 +333,7 @@ class PersonalTokenRequest(BaseModel):
 async def list_tokens(kind: Optional[str] = None, service_id: Optional[str] = None, client_id: Optional[str] = None,
                       include_inactive: bool = False, limit: int = Query(200, ge=1, le=1000),
                       db: Session = Depends(get_db), _: AdminUser = Depends(get_current_user)):
-    """Tokens issued by MCP Center. Filter by kind (access | refresh | pat), service, client; `include_inactive` adds revoked and expired ones."""
+    """Tokens issued by MCP Gate. Filter by kind (access | refresh | pat), service, client; `include_inactive` adds revoked and expired ones."""
     tokens = OAuthTokenAdapter.list_all(db, kind=kind, service_id=service_id, client_id=client_id,
                                         include_inactive=include_inactive, limit=limit)
     return {"tokens": [t.to_dict() for t in tokens], "total": len(tokens)}
@@ -337,14 +408,16 @@ async def delete_consent(consent_id: str, request: Request, db: Session = Depend
 # ---------------------------------------------------------------------------
 @router.get("/keys")
 async def list_keys(db: Session = Depends(get_db), _: AdminUser = Depends(get_current_user)):
-    """Signing keys published in JWKS, with the active one marked."""
+    """Every signing key, with the active one marked and `published` telling whether it is still in the JWKS (a
+    retired key leaves it once nothing it signed can still be valid)."""
     keys = OAuthKeyAdapter.list_all(db)
-    return {"keys": [k.to_dict() for k in keys], "total": len(keys)}
+    return {"keys": [{**k.to_dict(), "published": signing_keys.is_published(db, k)} for k in keys],
+            "total": len(keys)}
 
 
 @router.post("/keys/rotate")
 async def rotate_key(request: Request, db: Session = Depends(get_db), user: AdminUser = Depends(get_current_user)):
-    """Create a new active signing key. Old keys stay in JWKS so existing tokens keep verifying."""
+    """Create a new active signing key. The old key stays in JWKS while tokens it signed can still be valid."""
     key = signing_keys.rotate_signing_key(db)
     _audit(db, request, user, AuditAction.OAUTH_KEY_ROTATE, ResourceType.SYSTEM, key.kid)
     return key.to_dict()
@@ -359,7 +432,7 @@ async def activity(limit: int = Query(50, ge=1, le=500), db: Session = Depends(g
     """Recent token events: issued, introspected, revoked."""
     rows = TokenUsageAdapter.recent(db, limit=limit)
     return {"events": [{
-        "at": r.used_at.isoformat() if r.used_at else None,
+        "at": format_datetime(r.used_at),
         "event": r.event, "grant_type": r.grant_type, "client_id": r.client_id, "sub": r.sub,
         "audience": r.audience, "service_id": str(r.service_id) if r.service_id else None,
         "success": bool(r.success), "ip": r.ip_address,
@@ -381,6 +454,8 @@ async def overview(db: Session = Depends(get_db), _: AdminUser = Depends(get_cur
         "dcr_auto_approve": Config.get_oauth_config().dcr_auto_approve,
         # Hosts that reached the OAuth endpoints while differing from the issuer (see IssuerMismatchMiddleware)
         "issuer_mismatches": observed_mismatches(),
+        # SESSION_SECRET_KEY / ENCRYPTION_KEY values that are guessable (see src/utils/secret_policy.py)
+        "weak_secrets": weak_secrets(),
     }
 
 
@@ -398,22 +473,27 @@ async def integration_snippets(service_id: str, db: Session = Depends(get_db),
     base = oauth.issuer()
     audience = service.effective_audience or "<your-mcp-server-url>"
     mcp_url = service.get_mcp_url() or audience
+    # Every interpolated value is quoted for the language it lands in (H-08): the service name may be a
+    # scanned server's self-chosen serverInfo.name.
+    q_base, q_audience, q_url = py_str(base), py_str(audience), py_str(mcp_url)
+    q_name, q_host = py_str(service.name), py_str(service.host or "127.0.0.1")
+    port = int(service.port or 8000)
+    cli_name = snippet_server_name(service.name)
     fastmcp_server = f'''from fastmcp import FastMCP
 from fastmcp.server.auth import RemoteAuthProvider
 from fastmcp.server.auth.providers.jwt import JWTVerifier
-from pydantic import AnyHttpUrl
 
 auth = RemoteAuthProvider(
     token_verifier=JWTVerifier(
-        jwks_uri="{base}/.well-known/jwks.json",
-        issuer="{base}",
-        audience="{audience}",
+        jwks_uri={py_str(base + "/.well-known/jwks.json")},
+        issuer={q_base},
+        audience={q_audience},
     ),
-    authorization_servers=[AnyHttpUrl("{base}")],
-    base_url="{audience}",
+    authorization_servers=[{q_base}],
+    base_url={q_audience},
 )
 
-mcp = FastMCP(name="{service.name}", auth=auth)
+mcp = FastMCP(name={q_name}, auth=auth)
 
 
 @mcp.tool
@@ -422,42 +502,43 @@ def hello(name: str) -> str:
 
 
 if __name__ == "__main__":
-    mcp.run(transport="http", host="{service.host or '127.0.0.1'}", port={service.port or 8000})
+    mcp.run(transport="http", host={q_host}, port={port})
 '''
     fastmcp_hooks = f'''# Same server, but revocations take effect within seconds and usage shows up in the console.
-# Copy examples/mcp_center_hooks.py from the MCP Center repository next to this file, and register a
+# Copy examples/mcp_gate_hooks.py from the MCP Gate repository next to this file, and register a
 # confidential client in the console (OAuth Clients -> Register trusted client, client secret or
-# private_key_jwt) whose credentials this server uses to talk back to MCP Center.
+# private_key_jwt) bound to this server as its resource server
+# (PUT /api/oauth/clients/<CLIENT_ID>/resource-server {{"service_id": "{service.id}"}});
+# this server uses its credentials to talk back to MCP Gate.
 from fastmcp import FastMCP
 from fastmcp.server.auth import RemoteAuthProvider
-from mcp_center_hooks import MCPCenterVerifier
-from pydantic import AnyHttpUrl
+from mcp_gate_hooks import MCPGateVerifier
 
 auth = RemoteAuthProvider(
-    token_verifier=MCPCenterVerifier(
-        jwks_uri="{base}/.well-known/jwks.json",
-        issuer="{base}",
-        audience="{audience}",
+    token_verifier=MCPGateVerifier(
+        jwks_uri={py_str(base + "/.well-known/jwks.json")},
+        issuer={q_base},
+        audience={q_audience},
         client_id="<CONFIDENTIAL_CLIENT_ID>",
         client_secret="<CLIENT_SECRET>",          # or private_key_pem=open("client.pem").read(), kid="..."
         poll_interval=15,                         # seconds between revocation-feed polls
         flush_interval=30,                        # seconds between usage reports
     ),
-    authorization_servers=[AnyHttpUrl("{base}")],
-    base_url="{audience}",
+    authorization_servers=[{q_base}],
+    base_url={q_audience},
 )
 
-mcp = FastMCP(name="{service.name}", auth=auth)
+mcp = FastMCP(name={q_name}, auth=auth)
 '''
-    claude_code = f'claude mcp add --transport http {service.name} {mcp_url}'
-    claude_code_pat = (f'claude mcp add --transport http {service.name} {mcp_url} '
-                       f'--header "Authorization: Bearer <PERSONAL_ACCESS_TOKEN>"')
-    mcp_json = {"mcpServers": {service.name: {"type": "http", "url": mcp_url}}}
-    mcp_json_pat = {"mcpServers": {service.name: {"type": "http", "url": mcp_url,
-                                                   "headers": {"Authorization": "Bearer <PERSONAL_ACCESS_TOKEN>"}}}}
+    claude_code = shell_command("claude", "mcp", "add", "--transport", "http", cli_name, mcp_url)
+    claude_code_pat = (shell_command("claude", "mcp", "add", "--transport", "http", cli_name, mcp_url)
+                       + ' --header "Authorization: Bearer <PERSONAL_ACCESS_TOKEN>"')
+    mcp_json = {"mcpServers": {cli_name: {"type": "http", "url": mcp_url}}}
+    mcp_json_pat = {"mcpServers": {cli_name: {"type": "http", "url": mcp_url,
+                                              "headers": {"Authorization": "Bearer <PERSONAL_ACCESS_TOKEN>"}}}}
     fastmcp_client = f'''from fastmcp import Client
 
-async with Client("{mcp_url}", auth="oauth") as client:
+async with Client({q_url}, auth="oauth") as client:
     print(await client.list_tools())
 '''
     return {

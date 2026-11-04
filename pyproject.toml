@@ -1,7 +1,7 @@
 [project]
-name = "mcp-center"
-version = "1.1.0"
-description = "MCP Center - OAuth 2.1 Authorization Server and control plane for your MCP servers"
+name = "mcp-gate"
+version = "1.2.0"
+description = "MCP Gate - OAuth 2.1 Authorization Server and control plane for your MCP servers"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.11"
@@ -12,15 +12,15 @@ dependencies = [
     "pydantic>=2.0.0",
     "loguru>=0.7.0",
     "pyyaml>=6.0.0",
-    "pyjwt>=2.12.1",
+    "pyjwt>=2.15.0",
     "bcrypt>=4.0.0",
     "apscheduler>=3.10.0",
     "alembic>=1.13.0",
     "httpx>=0.27.0",
-    "cryptography>=42.0.0",
+    "cryptography>=50.0.0",
     "websockets>=12.0",
     "python-dotenv>=1.0.0",
-    "aiohttp>=3.9.0",
+    "aiohttp>=3.14.4",
     "docker>=7.0.0",
 ]
 
@@ -28,7 +28,7 @@ dependencies = [
 postgres = ["psycopg2-binary>=2.9.10"]
 
 [project.scripts]
-mcp-center = "main:main"
+mcp-gate = "main:main"
 
 [build-system]
 requires = ["setuptools>=45", "wheel"]
@@ -64,7 +64,7 @@ dev = [
     "pytest-cov>=4.1.0",
     "pytest-mock>=3.14.0",
     "ruff>=0.9.0",
-    "fastmcp>=3.0.0",
+    "fastmcp>=4.1.5",
     "psycopg2-binary>=2.9.10",
 ]
 

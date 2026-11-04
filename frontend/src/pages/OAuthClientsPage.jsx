@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { formatDateTime } from '../utils/format'
 import { useTranslation } from 'react-i18next'
 import {
-  Bot, Plus, RefreshCw, Check, Ban, Trash2, KeyRound, Lock, Unlock,
+  Bot, Plus, RefreshCw, Check, Ban, Trash2, KeyRound, Lock, Unlock, Server,
 } from 'lucide-react'
 import { oauthApi, servicesApi } from '../services/api'
 import { useConfirm } from '../contexts/ConfirmContext'
@@ -11,6 +11,7 @@ import CodeBlock from '../components/CodeBlock'
 import LastChecked from '../components/LastChecked'
 import ScopeEditor from '../components/ScopeEditor'
 import clsx from 'clsx'
+import { safeHttpUrl } from '../utils/url'
 import {
   PageHeader, Button, IconButton, Badge, StatusPill, Card, CardHeader, EmptyState, Alert, LoadingBlock, Tabs,
   Table, THead, TBody, TR, TH, TD, RowActions,
@@ -27,12 +28,77 @@ function clientStatus(c) {
   return c.is_approved ? 'approved' : 'pending'
 }
 
+// ---------- Resource-server binding ----------
+/** A confidential client registered in the console may act as the resource server of one MCP server (revocation
+ *  feed, introspection, usage reports for tokens of that server only). */
+function ResourceServerSelect({ services, value, onChange }) {
+  const { t } = useTranslation()
+  return (
+    <Select value={value} onChange={(e) => onChange(e.target.value)}>
+      <option value="">{t('clients.resourceServer.none')}</option>
+      {services.filter((s) => s.effective_audience).map((s) => (
+        <option key={s.id} value={s.id}>{s.name} — {s.effective_audience}</option>
+      ))}
+    </Select>
+  )
+}
+
+function serviceForAudience(services, audience) {
+  return audience ? services.find((s) => s.effective_audience === audience) || null : null
+}
+
+function canBeResourceServer(c) {
+  return c.created_via === 'manual' && c.is_confidential && c.is_active
+}
+
+function BindResourceServerModal({ client, services, onClose, onSaved }) {
+  const { t } = useTranslation()
+  const [serviceId, setServiceId] = useState(serviceForAudience(services, client.resource_audience)?.id || '')
+  const [isSaving, setIsSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  const save = async (e) => {
+    e.preventDefault()
+    setIsSaving(true)
+    setError('')
+    try {
+      onSaved(await oauthApi.clients.bindResourceServer(client.client_id, serviceId || null))
+    } catch (err) {
+      setError(err.message || t('clients.resourceServer.saveFailed'))
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open onClose={onClose} size="md" title={t('clients.resourceServer.title', { name: client.client_name })}>
+      <form onSubmit={save} className="flex min-h-0 flex-1 flex-col">
+        <DialogBody className="space-y-4">
+          {error && <Alert tone="danger">{error}</Alert>}
+          <Field label={t('clients.resourceServer.label')} help={t('clients.resourceServer.hint')}>
+            <ResourceServerSelect services={services} value={serviceId} onChange={setServiceId} />
+          </Field>
+          {client.resource_audience && !serviceForAudience(services, client.resource_audience) && (
+            <p className="text-xs text-muted-foreground">
+              {t('clients.resourceServer.current')} <code className="font-mono">{client.resource_audience}</code>
+            </p>
+          )}
+        </DialogBody>
+        <DialogFooter>
+          <Button type="button" variant="secondary" onClick={onClose}>{t('clients.form.cancel')}</Button>
+          <Button type="submit" variant="primary" loading={isSaving}>{t('clients.resourceServer.save')}</Button>
+        </DialogFooter>
+      </form>
+    </Dialog>
+  )
+}
+
 // ---------- Register trusted client ----------
 function RegisterClientModal({ onClose, onCreated }) {
   const { t } = useTranslation()
   const [form, setForm] = useState({
     clientName: '', clientUri: '', redirectUris: '', grantTypes: new Set(['authorization_code', 'refresh_token']),
-    authMethod: 'none', classic: false, defaultResource: '', jwksUri: '', jwks: '',
+    authMethod: 'none', classic: false, defaultResource: '', jwksUri: '', jwks: '', resourceServiceId: '',
   })
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState('')
@@ -86,6 +152,7 @@ function RegisterClientModal({ onClose, onCreated }) {
         defaultResource: confidential && form.classic ? form.defaultResource || null : null,
         jwksUri: jwksUri || null,
         jwks,
+        resourceServiceId: confidential ? form.resourceServiceId || null : null,
       })
       onCreated(res)
     } catch (err) {
@@ -153,6 +220,12 @@ function RegisterClientModal({ onClose, onCreated }) {
                 <Textarea rows={5} value={form.jwks} onChange={(e) => setForm({ ...form, jwks: e.target.value })} placeholder='{"keys": [{"kty": "RSA", "kid": "…", "n": "…", "e": "AQAB"}]}' className="font-mono text-xs" />
               </Field>
             </div>
+          )}
+          {confidential && (
+            <Field label={t('clients.resourceServer.label')} help={t('clients.resourceServer.hint')}>
+              <ResourceServerSelect services={services} value={form.resourceServiceId}
+                onChange={(v) => setForm({ ...form, resourceServiceId: v })} />
+            </Field>
           )}
           {confidential && (
             <div className="space-y-3 rounded-md border border-border bg-muted/40 p-4">
@@ -334,8 +407,11 @@ function KeysSection() {
                 <p className="truncate font-mono text-xs font-medium text-foreground">{k.kid}</p>
                 <p className="text-xs text-muted-foreground tabular-nums">{k.alg} · {t('clients.keys.created', { date: k.created_at ? formatDateTime(k.created_at) : '—' })}</p>
               </div>
-              <StatusPill tone={k.is_active ? 'success' : 'neutral'}>
-                {k.is_active ? t('clients.keys.active') : t('clients.keys.inactive')}
+              <StatusPill
+                tone={k.is_active ? 'success' : k.published ? 'warning' : 'neutral'}
+                title={k.is_active ? undefined : k.published ? t('clients.keys.publishedHint') : t('clients.keys.retiredHint')}
+              >
+                {k.is_active ? t('clients.keys.active') : k.published ? t('clients.keys.published') : t('clients.keys.inactive')}
               </StatusPill>
             </div>
           ))}
@@ -358,6 +434,15 @@ export default function OAuthClientsPage() {
   const [showRegister, setShowRegister] = useState(false)
   const [secretClient, setSecretClient] = useState(null)
   const [busy, setBusy] = useState(null)
+  const [services, setServices] = useState([])
+  const [bindClient, setBindClient] = useState(null)
+
+  // Registered servers: to name the server a resource-server client is bound to
+  useEffect(() => {
+    let cancelled = false
+    servicesApi.getAll().then((res) => { if (!cancelled) setServices(res.services || []) }).catch(() => {})
+    return () => { cancelled = true }
+  }, [])
 
   const load = useCallback(async ({ silent = false } = {}) => {
     if (!silent) setIsLoading(true)
@@ -378,11 +463,11 @@ export default function OAuthClientsPage() {
 
   const visible = clients.filter((c) => clientStatus(c) === tab)
 
-  const run = async (client, fn, successMsg) => {
+  const runClientAction = async (client, action, successMsg) => {
     setBusy(client.client_id)
     try {
-      const r = await fn()
-      toast.success(successMsg(r))
+      const result = await action()
+      toast.success(successMsg(result))
       await load({ silent: true })
     } catch (err) {
       toast.error(err.message || t('clients.actionFailed'))
@@ -391,7 +476,7 @@ export default function OAuthClientsPage() {
     }
   }
 
-  const approve = (c) => run(c, () => oauthApi.clients.approve(c.client_id), () => t('clients.toast.approved', { name: c.client_name }))
+  const approve = (c) => runClientAction(c, () => oauthApi.clients.approve(c.client_id), () => t('clients.toast.approved', { name: c.client_name }))
   const revoke = async (c) => {
     const ok = await confirm({
       title: t('clients.revokeConfirmTitle'),
@@ -400,12 +485,12 @@ export default function OAuthClientsPage() {
       type: 'revoke',
     })
     if (!ok) return
-    run(c, () => oauthApi.clients.revoke(c.client_id), (r) => t('clients.toast.revoked', { name: c.client_name, n: r?.tokens_revoked ?? 0 }))
+    runClientAction(c, () => oauthApi.clients.revoke(c.client_id), (r) => t('clients.toast.revoked', { name: c.client_name, n: r?.tokens_revoked ?? 0 }))
   }
   const remove = async (c) => {
     const ok = await confirmDelete(t('clients.deleteTarget', { name: c.client_name }))
     if (!ok) return
-    run(c, () => oauthApi.clients.delete(c.client_id), () => t('clients.toast.deleted', { name: c.client_name }))
+    runClientAction(c, () => oauthApi.clients.delete(c.client_id), () => t('clients.toast.deleted', { name: c.client_name }))
   }
 
   return (
@@ -472,7 +557,8 @@ export default function OAuthClientsPage() {
                     <TD className="max-w-xs">
                       <div className="flex items-center gap-3">
                         <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-md border border-border bg-muted text-muted-foreground">
-                          {c.logo_uri ? <img src={c.logo_uri} alt="" className="h-full w-full object-cover" /> : <Bot className="h-4 w-4" aria-hidden="true" />}
+                          {/* logo_uri is never loaded (H-16): it would let the registrant track the owner */}
+                          <Bot className="h-4 w-4" aria-hidden="true" />
                         </span>
                         <div className="min-w-0">
                           <p className="flex items-center gap-1.5 truncate font-medium text-foreground">
@@ -482,14 +568,21 @@ export default function OAuthClientsPage() {
                               : <Unlock className="h-3 w-3 shrink-0 text-subtle-foreground" title={t('clients.public')} />}
                           </p>
                           <p className="truncate font-mono text-xs text-muted-foreground" title={c.client_id}>{c.client_id}</p>
-                          {c.client_uri && (
-                            <a href={c.client_uri} target="_blank" rel="noreferrer" className="block truncate text-xs text-link transition-colors duration-200 hover:text-link-hover">{c.client_uri}</a>
+                          {c.resource_audience && (
+                            <p className="truncate text-xs text-muted-foreground" title={c.resource_audience}>
+                              {t('clients.resourceServer.boundTo', { name: serviceForAudience(services, c.resource_audience)?.name || c.resource_audience })}
+                            </p>
                           )}
+                          {c.client_uri && (safeHttpUrl(c.client_uri) ? (
+                            <a href={safeHttpUrl(c.client_uri)} target="_blank" rel="noopener noreferrer" className="block truncate text-xs text-link transition-colors duration-200 hover:text-link-hover">{c.client_uri}</a>
+                          ) : (
+                            <p className="truncate text-xs text-muted-foreground">{c.client_uri}</p>
+                          ))}
                         </div>
                       </div>
                     </TD>
                     <TD>
-                      <Badge tone={c.created_via === 'dcr' ? 'warning' : isSystem ? 'neutral' : 'success'}>
+                      <Badge tone={c.created_via === 'dcr' || c.created_via === 'cimd' ? 'warning' : isSystem ? 'neutral' : 'success'}>
                         {t(`clients.via.${c.created_via}`, c.created_via)}
                       </Badge>
                     </TD>
@@ -522,6 +615,9 @@ export default function OAuthClientsPage() {
                           <Button variant="primary" size="xs" icon={Check} onClick={() => approve(c)} disabled={isBusy} title={t('clients.approve')}>
                             {t('clients.approve')}
                           </Button>
+                        )}
+                        {canBeResourceServer(c) && (
+                          <IconButton icon={Server} onClick={() => setBindClient(c)} disabled={isBusy} title={t('clients.resourceServer.action')} />
                         )}
                         {status !== 'revoked' && !isSystem && (
                           <IconButton icon={Ban} onClick={() => revoke(c)} disabled={isBusy} title={t('clients.revoke')} />
@@ -557,6 +653,20 @@ export default function OAuthClientsPage() {
         />
       )}
       {secretClient && <SecretModal client={secretClient} onClose={() => setSecretClient(null)} />}
+      {bindClient && (
+        <BindResourceServerModal
+          client={bindClient}
+          services={services}
+          onClose={() => setBindClient(null)}
+          onSaved={(updated) => {
+            setBindClient(null)
+            toast.success(updated.resource_audience
+              ? t('clients.resourceServer.bound', { name: updated.client_name })
+              : t('clients.resourceServer.unbound', { name: updated.client_name }))
+            load({ silent: true })
+          }}
+        />
+      )}
     </div>
   )
 }

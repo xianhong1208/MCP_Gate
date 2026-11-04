@@ -1,5 +1,5 @@
 """Revocation feed and usage reports for MCP servers that verify tokens offline, plus the FastMCP helper in
-examples/mcp_center_hooks.py driven against the app in-process."""
+examples/mcp_gate_hooks.py driven against the app in-process."""
 
 import importlib.util
 import json
@@ -9,13 +9,13 @@ import time
 import httpx
 import pytest
 
-from tests.test_oauth_flow import _authorize_and_consent, _exchange, _register
+from tests.test_oauth_flow import _authorize_and_consent, _exchange, _register, _register_console
 
 
-def _resource_server(client, **overrides):
-    """A confidential client standing in for an MCP server."""
-    reg = _register(client, client_name="Resource server", token_endpoint_auth_method="client_secret_post",
-                    **overrides)
+def _resource_server(client, service, **overrides):
+    """A console-registered confidential client bound to the MCP server it stands in for."""
+    reg = _register_console(client, client_name="Resource server", token_endpoint_auth_method="client_secret_post",
+                            resource_service_id=service["id"], **overrides)
     return {"client_id": reg["client_id"], "client_secret": reg["client_secret"]}
 
 
@@ -37,7 +37,7 @@ def test_feed_requires_resource_server(owner_client, service):
 
 
 def test_feed_lists_revoked_unexpired_tokens_with_since(owner_client, service):
-    rs = _resource_server(owner_client)
+    rs = _resource_server(owner_client, service)
     a = _issue_pat(owner_client, service)
     b = _issue_pat(owner_client, service)
     assert owner_client.post("/oauth/revoked", data=rs).json()["revoked"] == []
@@ -68,7 +68,7 @@ def test_feed_omits_expired_tokens(owner_client, service, db_session):
     from src.adapters import OAuthTokenAdapter
     from db.models import local_now
 
-    rs = _resource_server(owner_client)
+    rs = _resource_server(owner_client, service)
     pat = _issue_pat(owner_client, service)
     assert owner_client.post(f"/api/oauth/tokens/{pat['jti']}/revoke").status_code == 200
     rec = OAuthTokenAdapter.get(db_session, pat["jti"])
@@ -77,11 +77,55 @@ def test_feed_omits_expired_tokens(owner_client, service, db_session):
     assert owner_client.post("/oauth/revoked", data=rs).json()["revoked"] == []
 
 
+@pytest.fixture
+def utc_plus_8():
+    """Run with the process in UTC+8: stored times are naive local time, so unix timestamps derived from them
+    are only right if they are read as local time (CI and most containers run in UTC, which hides the bug)."""
+    import os
+
+    saved = os.environ.get("TZ")
+    os.environ["TZ"] = "TPE-8"  # POSIX: UTC+8, no tzdata needed
+    time.tzset()
+    try:
+        yield
+    finally:
+        if saved is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = saved
+        time.tzset()
+
+
+def test_feed_timestamps_are_unix_time_outside_utc(utc_plus_8, owner_client, service):
+    rs = _resource_server(owner_client, service)
+    pat = _issue_pat(owner_client, service)
+    assert owner_client.post(f"/api/oauth/tokens/{pat['jti']}/revoke").status_code == 200
+    feed = owner_client.post("/oauth/revoked", data=rs).json()
+    now = time.time()
+    assert abs(feed["now"] - now) < 5
+    assert abs(feed["revoked"][0]["revoked_at"] - now) < 5
+    assert abs(feed["revoked"][0]["exp"] - (now + 86400)) < 5
+    # a cursor taken from `now` just before the revocation still lists it
+    assert len(owner_client.post("/oauth/revoked", data={**rs, "since": str(feed["now"] - 2)}).json()["revoked"]) == 1
+
+
+def test_usage_last_seen_is_unix_time_outside_utc(utc_plus_8, owner_client, service):
+    from datetime import datetime
+
+    rs = _resource_server(owner_client, service)
+    pat = _issue_pat(owner_client, service)
+    seen = int(time.time()) - 30
+    r = owner_client.post("/oauth/usage", data={**rs, "events": json.dumps([{"jti": pat["jti"], "last_seen": seen}])})
+    assert r.status_code == 200, r.text
+    last_used = owner_client.get(f"/api/oauth/tokens/{pat['jti']}").json()["last_used_at"]
+    assert abs(datetime.fromisoformat(last_used).timestamp() - seen) < 2
+
+
 # ---------------------------------------------------------------------------
 # /oauth/usage
 # ---------------------------------------------------------------------------
 def test_usage_report_updates_counters_and_stats(owner_client, service):
-    rs = _resource_server(owner_client)
+    rs = _resource_server(owner_client, service)
     pat = _issue_pat(owner_client, service)
     before = owner_client.get("/api/stats/summary").json()["total_all_time"]
     now = int(time.time())
@@ -112,11 +156,11 @@ def test_metadata_advertises_extension_endpoints(client):
 
 
 # ---------------------------------------------------------------------------
-# examples/mcp_center_hooks.py against the app, in-process
+# examples/mcp_gate_hooks.py against the app, in-process
 # ---------------------------------------------------------------------------
 def _load_hooks_module():
-    path = pathlib.Path(__file__).resolve().parents[1] / "examples" / "mcp_center_hooks.py"
-    spec = importlib.util.spec_from_file_location("mcp_center_hooks", path)
+    path = pathlib.Path(__file__).resolve().parents[1] / "examples" / "mcp_gate_hooks.py"
+    spec = importlib.util.spec_from_file_location("mcp_gate_hooks", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -125,11 +169,11 @@ def _load_hooks_module():
 @pytest.mark.asyncio
 async def test_verifier_rejects_after_poll_and_reports_usage(owner_client, service, app):
     hooks = _load_hooks_module()
-    rs = _resource_server(owner_client)
+    rs = _resource_server(owner_client, service)
     pat = _issue_pat(owner_client, service)
 
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as http:
-        verifier = hooks.MCPCenterVerifier(
+        verifier = hooks.MCPGateVerifier(
             jwks_uri="http://testserver/.well-known/jwks.json", issuer="http://testserver",
             audience=service["effective_audience"], client_id=rs["client_id"], client_secret=rs["client_secret"],
             http_client=http, poll_interval=1000, flush_interval=1000,
@@ -158,11 +202,12 @@ async def test_verifier_with_private_key_jwt_client(owner_client, service, app):
 
     hooks = _load_hooks_module()
     pem, jwk, _ = rsa_keypair("srv-1")
-    reg = _register(owner_client, client_name="RS (key)", token_endpoint_auth_method="private_key_jwt",
-                    jwks={"keys": [jwk]})
+    reg = _register_console(owner_client, client_name="RS (key)", token_endpoint_auth_method="private_key_jwt",
+                            jwks={"keys": [jwk]}, grant_types=["client_credentials"],
+                            resource_service_id=service["id"])
     pat = _issue_pat(owner_client, service)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as http:
-        verifier = hooks.MCPCenterVerifier(
+        verifier = hooks.MCPGateVerifier(
             jwks_uri="http://testserver/.well-known/jwks.json", issuer="http://testserver",
             audience=service["effective_audience"], client_id=reg["client_id"], private_key_pem=pem, kid="srv-1",
             http_client=http, poll_interval=1000, flush_interval=1000,

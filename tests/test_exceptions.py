@@ -132,20 +132,20 @@ class TestServiceExceptions:
 class TestBaseExceptions:
     """Base exception tests"""
 
-    def test_token_server_error(self):
+    def test_mcp_gate_error(self):
         """Test the base error exception"""
-        from src.exceptions.base import MCPCenterError
+        from src.exceptions.base import MCPGateError
 
-        exc = MCPCenterError(message="Test error", code="TEST_ERROR")
+        exc = MCPGateError(message="Test error", code="TEST_ERROR")
         assert exc.message == "Test error"
         assert exc.code == "TEST_ERROR"
         assert exc.status_code == 500
 
-    def test_token_server_http_exception(self):
+    def test_mcp_gate_http_exception(self):
         """Test the HTTP exception"""
-        from src.exceptions.base import MCPCenterHTTPException
+        from src.exceptions.base import MCPGateHTTPException
 
-        exc = MCPCenterHTTPException(
+        exc = MCPGateHTTPException(
             message="Custom error",
             status_code=400,
             code="CUSTOM_ERROR"
@@ -156,9 +156,9 @@ class TestBaseExceptions:
 
     def test_exception_to_dict(self):
         """Test converting an exception to a dict"""
-        from src.exceptions.base import MCPCenterError
+        from src.exceptions.base import MCPGateError
 
-        exc = MCPCenterError(
+        exc = MCPGateError(
             message="Test error",
             code="TEST_CODE",
             details={"key": "value"}
@@ -171,10 +171,10 @@ class TestBaseExceptions:
 
     def test_exception_to_http_exception(self):
         """Test converting an exception to HTTPException"""
-        from src.exceptions.base import MCPCenterHTTPException
+        from src.exceptions.base import MCPGateHTTPException
         from fastapi import HTTPException
 
-        exc = MCPCenterHTTPException(
+        exc = MCPGateHTTPException(
             message="HTTP error",
             status_code=404
         )
@@ -191,10 +191,10 @@ class TestExceptionHandlerMiddleware:
         """A custom exception is converted by the handler into the correct JSON error response and status code"""
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
-        from src.exceptions.base import MCPCenterError
+        from src.exceptions.base import MCPGateError
         from src.exceptions.handlers import register_exception_handlers
 
-        class TeapotError(MCPCenterError):
+        class TeapotError(MCPGateError):
             code = "IM_A_TEAPOT"
             message = "short and stout"
             status_code = 418

@@ -29,9 +29,11 @@ ASSERTION_ALGS = ["RS256", "ES256"]
 MAX_ASSERTION_LIFETIME = 300          # seconds; an assertion is meant to be minted per request
 JWKS_CACHE_TTL = 300                  # seconds
 JWKS_FETCH_TIMEOUT = 5.0              # seconds
+JWKS_FORCED_REFETCH_INTERVAL = 60     # seconds between cache-bypassing refetches of one jwks_uri
 
 _lock = threading.Lock()
 _jwks_cache: dict[str, tuple[float, dict]] = {}          # jwks_uri -> (fetched_at, document)
+_last_forced: dict[str, float] = {}                       # jwks_uri -> monotonic time of the last forced refetch
 _seen_jti: dict[tuple[str, str], float] = {}              # (client_id, jti) -> expires_at
 
 
@@ -64,50 +66,88 @@ def _resolve_host(host: str) -> list[str]:
         return []
 
 
-def validate_jwks_uri(jwks_uri: str, *, allow_loopback: bool) -> str:
-    """A ``jwks_uri`` MCP Center will fetch server-side. https to a public address only; plain http is accepted
-    solely for loopback hosts and only when the deployment itself runs over http (development). The host is
-    resolved here and again right before each fetch so a DNS record cannot be pointed at an internal address
-    later (SSRF via rebinding)."""
+def _is_public(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Globally routable unicast only: excludes private, loopback, link-local, carrier-grade NAT
+    (100.64.0.0/10, where some cloud metadata services live), documentation, reserved and multicast ranges."""
+    if ip.version == 6 and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return ip.is_global and not (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
+                                 or ip.is_multicast or ip.is_unspecified)
+
+
+def _pinned_address(jwks_uri: str, *, allow_loopback: bool) -> str:
+    """Validate ``jwks_uri`` (see validate_jwks_uri) and return the one address the fetch must connect to."""
     parts = urlsplit(jwks_uri)
     host = (parts.hostname or "").rstrip(".").lower()
     if parts.username or parts.password or not host:
         raise OAuthError("invalid_client_metadata", "jwks_uri must be an absolute URL without credentials")
-    if host in LOOPBACK_HOSTS or host.endswith(".localhost"):
+    loopback = host in LOOPBACK_HOSTS or host.endswith(".localhost")
+    if loopback:
         if not allow_loopback:
             raise OAuthError("invalid_client_metadata", "jwks_uri may not point at this machine")
         if parts.scheme not in ("http", "https"):
             raise OAuthError("invalid_client_metadata", "jwks_uri must be http(s)")
-        return jwks_uri
-    if parts.scheme != "https":
+    elif parts.scheme != "https":
         raise OAuthError("invalid_client_metadata", "jwks_uri must be https")
     addresses = _resolve_host(host)
     if not addresses:
         raise OAuthError("invalid_client_metadata", f"jwks_uri host {host} does not resolve")
     for addr in addresses:
         ip = ipaddress.ip_address(addr.split("%")[0])
-        if (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast
-                or ip.is_unspecified):
+        if loopback and not ip.is_loopback:
+            raise OAuthError("invalid_client_metadata", f"jwks_uri host {host} does not resolve to this machine")
+        if not loopback and not _is_public(ip):
             raise OAuthError("invalid_client_metadata", f"jwks_uri host {host} resolves to a non-public address")
+    return addresses[0].split("%")[0]
+
+
+def validate_jwks_uri(jwks_uri: str, *, allow_loopback: bool) -> str:
+    """A ``jwks_uri`` MCP Gate will fetch server-side. https to a public address only; plain http is accepted
+    solely for loopback hosts and only when the deployment itself runs over http (development). The host is
+    resolved here and again right before each fetch, and the fetch connects to the address that passed that
+    second check (see _get_pinned), so a DNS record cannot be pointed at an internal address later (SSRF via
+    rebinding)."""
+    _pinned_address(jwks_uri, allow_loopback=allow_loopback)
     return jwks_uri
 
 
+def _get_pinned(jwks_uri: str, address: str) -> httpx.Response:
+    """GET ``jwks_uri`` over a connection to ``address`` instead of whatever the name resolves to now.
+
+    Only the connection target changes: the Host header is the original authority, and TLS sends the original
+    hostname as SNI and verifies the certificate against it (httpcore's ``sni_hostname`` extension is used as
+    ``server_hostname`` for the handshake). The environment's proxy settings are ignored, since a proxy would
+    resolve the name itself."""
+    parts = urlsplit(jwks_uri)
+    ip_host = f"[{address}]" if ":" in address else address
+    netloc = f"{ip_host}:{parts.port}" if parts.port else ip_host
+    pinned_url = parts._replace(netloc=netloc).geturl()
+    with httpx.Client(verify=True, trust_env=False, follow_redirects=False, timeout=JWKS_FETCH_TIMEOUT) as c:
+        return c.get(pinned_url, headers={"Host": parts.netloc},
+                     extensions={"sni_hostname": parts.hostname})
+
+
 def fetch_jwks(jwks_uri: str, *, force: bool = False, allow_loopback: bool = False) -> dict:
-    """The JWKS at ``jwks_uri``, cached for JWKS_CACHE_TTL; ``force`` bypasses the cache (unknown kid)."""
+    """The JWKS at ``jwks_uri``, cached for JWKS_CACHE_TTL; ``force`` bypasses the cache (unknown kid), at most
+    once per JWKS_FORCED_REFETCH_INTERVAL per uri so a stream of unknown kids cannot make every request fetch."""
     now = time.monotonic()
     with _lock:
         hit = _jwks_cache.get(jwks_uri)
+        if hit and force:
+            if now - _last_forced.get(jwks_uri, float("-inf")) < JWKS_FORCED_REFETCH_INTERVAL:
+                return hit[1]
+            _last_forced[jwks_uri] = now
     if hit and not force and now - hit[0] < JWKS_CACHE_TTL:
         return hit[1]
     try:  # re-check: the DNS answer may have changed since registration
-        validate_jwks_uri(jwks_uri, allow_loopback=allow_loopback)
+        address = _pinned_address(jwks_uri, allow_loopback=allow_loopback)
     except OAuthError as e:
         logger.warning("jwks_uri {uri} refused at fetch time: {err}", uri=jwks_uri, err=e.description)
         raise OAuthError("invalid_client", "client keys could not be fetched", 401)
     try:
-        r = httpx.get(jwks_uri, timeout=JWKS_FETCH_TIMEOUT, follow_redirects=False)
-        r.raise_for_status()
-        doc = validate_jwks_document(r.json())
+        response = _get_pinned(jwks_uri, address)
+        response.raise_for_status()
+        doc = validate_jwks_document(response.json())
     except OAuthError:
         raise
     except Exception as e:  # network, TLS, JSON
@@ -123,6 +163,7 @@ def fetch_jwks(jwks_uri: str, *, force: bool = False, allow_loopback: bool = Fal
 def reset_caches() -> None:
     with _lock:
         _jwks_cache.clear()
+        _last_forced.clear()
         _seen_jti.clear()
 
 
@@ -130,8 +171,8 @@ def _remember_jti(client_id: str, jti: str, exp: float) -> bool:
     """False when the jti was already used by this client (replay)."""
     now = time.time()
     with _lock:
-        for key, until in [(k, v) for k, v in _seen_jti.items() if v < now]:
-            _seen_jti.pop(key, None)
+        for expired_key in [k for k, expires_at in _seen_jti.items() if expires_at < now]:
+            _seen_jti.pop(expired_key, None)
         key = (client_id, jti)
         if key in _seen_jti:
             return False
@@ -152,7 +193,7 @@ def _client_keys(client, kid: Optional[str], alg: str, *, allow_loopback: bool) 
         key = _pick_key(json.loads(client.jwks)["keys"], kid, alg)
     elif client.jwks_uri:
         key = _pick_key(fetch_jwks(client.jwks_uri, allow_loopback=allow_loopback)["keys"], kid, alg)
-        if key is None and kid is not None:  # rotation: refetch once for an unknown kid
+        if key is None and kid is not None:  # rotation: refetch for an unknown kid (throttled in fetch_jwks)
             key = _pick_key(fetch_jwks(client.jwks_uri, force=True, allow_loopback=allow_loopback)["keys"], kid, alg)
     else:
         raise OAuthError("invalid_client", "client has no registered keys", 401)
@@ -172,8 +213,12 @@ def unverified_issuer(assertion: str) -> Optional[str]:
 
 
 def verify_client_assertion(client, assertion: str, *, token_endpoint: str, issuer: str) -> dict:
-    allow_loopback = issuer.startswith("http://")  # a plain-http issuer means a development deployment
-    """Verify a private_key_jwt assertion for ``client``; return its claims or raise invalid_client."""
+    """Verify a private_key_jwt assertion for ``client``; return its claims or raise invalid_client.
+
+    May fetch the client's jwks_uri synchronously, so async callers run it off the event loop."""
+    # A plain-http issuer means a development deployment; even there only an owner-registered client may point
+    # the fetch at loopback (an anonymous DCR or metadata-document client must not aim it at local services)
+    allow_loopback = issuer.startswith("http://") and getattr(client, "created_via", None) in ("manual", "system")
     try:
         header = jwt.get_unverified_header(assertion)
     except jwt.InvalidTokenError as e:

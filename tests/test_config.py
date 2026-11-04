@@ -70,3 +70,39 @@ def test_effective_port_follows_issuer():
     assert ConfigModel(oauth=OAuthConfig(issuer="http://192.168.1.10:5000")).effective_port == 5000
     assert ConfigModel(oauth=OAuthConfig(issuer="https://mcp.example.com")).effective_port == 4568
     assert ConfigModel(oauth=OAuthConfig(issuer="http://x:5000"), server=ServerConfig(port=9000)).effective_port == 9000
+
+
+def test_scheduler_section_defaults_and_yaml(tmp_path, monkeypatch):
+    from src.config.model import SchedulerConfig
+
+    d = SchedulerConfig()
+    assert (d.oauth_cleanup_hours, d.usage_retention_days, d.audit_retention_days, d.health_check_seconds,
+            d.health_check_concurrency, d.health_check_timeout_seconds, d.health_write_interval_minutes) == \
+        (6, 30, 90, 30, 8, 10.0, 5)
+    monkeypatch.delenv("AUDIT_RETENTION_DAYS", raising=False)
+    monkeypatch.setenv("HEALTH_CHECK_SECONDS", "45")
+    shipped = Config._load_config(os.path.join(os.path.dirname(__file__), "..", "config", "config.yaml"))
+    assert shipped.scheduler.audit_retention_days == 90 and shipped.scheduler.health_check_seconds == 45
+    with pytest.raises(ValueError):
+        SchedulerConfig(health_check_concurrency=0)
+
+
+def test_lifespan_applies_the_scheduler_config(app, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from src.config import Config
+    from src.scheduler import get_scheduler
+
+    cfg = Config.get_config_model().scheduler
+    monkeypatch.setattr(cfg, "audit_retention_days", 7)
+    monkeypatch.setattr(cfg, "health_check_seconds", 120)
+    monkeypatch.setattr(cfg, "health_check_concurrency", 3)
+    scheduler = get_scheduler()
+    try:
+        with TestClient(app, base_url="http://testserver"):
+            assert scheduler.audit_retention_days == 7
+            assert scheduler.health_check_concurrency == 3
+            job = scheduler.scheduler.get_job("health_check")
+            assert job.trigger.interval.total_seconds() == 120
+    finally:
+        scheduler.configure()  # the singleton outlives this test
