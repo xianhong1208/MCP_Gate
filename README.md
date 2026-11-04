@@ -32,6 +32,7 @@ MCP Gate puts standards-based authentication in front of every MCP server you ru
 
 - **Standards-based authorization server.** Covers the authorization requirements of the [MCP specification (2025-06-18)](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization): RFC 8414 metadata, RFC 7591 dynamic client registration, [Client ID Metadata Documents](#client-id-metadata-documents) (the registration method of MCP 2026-07-28), authorization code + PKCE (S256), refresh-token rotation with replay detection, RFC 7009 revocation, RFC 7662 introspection, RFC 8707 resource indicators, RFC 9207 `iss` responses.
 - **Asymmetric signing, offline verification.** RS256 keys with JWKS publishing and rotation. MCP servers verify tokens locally with the public key; MCP Gate is never on the request path.
+- **Revocation that reaches offline verifiers.** A [revocation feed](#revocation-feed) lets each MCP server learn, within seconds, which of its tokens were revoked — personal access tokens included — without calling MCP Gate per request.
 - **One-block FastMCP integration.** `RemoteAuthProvider` + `JWTVerifier(jwks_uri, issuer, audience)` protects a server. Tokens are bound to each server's audience, so a token for one server never works on another.
 - **Consent screen.** Dynamically registered clients and clients identified by a metadata URL ask the owner for permission on first connect; decisions can be remembered per client and server. Clients you register yourself skip the prompt.
 - **Personal access tokens (PATs).** Mint long-lived bearer tokens from the console for scripts, CI and clients that cannot run an OAuth flow, with ready-to-paste `claude mcp add` and `mcpServers` snippets.
@@ -168,7 +169,7 @@ MCP Gate plays the **authorization server** role from the MCP specification. You
 | Authorization | browser → MCP Gate | `/oauth/authorize` validates the request, binds it to the target server through the `resource` parameter, and shows the consent screen (or skips it for remembered or trusted clients). |
 | Token | client → MCP Gate | `/oauth/token` exchanges the code — checking PKCE, redirect URI and resource — for an RS256 access token plus a refresh token. |
 | Verification | server | The server fetches JWKS once, then verifies signature, issuer, audience, expiry and scopes locally. |
-| Revocation | console or client | Revoking a refresh token invalidates its whole family, and `POST /oauth/introspect` reports `active: false` immediately. Tokens verified offline stay valid until they expire — an access token for its lifetime (15 minutes by default), a personal access token for up to `pat_max_days` — unless the server polls the revocation feed (`POST /oauth/revoked`, see `MCPGateVerifier` in `examples/mcp_gate_hooks.py`) or uses FastMCP's `IntrospectionTokenVerifier`. |
+| Revocation | console or client | Revoking a refresh token invalidates its whole family, and `POST /oauth/introspect` reports `active: false` immediately. Tokens verified offline stay valid until they expire — an access token for its lifetime (15 minutes by default), a personal access token for up to `pat_max_days` — unless the server polls the [revocation feed](#revocation-feed) (`POST /oauth/revoked`) or uses FastMCP's `IntrospectionTokenVerifier`. |
 
 Access-token claims: `iss`, `sub`, `aud`, `scope`, `client_id`, `jti`, `iat`, `exp`, `token_use`, and — for tokens issued to a signed-in owner — `email` and `name`.
 
@@ -231,6 +232,16 @@ The MCP authorization specification (2026-07-28) deprecates dynamic registration
 Dynamic registration (`/oauth/register`) keeps working alongside; set `OAUTH_CIMD_ENABLED=false` to accept registered clients only.
 
 Advanced: `SERVER_HOST` / `SERVER_PORT` override the bind address when it must differ from the issuer, for example listening on `127.0.0.1` behind a reverse proxy. See [Deploy](docs/deploy.md) for the full reverse-proxy and HTTPS procedure.
+
+### Revocation feed
+
+MCP servers verify tokens offline, so on its own a server keeps accepting a revoked token until it expires — 15 minutes for an access token, as long as its lifetime for a personal access token. A server that polls the revocation feed rejects it within one poll interval instead:
+
+1. **Register a client for the server.** Under **OAuth Clients** → *Register*: grant type `client_credentials` only, no redirect URIs, token endpoint authentication *Client secret* (POST body or HTTP Basic) or `private_key_jwt`, and *Resource server for* set to the server. For an existing client use its *Resource server…* action, or `PUT /api/oauth/clients/{client_id}/resource-server` with `{"service_id": "<server id>"}`.
+2. **Poll `POST /oauth/revoked`** with that client's credentials, optionally `since=<unix time>` for only the newer revocations. The answer is `{"revoked": [{"jti", "revoked_at", "exp"}, …], "now": …}`: revoked, unexpired access tokens, personal access tokens and refresh tokens of **that server only**. Unbound clients get `403`. The same binding lets the server call `/oauth/introspect` and report token usage, again only for its own tokens.
+3. **Check it in the console.** The server's page shows a *Revocation feed* row: wired (with the last poll time), stopped polling, never polled, or not wired.
+
+For your own FastMCP server, `MCPGateVerifier` in [`examples/mcp_gate_hooks.py`](examples/mcp_gate_hooks.py) does the polling. Folio and AnyDoc have it built in (`FOLIO_REVOCATION_*` / `ANYDOC_REVOCATION_*` in their `.env`).
 
 ## Use the console
 

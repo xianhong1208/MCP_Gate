@@ -32,6 +32,7 @@ MCP Gate 把標準化的身分驗證放在你每一台 MCP server 前面。[Fast
 
 - **標準化的授權伺服器。** 涵蓋 [MCP 規範(2025-06-18)](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization)的授權要求:RFC 8414 metadata、RFC 7591 動態註冊、[Client ID Metadata Documents](#client-id-metadata-documents)(MCP 2026-07-28 的註冊方式)、authorization code + PKCE(S256)、refresh token 輪替與重放偵測、RFC 7009 撤銷、RFC 7662 內省、RFC 8707 resource indicator、RFC 9207 `iss` 回應。
 - **非對稱簽章、離線驗證。** RS256 金鑰,公開 JWKS、可輪替。MCP server 用公鑰在本地驗 token;MCP Gate 不在請求路徑上。
+- **撤銷也能傳到離線驗證的 server。** 透過[撤銷清單](#撤銷清單),每個 MCP server 能在幾秒內得知自己的哪些 token 被撤銷(PAT 也包含在內),不必每個請求都問 MCP Gate。
 - **一段設定接上 FastMCP。** `RemoteAuthProvider` + `JWTVerifier(jwks_uri, issuer, audience)` 就完成保護。token 綁定每台 server 的 audience,給 A 的 token 永遠不能打 B。
 - **同意頁。** 動態註冊的 client 與以中繼資料網址識別的 client 第一次連線要請擁有者按「允許」;可依 client + server 記住。你自己登記的 client 免同意。
 - **Personal access token(PAT)。** 從管理台簽長效 bearer token 給腳本、CI 與不會走 OAuth 的 client,附上可直接貼的 `claude mcp add` 與 `mcpServers` 片段。
@@ -168,7 +169,7 @@ MCP Gate 扮演 MCP 規範中的 **authorization server**;你的 MCP server 是 
 | 授權 | 瀏覽器 → MCP Gate | `/oauth/authorize` 驗證請求、用 `resource` 參數綁定目標 server,顯示同意頁(記住過或受信任的 client 直接略過)。 |
 | Token | client → MCP Gate | `/oauth/token` 用授權碼——檢查 PKCE、redirect URI、resource——換出 RS256 access token 與 refresh token。 |
 | 驗證 | server | server 抓一次 JWKS,之後在本地驗簽章、issuer、audience、有效期與 scope。 |
-| 撤銷 | 管理台或 client | 撤銷 refresh token 會讓整條鏈失效,`POST /oauth/introspect` 立刻回 `active: false`。離線驗簽的 token 會撐到過期——access token 撐滿其有效期(預設 15 分鐘),personal access token 最長可達 `pat_max_days`——除非 server 輪詢撤銷清單(`POST /oauth/revoked`,見 `examples/mcp_gate_hooks.py` 的 `MCPGateVerifier`)或改用 FastMCP 的 `IntrospectionTokenVerifier`。 |
+| 撤銷 | 管理台或 client | 撤銷 refresh token 會讓整條鏈失效,`POST /oauth/introspect` 立刻回 `active: false`。離線驗簽的 token 會撐到過期——access token 撐滿其有效期(預設 15 分鐘),personal access token 最長可達 `pat_max_days`——除非 server 輪詢[撤銷清單](#撤銷清單)(`POST /oauth/revoked`)或改用 FastMCP 的 `IntrospectionTokenVerifier`。 |
 
 Access token 的 claim:`iss`、`sub`、`aud`、`scope`、`client_id`、`jti`、`iat`、`exp`、`token_use`,以及——簽給已登入擁有者的 token——`email` 與 `name`。
 
@@ -231,6 +232,16 @@ MCP 授權規範(2026-07-28)把動態註冊列為過時,改建議 [Client ID Met
 動態註冊(`/oauth/register`)仍可並用;設定 `OAUTH_CIMD_ENABLED=false` 則只接受已註冊的 client。
 
 進階:`SERVER_HOST` / `SERVER_PORT` 可覆寫 bind 位址,只在它必須和 issuer 不同時使用(例如反向代理後面只聽 `127.0.0.1`)。完整的反向代理與 HTTPS 步驟見[部署](docs/deploy.md)。
+
+### 撤銷清單
+
+MCP server 是離線驗證 token,單靠自己的話,被撤銷的 token 會一直有效到過期為止:access token 是 15 分鐘,PAT 則是它的整個效期。改為定期拉撤銷清單的 server,會在一個拉取間隔內拒絕它:
+
+1. **替 server 註冊一個 client。** 在 **OAuth Clients** → *Register*:grant type 只選 `client_credentials`、不填 redirect URI、token endpoint 驗證選 *Client secret*(POST body 或 HTTP Basic)或 `private_key_jwt`,*Resource server for* 選這個 server。既有的 client 用它的 *Resource server…* 動作,或呼叫 `PUT /api/oauth/clients/{client_id}/resource-server`,body 為 `{"service_id": "<server id>"}`。
+2. **定期呼叫 `POST /oauth/revoked`**,帶上這個 client 的憑證;可加 `since=<unix 時間>` 只取較新的撤銷。回應是 `{"revoked": [{"jti", "revoked_at", "exp"}, …], "now": …}`:**只限該 server** 已撤銷、尚未過期的 access token、PAT 與 refresh token。沒綁定的 client 會拿到 `403`。同一個綁定也讓 server 能呼叫 `/oauth/introspect` 和回報 token 用量,同樣只限它自己的 token。
+3. **在管理台確認。** server 頁面有一列 *Revocation feed*:已接上(附最後一次拉取時間)、已停止拉取、從未拉取,或未接上。
+
+自己的 FastMCP server 可以用 [`examples/mcp_gate_hooks.py`](examples/mcp_gate_hooks.py) 裡的 `MCPGateVerifier` 來拉。Folio 與 AnyDoc 已內建(在各自的 `.env` 設定 `FOLIO_REVOCATION_*` / `ANYDOC_REVOCATION_*`)。
 
 ## 使用管理台
 
