@@ -582,7 +582,7 @@ export default function OAuthClientsPage() {
                       </div>
                     </TD>
                     <TD>
-                      <Badge tone={c.created_via === 'dcr' ? 'warning' : isSystem ? 'neutral' : 'success'}>
+                      <Badge tone={c.created_via === 'dcr' || c.created_via === 'cimd' ? 'warning' : isSystem ? 'neutral' : 'success'}>
                         {t(`clients.via.${c.created_via}`, c.created_via)}
                       </Badge>
                     </TD>

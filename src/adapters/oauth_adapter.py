@@ -34,12 +34,27 @@ class OAuthKeyAdapter(OAuthSigningKeyCRUD):
 
 class OAuthClientAdapter(OAuthClientCRUD):
 
+    # Fields of a metadata-document client whose change voids every remembered consent: where the code goes, how
+    # the client authenticates and with which keys (draft-ietf-oauth-client-id-metadata-document §10.5)
+    METADATA_CONSENT_FIELDS = ("redirect_uris", "grant_types", "token_endpoint_auth_method", "jwks", "jwks_uri")
+
     @classmethod
     def get_existing(cls, db, client_id):
         client = cls.get(db, client_id)
         if not client:
             raise NotFoundError(code="oauth.client_not_found", fallback="OAuth client not found")
         return client
+
+    @classmethod
+    def store_metadata_client(cls, db, client_id, fields, *, is_approved):
+        """Create or refresh a client from its validated metadata document. When the document changed where codes
+        are sent, how the client authenticates or its keys, remembered consents are forgotten so the owner is
+        asked again. Returns (client, changed fields, consents forgotten)."""
+        client, changed = cls.upsert_metadata_client(db, client_id, fields, is_approved=is_approved)
+        forgotten = 0
+        if any(name in cls.METADATA_CONSENT_FIELDS for name in changed):
+            forgotten = OAuthConsentCRUD.delete_for_client(db, client_id)
+        return client, changed, forgotten
 
 
 class OAuthAuthRequestAdapter(OAuthAuthRequestCRUD):

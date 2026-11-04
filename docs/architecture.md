@@ -32,6 +32,10 @@ The rule `routes → adapters → db.crud` is enforced by `tests/test_architectu
 3. The console calls `GET /oauth/authorize/requests/{id}` to render the screen and `POST …/decision` to approve or deny. Approval writes an `OAuthAuthorizationCode` (hash only, 120-second TTL) and optionally an `OAuthConsent`.
 4. `POST /oauth/token` (`authorization_code`) verifies PKCE, redirect URI and resource, marks the code used, then issues an access token and a refresh token that share a `parent_jti` (the code hash) — their *family*.
 
+### Clients identified by a metadata document
+
+When `client_id` is an https URL (and `oauth.cimd.enabled`), `/oauth/authorize` and the token, revocation and introspection endpoints resolve it through `src/oauth/client_metadata.py`: the URL is checked, the JSON document at it fetched (public addresses only, connection pinned to the checked address, no redirects, 5 KB / 5 s) and validated (`client_id` equals the URL, `client_name` and `redirect_uris` present, `none` or `private_key_jwt`), and an `OAuthClient` row keyed by the URL (`created_via = cimd`) is created or refreshed, so the rest of the flow is the one above. A per-process table remembers until when the stored copy is fresh (`Cache-Control: max-age`, bounded) and which URLs failed recently. An authorization request aborts on any fetch failure; the token endpoint keeps using the stored row when the failure is transient (503 when there is none). A document whose `client_id` stops matching its URL revokes the client's tokens; a change of redirect URIs, grant types, authentication method or keys forgets remembered consents.
+
 ### Refresh
 
 `POST /oauth/token` (`refresh_token`) verifies the JWT, checks the `OAuthToken` record, revokes the presented token with reason `rotated`, and issues a new pair in the same family. Presenting an already-rotated token revokes the entire family (`refresh_replay`).

@@ -95,7 +95,7 @@ async def create_client(body: ClientCreateRequest, request: Request, db: Session
     return oauth.registration_response(client, secret)
 
 
-@router.get("/clients/{client_id}")
+@router.get("/clients/{client_id:path}")
 async def get_client(client_id: str, db: Session = Depends(get_db), _: AdminUser = Depends(get_current_user)):
     """One client with its count of active tokens."""
     try:
@@ -107,10 +107,11 @@ async def get_client(client_id: str, db: Session = Depends(get_db), _: AdminUser
     return data
 
 
-@router.post("/clients/{client_id}/approve")
+@router.post("/clients/{client_id:path}/approve")
 async def approve_client(client_id: str, request: Request, db: Session = Depends(get_db),
                          user: AdminUser = Depends(get_current_user)):
-    """Approve a dynamically registered client (only needed when OAUTH_DCR_AUTO_APPROVE=false)."""
+    """Approve a dynamically registered client, or one first seen through its metadata document (only needed when
+    OAUTH_DCR_AUTO_APPROVE / OAUTH_CIMD_AUTO_APPROVE is false)."""
     try:
         client = OAuthClientAdapter.get_existing(db, client_id)
     except AdapterError as e:
@@ -122,7 +123,7 @@ async def approve_client(client_id: str, request: Request, db: Session = Depends
     return client.to_dict()
 
 
-@router.post("/clients/{client_id}/revoke")
+@router.post("/clients/{client_id:path}/revoke")
 async def revoke_client(client_id: str, request: Request, db: Session = Depends(get_db),
                         user: AdminUser = Depends(get_current_user)):
     """Deactivate the client and revoke all of its tokens."""
@@ -140,7 +141,7 @@ async def revoke_client(client_id: str, request: Request, db: Session = Depends(
     return {**client.to_dict(), "tokens_revoked": revoked}
 
 
-@router.put("/clients/{client_id}/resource-server")
+@router.put("/clients/{client_id:path}/resource-server")
 async def bind_resource_server(client_id: str, body: ResourceServerBindingRequest, request: Request,
                                db: Session = Depends(get_db), user: AdminUser = Depends(get_current_user)):
     """Bind a console-registered confidential client to the MCP server it speaks for (or unbind with
@@ -167,7 +168,7 @@ async def bind_resource_server(client_id: str, body: ResourceServerBindingReques
     return client.to_dict()
 
 
-@router.delete("/clients/{client_id}")
+@router.delete("/clients/{client_id:path}")
 async def delete_client(client_id: str, request: Request, db: Session = Depends(get_db),
                         user: AdminUser = Depends(get_current_user)):
     """Delete a client. Its tokens are revoked first (as Revoke does), then kept as history with the client name

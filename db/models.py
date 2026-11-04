@@ -15,6 +15,10 @@ from sqlalchemy.orm import relationship
 
 from db.database import Base
 
+# OAuth client_id columns: generated ids are short ("mcpc_..."), but a client using a Client ID Metadata Document is
+# identified by the document's https URL
+CLIENT_ID_LENGTH = 255
+
 
 def local_now() -> datetime:
     """Current local time (naive)."""
@@ -245,11 +249,12 @@ class OAuthClient(Base):
 
     A public client (token_endpoint_auth_method=none) relies on PKCE; a confidential client has a secret
     (only its hash is stored). created_via = dcr (dynamic registration) / manual (created in the console) /
-    system (built-in).
+    system (built-in) / cimd (identified by the https URL of its Client ID Metadata Document, which is the
+    client_id; the row mirrors the last valid document and is refreshed from it).
     """
     __tablename__ = "oauth_clients"
 
-    client_id = Column(String(64), primary_key=True)
+    client_id = Column(String(CLIENT_ID_LENGTH), primary_key=True)
     client_secret_hash = Column(String(128), nullable=True)
     client_name = Column(String(128), nullable=False)
     client_uri = Column(String(512), nullable=True)
@@ -283,6 +288,9 @@ class OAuthClient(Base):
     # When this resource server last read the revocation feed (POST /oauth/revoked): tells the console whether a
     # revocation reaches the server before the token expires
     revocation_polled_at = Column(DateTime, nullable=True)
+    # created_via = cimd: when the client's metadata document was last fetched and stored (the client_id is the
+    # document's https URL; see src/oauth/client_metadata.py)
+    metadata_fetched_at = Column(DateTime, nullable=True)
 
     def redirect_uri_list(self) -> list:
         return _json_list(self.redirect_uris)
@@ -316,6 +324,7 @@ class OAuthClient(Base):
             "updated_at": format_datetime(self.updated_at),
             "last_used_at": format_datetime(self.last_used_at),
             "revocation_polled_at": format_datetime(self.revocation_polled_at),
+            "metadata_fetched_at": format_datetime(self.metadata_fetched_at),
         }
 
 
@@ -328,7 +337,7 @@ class OAuthAuthorizationRequest(Base):
     __tablename__ = "oauth_authorization_requests"
 
     id = Column(String(64), primary_key=True)
-    client_id = Column(String(64), ForeignKey("oauth_clients.client_id", ondelete="CASCADE"), nullable=False, index=True)
+    client_id = Column(String(CLIENT_ID_LENGTH), ForeignKey("oauth_clients.client_id", ondelete="CASCADE"), nullable=False, index=True)
     redirect_uri = Column(String(512), nullable=False)
     scope = Column(String(512), nullable=True)
     resource = Column(String(256), nullable=True)
@@ -347,7 +356,7 @@ class OAuthAuthorizationCode(Base):
     __tablename__ = "oauth_authorization_codes"
 
     code_hash = Column(String(64), primary_key=True)
-    client_id = Column(String(64), ForeignKey("oauth_clients.client_id", ondelete="CASCADE"), nullable=False, index=True)
+    client_id = Column(String(CLIENT_ID_LENGTH), ForeignKey("oauth_clients.client_id", ondelete="CASCADE"), nullable=False, index=True)
     user_id = Column(Uuid, ForeignKey("admin_users.id", ondelete="CASCADE"), nullable=False)
     redirect_uri = Column(String(512), nullable=False)
     scope = Column(String(512), nullable=True)
@@ -411,7 +420,7 @@ class OAuthToken(Base):
     jti = Column(String(64), primary_key=True)
     kind = Column(String(16), nullable=False, index=True)
     # Keep token history when a client is deleted (client_id becomes NULL, client_name_snapshot keeps the name)
-    client_id = Column(String(64), ForeignKey("oauth_clients.client_id", ondelete="SET NULL"), nullable=True, index=True)
+    client_id = Column(String(CLIENT_ID_LENGTH), ForeignKey("oauth_clients.client_id", ondelete="SET NULL"), nullable=True, index=True)
     client_name_snapshot = Column(String(128), nullable=True)
     user_id = Column(Uuid, ForeignKey("admin_users.id", ondelete="SET NULL"), nullable=True, index=True)
     sub = Column(String(128), nullable=False)
@@ -476,7 +485,7 @@ class OAuthConsent(Base):
     user_id = Column(Uuid, ForeignKey("admin_users.id", ondelete="CASCADE"), nullable=False, index=True)
     # Once the client is deleted there is nothing left to authorize, so consents go with it
     # (token history is kept separately in oauth_tokens)
-    client_id = Column(String(64), ForeignKey("oauth_clients.client_id", ondelete="CASCADE"), nullable=False, index=True)
+    client_id = Column(String(CLIENT_ID_LENGTH), ForeignKey("oauth_clients.client_id", ondelete="CASCADE"), nullable=False, index=True)
     audience = Column(String(256), nullable=True)
     scope = Column(String(512), nullable=True)
     granted_at = Column(DateTime, default=local_now, nullable=False)
@@ -505,7 +514,7 @@ class TokenUsage(Base):
     jti = Column(String(64), nullable=True, index=True)
     event = Column(String(16), nullable=False, default="issued", index=True)  # issued / introspect / revoked
     grant_type = Column(String(32), nullable=True)
-    client_id = Column(String(64), nullable=True, index=True)
+    client_id = Column(String(CLIENT_ID_LENGTH), nullable=True, index=True)
     sub = Column(String(128), nullable=True)
     audience = Column(String(256), nullable=True, index=True)
     service_id = Column(Uuid, ForeignKey("services.id", ondelete="SET NULL"), nullable=True, index=True)
@@ -527,9 +536,10 @@ class AuditLog(Base):
     id = Column(Uuid, primary_key=True, default=uuid.uuid4)
     action = Column(String(64), nullable=False, index=True)
     resource_type = Column(String(32), nullable=False, index=True)
-    resource_id = Column(String(128), nullable=True)
+    # wide enough for a client_id (OAuth clients are audited under their client_id)
+    resource_id = Column(String(CLIENT_ID_LENGTH), nullable=True)
     actor_type = Column(String(32), nullable=False)
-    actor_id = Column(String(128), nullable=True)
+    actor_id = Column(String(CLIENT_ID_LENGTH), nullable=True)
     actor_name = Column(String(128), nullable=True)
     ip_address = Column(String(45), nullable=True)
     user_agent = Column(String(256), nullable=True)

@@ -114,9 +114,12 @@ export default function ConsentPage() {
 
   const client = req.client || {}
   const scopes = req.scopes || []
-  const viaLabel = client.created_via === 'dcr'
-    ? t('consent.viaDcr')
-    : client.created_via === 'system' ? t('consent.viaSystem') : t('consent.viaManual')
+  const viaLabel = {
+    dcr: t('consent.viaDcr'),
+    cimd: t('consent.viaCimd'),
+    system: t('consent.viaSystem'),
+  }[client.created_via] || t('consent.viaManual')
+  const selfAsserted = client.created_via === 'dcr' || client.created_via === 'cimd'
 
   return (
     <AuthShell maxWidth="max-w-md">
@@ -133,7 +136,7 @@ export default function ConsentPage() {
           </h2>
           <p className="mt-1 text-sm text-muted-foreground">{t('consent.subtitle', { email: user?.email || '' })}</p>
           <div className="mt-2 flex flex-wrap items-center gap-2">
-            <Badge tone={client.created_via === 'dcr' ? 'warning' : 'success'}>{viaLabel}</Badge>
+            <Badge tone={selfAsserted ? 'warning' : 'success'}>{viaLabel}</Badge>
             {client.client_uri && (safeHttpUrl(client.client_uri) ? (
               <a
                 href={safeHttpUrl(client.client_uri)}
@@ -149,6 +152,15 @@ export default function ConsentPage() {
           </div>
         </div>
       </div>
+
+      {/* A client identified by its metadata document: everything above is what that URL serves, unverified.
+          The host is what actually identifies it (draft-ietf-oauth-client-id-metadata-document §10.6). */}
+      {client.metadata_document && (
+        <Alert tone="warning" className="mt-5" title={t('consent.cimdIdentity', { host: client.identity_host })}>
+          <p className="break-all font-mono text-xs text-foreground">{client.client_id}</p>
+          <p className="mt-1">{t('consent.cimdNotice', { host: client.identity_host })}</p>
+        </Alert>
+      )}
 
       {error && <Alert tone="danger" className="mt-5">{error}</Alert>}
 
