@@ -95,7 +95,82 @@ def _check_lengths(fields: dict) -> None:
         check_max_length("oauth_scopes", " ".join(fields["oauth_scopes"]), column_limit(Service.oauth_scopes))
 
 
+def _audience_of(host, port, protocol, mcp_path, oauth_audience) -> Optional[str]:
+    """The audience a service with these fields has, normalised the way lookups normalise it: its explicit
+    oauth_audience, else its MCP URL."""
+    probe = Service(host=normalize_service_host(host) if host else host, port=port, protocol=protocol or "http",
+                    mcp_path=mcp_path if mcp_path is not None else "/mcp",
+                    oauth_audience=normalize_audience(oauth_audience) or None)
+    return normalize_audience(probe.effective_audience) or None
+
+
 class ServiceAdapter(ServiceCRUD):
+
+    @classmethod
+    def _audience_holder(cls, db, audience: Optional[str], exclude_id=None) -> Optional[Service]:
+        """Another service (active or not) whose audience is `audience`, if any."""
+        if not audience:
+            return None
+        for other in cls.get_all(db, include_inactive=True):
+            if other.id != exclude_id and normalize_audience(other.effective_audience) == audience:
+                return other
+        return None
+
+    @classmethod
+    def _ensure_audience_free(cls, db, audience: Optional[str], exclude_id=None) -> None:
+        """Refuse an audience another service already has (#21).
+
+        The audience is what a token is for: the consent screen and token issuance resolve it to one service, and
+        the resource server accepts any token carrying it. Two services sharing one would mean the consent screen
+        names the first, and a token "for" the second is accepted by the first. Inactive services count too, so
+        reactivating one can never create a duplicate.
+        """
+        other = cls._audience_holder(db, audience, exclude_id)
+        if other is not None:
+            raise ConflictError(
+                code="service.audience_taken",
+                params={"audience": audience, "name": other.name, "service_id": str(other.id)},
+                fallback=(f"The audience {audience} already belongs to the service '{other.name}'. Each service "
+                          "needs its own: set a different OAuth audience (or MCP URL)."),
+            )
+
+    @classmethod
+    def create(cls, db, **kwargs):
+        """Every way a service is created (console, scan, Marketplace) goes through here."""
+        cls._ensure_audience_free(db, _audience_of(
+            kwargs.get("host"), kwargs.get("port"), kwargs.get("protocol"), kwargs.get("mcp_path"),
+            kwargs.get("oauth_audience")))
+        return super().create(db, **kwargs)
+
+    @classmethod
+    def update(cls, db, service_id, **kwargs):
+        """Checked only when the update changes the service's audience, so a duplicate that predates the check does
+        not block unrelated edits (renames, health, tags); it is reported by `audience_conflicts` instead."""
+        current = cls.get_by_id(db, service_id)
+        if current is not None:
+            def merged(field):
+                return kwargs[field] if kwargs.get(field) is not None else getattr(current, field)
+            audience = _audience_of(
+                merged("host"), merged("port"), merged("protocol"), merged("mcp_path"),
+                kwargs["oauth_audience"] if kwargs.get("oauth_audience") is not None else current.oauth_audience)
+            if audience != normalize_audience(current.effective_audience):
+                cls._ensure_audience_free(db, audience, exclude_id=current.id)
+        return super().update(db, service_id, **kwargs)
+
+    @classmethod
+    def audience_conflicts(cls, db) -> list[dict]:
+        """Groups of services that share one audience (registered before #21 refused it), for the dashboard and
+        the startup log. Nothing is changed: which service should keep the audience is the owner's call."""
+        groups: dict[str, list[Service]] = {}
+        for svc in cls.get_all(db, include_inactive=True):
+            audience = normalize_audience(svc.effective_audience)
+            if audience:
+                groups.setdefault(audience, []).append(svc)
+        return [
+            {"audience": audience,
+             "services": [{"id": str(s.id), "name": s.name, "is_active": bool(s.is_active)} for s in members]}
+            for audience, members in sorted(groups.items()) if len(members) > 1
+        ]
 
     @classmethod
     def delete(cls, db, service_id):

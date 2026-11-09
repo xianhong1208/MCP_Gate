@@ -258,10 +258,21 @@ def init_database(*, run_migrations: bool = True) -> dict:
         from src.oauth.signing_keys import ensure_active_signing_key
         key = ensure_active_signing_key(db)
         summary["signing_kid"] = key.kid
+        warn_shared_audiences(db)
         return summary
     finally:
         db.close()
 
+
+
+def warn_shared_audiences(db) -> None:
+    """Log services that share one audience (possible before #21 refused it); the dashboard shows them too. They
+    are left as they are: which service keeps the audience is the owner's call."""
+    from src.adapters import ServiceAdapter
+    for conflict in ServiceAdapter.audience_conflicts(db):
+        names = ", ".join(f"'{s['name']}'" for s in conflict["services"])
+        logger.warning(f"Services {names} share the OAuth audience {conflict['audience']}: the consent screen and "
+                       "tokens resolve it to only one of them. Give each its own audience (Services → edit).")
 
 
 def _print_banner(summary: dict, host: str, port: int) -> None:
