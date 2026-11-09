@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import clsx from 'clsx'
 import { useTranslation } from 'react-i18next'
 import {
-  Key, Activity, Plus, Server, BarChart3, Clock, Bot, Search, ShieldX, ShieldAlert, ArrowUpRight, Globe,
+  Key, Activity, Plus, Server, BarChart3, Clock, Bot, Search, ShieldX, ShieldAlert, ArrowUpRight, Globe, Fingerprint,
 } from 'lucide-react'
 import { XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Line, LineChart } from 'recharts'
 import { servicesApi, statsApi, systemApi, oauthApi } from '../services/api'
@@ -393,6 +393,28 @@ export default function DashboardPage() {
             ))}
           </ul>
           <p className="mt-1.5">{t('dashboard.weakSecrets.fix')}</p>
+        </Alert>
+      )}
+
+      {/* Services sharing one audience, registered before that was refused (#21) */}
+      {!isLoading && oauthOverview?.audience_conflicts?.length > 0 && (
+        <Alert tone="warning" icon={Fingerprint} title={t('dashboard.audienceConflicts.title', { n: oauthOverview.audience_conflicts.length })}>
+          <p>{t('dashboard.audienceConflicts.hint')}</p>
+          <ul className="mt-1.5 space-y-1">
+            {oauthOverview.audience_conflicts.map((c) => (
+              <li key={c.audience} className="min-w-0">
+                <code className="break-all font-mono text-xs text-foreground">{c.audience}</code>
+                <span className="ml-2 inline-flex flex-wrap gap-x-2 text-xs">
+                  {c.services.map((s) => (
+                    <Link key={s.id} to={`/services/${encodeURIComponent(s.id)}`} className="text-link transition-colors duration-200 hover:text-link-hover">
+                      {s.name}{!s.is_active && ` (${t('dashboard.audienceConflicts.inactive')})`}
+                    </Link>
+                  ))}
+                </span>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-1.5">{t('dashboard.audienceConflicts.fix')}</p>
         </Alert>
       )}
 

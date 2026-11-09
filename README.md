@@ -82,7 +82,7 @@ The order matters: **register the server first**. MCP Gate only issues tokens fo
 
 ### 1. Register the server in the console
 
-Open **Services → Register Service** and enter the server's host, port and path (the path is the MCP endpoint, `/mcp` by default). The server's *audience* — the URL a token is valid for — defaults to its MCP URL, for example `http://127.0.0.1:8000/mcp`.
+Open **Services → Register Service** and enter the server's host, port and path (the path is the MCP endpoint, `/mcp` by default). The server's *audience* — the URL a token is valid for — defaults to its MCP URL, for example `http://127.0.0.1:8000/mcp`. Each service needs its own audience: registering a second service with an audience (or MCP URL) another service already has is refused with `409 service.audience_taken`, since tokens for one would be accepted by the other.
 
 ### 2. Protect the FastMCP server
 
@@ -122,7 +122,7 @@ FastMCP serves `/.well-known/oauth-protected-resource` automatically, pointing c
 claude mcp add --transport http demo http://127.0.0.1:8000/mcp
 ```
 
-On first use the client registers itself with MCP Gate and opens the consent screen in your browser. The screen shows the client name, the target server, the requested scopes (`mcp:tools:read`, `mcp:tools:invoke`, `mcp:resources:read`, `mcp:prompts:read` by default) and a **Remember this decision** checkbox. Click **Allow**; the client receives a token and refreshes it by itself from then on.
+On first use the client registers itself with MCP Gate and opens the consent screen in your browser. The screen shows the client name, the target server, the requested scopes (`mcp:tools:read`, `mcp:tools:invoke`, `mcp:resources:read`, `mcp:prompts:read` by default) and a **Remember this decision** checkbox. Click **Allow**; the client receives a token and refreshes it by itself from then on. If you are not signed in to the console, the consent screen asks you to sign in first (password, GitHub / Google, or the first-run setup) and then comes back to the same request.
 
 ```python
 from fastmcp import Client

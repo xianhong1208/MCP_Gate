@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '../contexts/AuthContext'
 import { sessionApi } from '../services/api'
+import { navigateAfterLoginOnce } from '../utils/redirect'
 import { Eye, EyeOff } from 'lucide-react'
 import AuthShell from '../components/AuthShell'
 import { Button, IconButton, Input, Field, Alert, Spinner } from '../components/ui'
@@ -49,7 +50,8 @@ export default function SetupPage() {
     setIsLoading(true)
     try {
       await setup(email, password, username, setupToken.trim())
-      navigate('/', { replace: true })
+      // An MCP client may have started an authorization request before the owner existed: go back to its consent page
+      navigateAfterLoginOnce(navigate)()
     } catch (err) {
       if (err.code === 'auth.setup_already_done') {
         navigate('/login', { replace: true })

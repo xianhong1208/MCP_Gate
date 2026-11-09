@@ -456,6 +456,8 @@ async def overview(db: Session = Depends(get_db), _: AdminUser = Depends(get_cur
         "issuer_mismatches": observed_mismatches(),
         # SESSION_SECRET_KEY / ENCRYPTION_KEY values that are guessable (see src/utils/secret_policy.py)
         "weak_secrets": weak_secrets(),
+        # Services sharing one audience, registered before that was refused (#21)
+        "audience_conflicts": ServiceAdapter.audience_conflicts(db),
     }
 
 
