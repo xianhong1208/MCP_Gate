@@ -4,6 +4,9 @@ All notable changes to MCP Gate (formerly MCP Center) are documented here. The f
 
 ## [Unreleased]
 
+### Fixed
+- **Two services could share one OAuth audience** (#21). `POST /api/services` with an `oauth_audience` another service already had answered 201; the consent screen then resolved the resource to the first service, and a personal access token created for the second carried the first one's audience (and was accepted by it). Two services at the same host, port and MCP path without an explicit audience shared one the same way. A service whose effective audience (its `oauth_audience`, else its MCP URL; compared normalised, so case and trailing slashes do not matter) belongs to another service, active or not, is now refused with `409 service.audience_taken` (naming the other service) on create and update, from the console, a network scan or the Marketplace. Services that already share an audience are not changed: MCP Gate logs them at startup and the dashboard lists them with links (both languages), and they stay editable.
+
 ## [1.3.0] — 2026-11-09
 
 ### Added

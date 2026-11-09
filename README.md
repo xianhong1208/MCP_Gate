@@ -82,7 +82,7 @@ The order matters: **register the server first**. MCP Gate only issues tokens fo
 
 ### 1. Register the server in the console
 
-Open **Services → Register Service** and enter the server's host, port and path (the path is the MCP endpoint, `/mcp` by default). The server's *audience* — the URL a token is valid for — defaults to its MCP URL, for example `http://127.0.0.1:8000/mcp`.
+Open **Services → Register Service** and enter the server's host, port and path (the path is the MCP endpoint, `/mcp` by default). The server's *audience* — the URL a token is valid for — defaults to its MCP URL, for example `http://127.0.0.1:8000/mcp`. Each service needs its own audience: registering a second service with an audience (or MCP URL) another service already has is refused with `409 service.audience_taken`, since tokens for one would be accepted by the other.
 
 ### 2. Protect the FastMCP server
 

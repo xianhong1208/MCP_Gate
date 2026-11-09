@@ -215,6 +215,12 @@
       "hint": "Dynamically registered clients cannot obtain tokens until approved.",
       "review": "Review"
     },
+    "audienceConflicts": {
+      "title": "{{n}} OAuth audience(s) are shared by more than one service",
+      "hint": "An audience is what a token is for. The consent screen and new tokens resolve it to only one of these services, and each service accepts the others' tokens:",
+      "inactive": "inactive",
+      "fix": "Open each service and give it its own OAuth audience (the one its server checks), or delete the extra one. New duplicates are refused."
+    },
     "weakSecrets": {
       "title": "A server secret is weak",
       "reasonPlaceholder": "is a known placeholder value",
@@ -1089,6 +1095,7 @@
       "managed_use_uninstall": "\"{{name}}\" is run by the managed instance \"{{process_name}}\". Uninstall it from the Marketplace instead; that stops it and removes the service.",
       "not_found": "Service not found",
       "duplicate": "A service with the same name and host:port already exists.",
+      "audience_taken": "The audience {{audience}} already belongs to the service \"{{name}}\". Each service needs its own: set a different OAuth audience, or change the MCP URL.",
       "no_host_port": "Service has no host or port configured",
       "remote_permission_denied": "Permission denied by the remote MCP server.",
       "remote_unreachable": "Could not reach the MCP server.",

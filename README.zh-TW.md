@@ -82,7 +82,7 @@ uv run python main.py
 
 ### 1. 在管理台登記 server
 
-打開 **Services → Register Service**,輸入 server 的 host、port 與 path(path 是 MCP 端點,預設 `/mcp`)。server 的 *audience*——token 對誰有效——預設就是它的 MCP URL,例如 `http://127.0.0.1:8000/mcp`。
+打開 **Services → Register Service**,輸入 server 的 host、port 與 path(path 是 MCP 端點,預設 `/mcp`)。server 的 *audience*——token 對誰有效——預設就是它的 MCP URL,例如 `http://127.0.0.1:8000/mcp`。每個服務都需要自己的 audience:若另一個服務已使用相同的 audience(或 MCP URL),登記會以 `409 service.audience_taken` 拒絕,因為兩者會互相接受對方的 token。
 
 ### 2. 保護 FastMCP server
 
