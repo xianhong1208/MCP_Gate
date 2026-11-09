@@ -8,7 +8,7 @@ import bcrypt
 import pytest
 from sqlalchemy import create_engine, text
 
-from tests.conftest import OWNER_EMAIL, OWNER_PASSWORD
+from tests.conftest import OWNER_EMAIL, OWNER_PASSWORD, SETUP_TOKEN
 
 
 # ---------------------------------------------------------------------------
@@ -41,7 +41,7 @@ def bcrypt_calls(monkeypatch):
 
 
 def test_setup_login_and_password_change_hash_off_the_event_loop(client, bcrypt_calls):
-    r = client.post("/api/session/setup", json={"email": OWNER_EMAIL, "password": OWNER_PASSWORD, "username": "owner"})
+    r = client.post("/api/session/setup", json={"setup_token": SETUP_TOKEN, "email": OWNER_EMAIL, "password": OWNER_PASSWORD, "username": "owner"})
     assert r.status_code == 200, r.text
     r = client.post("/api/session/login", json={"email": OWNER_EMAIL, "password": "wrong-password"})
     assert r.status_code == 401

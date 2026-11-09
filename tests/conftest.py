@@ -24,6 +24,9 @@ sys.path.insert(0, str(project_root))
 os.environ.setdefault("ENCRYPTION_KEY", "test-encryption-key-not-for-production")
 os.environ.setdefault("SESSION_SECRET_KEY", "test-session-secret-key-not-for-production")
 os.environ["MCP_GATE_SECRETS_FILE"] = os.path.join(tempfile.gettempdir(), "mcp-gate-test-secrets.json")
+# First-run setup needs the one-time token (src/identity/setup_token.py); tests pin it
+SETUP_TOKEN = "test-setup-token-not-for-production"
+os.environ["MCP_GATE_SETUP_TOKEN"] = SETUP_TOKEN
 
 # Empty means SQLite (the default); otherwise a PostgreSQL URL the suite may wipe at will
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL", "").strip()
@@ -191,7 +194,7 @@ def client(app):
 @pytest.fixture
 def owner_client(client):
     """Client that has completed /setup and logged in (cookies are kept automatically)."""
-    r = client.post("/api/session/setup", json={"email": OWNER_EMAIL, "password": OWNER_PASSWORD, "username": "owner"})
+    r = client.post("/api/session/setup", json={"setup_token": SETUP_TOKEN, "email": OWNER_EMAIL, "password": OWNER_PASSWORD, "username": "owner"})
     assert r.status_code == 200, r.text
     return client
 

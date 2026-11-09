@@ -65,5 +65,19 @@ def get_secret(name: str, *, env_var: Optional[str] = None, length: int = 32) ->
     return generated
 
 
+def discard_secret(name: str) -> None:
+    """Forget a generated secret: drop it from the cache and from data/secrets.json (an env value is untouched)."""
+    _cache.pop(name, None)
+    data = _load_file()
+    if name in data:
+        del data[name]
+        _save_file(data)
+
+
+def store_location() -> Path:
+    """Where generated secrets are kept (data/secrets.json unless MCP_GATE_SECRETS_FILE says otherwise)."""
+    return _store_path()
+
+
 def reset_cache() -> None:
     _cache.clear()

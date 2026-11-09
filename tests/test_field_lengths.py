@@ -5,6 +5,7 @@ on SQLite and answered 500 on PostgreSQL (run the suite with TEST_DATABASE_URL t
 on both, so they also pin the behaviour on the default SQLite run.
 """
 
+from tests.conftest import SETUP_TOKEN
 from unittest.mock import AsyncMock
 from urllib.parse import parse_qs, urlparse
 
@@ -78,9 +79,9 @@ def test_long_static_token_is_stored_and_decrypts(owner_client, db_session):
 # console account
 # ---------------------------------------------------------------------------
 def test_setup_rejects_long_email_and_username(client):
-    _too_long(client.post("/api/session/setup", json={"email": "a" * 120 + "@example.com",
+    _too_long(client.post("/api/session/setup", json={"setup_token": SETUP_TOKEN, "email": "a" * 120 + "@example.com",
                                                        "password": "owner-password-123"}), "email", 128)
-    _too_long(client.post("/api/session/setup", json={"email": "owner@example.com", "password": "owner-password-123",
+    _too_long(client.post("/api/session/setup", json={"setup_token": SETUP_TOKEN, "email": "owner@example.com", "password": "owner-password-123",
                                                        "username": "u" * 65}), "username", 64)
 
 

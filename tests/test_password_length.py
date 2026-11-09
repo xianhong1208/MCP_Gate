@@ -8,7 +8,7 @@ import pytest
 from src.identity.passwords import (
     MAX_PASSWORD_BYTES, check_password_length, hash_password, validate_password_strength, verify_password,
 )
-from tests.conftest import OWNER_EMAIL, OWNER_PASSWORD
+from tests.conftest import OWNER_EMAIL, OWNER_PASSWORD, SETUP_TOKEN
 
 TOO_LONG = "auth.validation_password_too_long"
 
@@ -42,7 +42,7 @@ def test_short_password_is_still_reported_first():
 
 @pytest.mark.parametrize("password, status", [(ASCII_73, 400), (CJK_25, 400), (ASCII_72, 200), (CJK_24, 200)])
 def test_setup(client, password, status):
-    r = client.post("/api/session/setup", json={"email": OWNER_EMAIL, "password": password})
+    r = client.post("/api/session/setup", json={"setup_token": SETUP_TOKEN, "email": OWNER_EMAIL, "password": password})
     assert r.status_code == status, r.text
     if status == 400:
         assert r.json()["error"] == TOO_LONG

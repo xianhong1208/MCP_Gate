@@ -104,10 +104,10 @@ export function AuthProvider({ children }) {
   }, [])
 
   /** First-run: create the owner account and log in on success */
-  const setup = useCallback(async (email, password, username) => {
+  const setup = useCallback(async (email, password, username, setupToken) => {
     setError(null)
     try {
-      const result = await sessionApi.setup(email, password, username)
+      const result = await sessionApi.setup(email, password, username, setupToken)
       applyIdleTimeout(result.idle_timeout_minutes)
       lastActivityRef.current = Date.now()
       setUser(result.user)

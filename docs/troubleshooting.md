@@ -24,6 +24,9 @@ The server's `JWTVerifier` settings do not match MCP Gate: `issuer` must equal `
 
 ## Console
 
+**`/setup` says the setup token is missing or wrong (`403 setup_token_invalid`)**
+The token is printed in the server log at startup (`Setup token: …`) and kept in `data/secrets.json` (or `MCP_GATE_SECRETS_FILE`) as `SETUP_TOKEN`; `MCP_GATE_SETUP_TOKEN` overrides it. Copy it from either. Setting `ADMIN_EMAIL`/`ADMIN_PASSWORD` creates the owner at startup instead.
+
 **`/setup` returns `409 setup_already_done`**
 An owner account exists. Sign in at `/login`. If you lost the password, set `ADMIN_EMAIL`/`ADMIN_PASSWORD` in `.env` and start with a fresh database, or reset the password directly:
 
