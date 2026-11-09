@@ -4,6 +4,9 @@ All notable changes to MCP Gate (formerly MCP Center) are documented here. The f
 
 ## [Unreleased]
 
+### Fixed
+- **Signing in from the consent screen lost the authorization request** (#20). Signed out, an MCP client's `/oauth/authorize` sends the browser to the consent page, which asks for sign-in first; after signing in with a password the console landed on the dashboard instead of the consent page (every time), so the client never received its code unless the owner was already signed in. The login page navigated twice — once when the session appeared, taking the remembered page, and once from the form handler, which found nothing left and went to `/`. It now leaves exactly once, to the remembered page. First-run setup returns there too (an authorization request that arrives before the owner exists is no longer dropped), and after GitHub / Google sign-in, which lands on the consent page straight from the server, the remembered page is forgotten so a later sign-in is not sent back to an expired request.
+
 ## [1.3.0] — 2026-11-09
 
 ### Added

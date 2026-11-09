@@ -122,7 +122,7 @@ FastMCP 會自動提供 `/.well-known/oauth-protected-resource`,把 client 指�
 claude mcp add --transport http demo http://127.0.0.1:8000/mcp
 ```
 
-第一次使用時 client 會自己向 MCP Gate 註冊,並在瀏覽器開啟同意頁。頁面顯示 client 名稱、目標 server、要求的 scope(預設 `mcp:tools:read`、`mcp:tools:invoke`、`mcp:resources:read`、`mcp:prompts:read`)與「記住這個決定」核取方塊。按 **Allow**,client 就拿到 token,之後自己 refresh。
+第一次使用時 client 會自己向 MCP Gate 註冊,並在瀏覽器開啟同意頁。頁面顯示 client 名稱、目標 server、要求的 scope(預設 `mcp:tools:read`、`mcp:tools:invoke`、`mcp:resources:read`、`mcp:prompts:read`)與「記住這個決定」核取方塊。按 **Allow**,client 就拿到 token,之後自己 refresh。若尚未登入管理台,同意頁會先要求登入(密碼、GitHub / Google 或首次設定),登入後回到同一個授權請求。
 
 ```python
 from fastmcp import Client

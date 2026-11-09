@@ -159,3 +159,31 @@ def test_external_login_hands_the_binding_over_in_the_fragment(client, monkeypat
     client.cookies.clear()
     assert _raw(client, "GET", "/api/session/me", cookie=cookie).status_code == 401
     assert _raw(client, "GET", "/api/session/me", cookie=cookie, binding=binding).status_code == 200
+
+
+def test_external_login_returns_to_the_consent_page_it_started_from(client, monkeypatch):
+    """Signed out, an authorization request goes /consent?rid=... -> /login; "Continue with GitHub" passes that page
+    as `next`, and the callback must land back on it with its query intact so the request can be approved (#20)."""
+    from src.config import Config
+    from src.identity.providers.base import ExternalIdentity
+    from src.identity.providers.github import GitHubLoginProvider
+
+    client.post("/api/session/setup", json={"setup_token": SETUP_TOKEN, "email": OWNER_EMAIL, "password": OWNER_PASSWORD})
+    client.cookies.clear()
+    client.headers.pop(SESSION_BINDING_HEADER, None)
+    cfg = Config.get_config_model()
+    monkeypatch.setattr(cfg.identity.github, "client_id", "gh-id")
+    monkeypatch.setattr(cfg.identity.github, "client_secret", "gh-secret")
+
+    async def fake_exchange(self, *, code, redirect_uri):
+        return ExternalIdentity(provider="github", sub="42", email=OWNER_EMAIL, name="o", email_verified=True)
+
+    monkeypatch.setattr(GitHubLoginProvider, "exchange", fake_exchange)
+    start = client.get("/api/session/oauth/github/start", params={"next": "/consent?rid=req-123"},
+                       follow_redirects=False)
+    state = parse_qs(urlparse(start.headers["location"]).query)["state"][0]
+    cb = client.get("/api/session/oauth/github/callback", params={"code": "c", "state": state},
+                    follow_redirects=False)
+    location = urlparse(cb.headers["location"])
+    assert (location.netloc, location.path, location.query) == ("", "/consent", "rid=req-123")
+    assert parse_qs(location.fragment)["mcp_sb"]

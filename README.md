@@ -122,7 +122,7 @@ FastMCP serves `/.well-known/oauth-protected-resource` automatically, pointing c
 claude mcp add --transport http demo http://127.0.0.1:8000/mcp
 ```
 
-On first use the client registers itself with MCP Gate and opens the consent screen in your browser. The screen shows the client name, the target server, the requested scopes (`mcp:tools:read`, `mcp:tools:invoke`, `mcp:resources:read`, `mcp:prompts:read` by default) and a **Remember this decision** checkbox. Click **Allow**; the client receives a token and refreshes it by itself from then on.
+On first use the client registers itself with MCP Gate and opens the consent screen in your browser. The screen shows the client name, the target server, the requested scopes (`mcp:tools:read`, `mcp:tools:invoke`, `mcp:resources:read`, `mcp:prompts:read` by default) and a **Remember this decision** checkbox. Click **Allow**; the client receives a token and refreshes it by itself from then on. If you are not signed in to the console, the consent screen asks you to sign in first (password, GitHub / Google, or the first-run setup) and then comes back to the same request.
 
 ```python
 from fastmcp import Client
