@@ -4,6 +4,14 @@ All notable changes to MCP Gate (formerly MCP Center) are documented here. The f
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-11-09
+
+### Added
+- **Dependency audit in CI.** A new *Dependency audit* job runs `pip-audit` on the locked runtime dependencies and `npm audit` (production dependencies, high severity and above) on the console, so a dependency with a published vulnerability fails the build (#10).
+
+### Security
+- **First-run setup needs a one-time setup token** (#12). Until an owner exists, `POST /api/session/setup` created one for whoever called it first, with no credential, and MCP Gate listens on every interface by default — on a fresh install without `ADMIN_EMAIL` / `ADMIN_PASSWORD`, anyone on the network could become owner before the operator opened `/setup`. While no owner exists, MCP Gate now generates a token, prints it in the startup log and keeps it in `data/secrets.json` as `SETUP_TOKEN` (`MCP_GATE_SETUP_TOKEN` sets it instead); `/setup` asks for it (both languages), a missing or wrong token gets `403 auth.setup_token_invalid` and creates nothing, and the token is discarded once the owner exists. `ADMIN_EMAIL` / `ADMIN_PASSWORD` are unaffected.
+
 ## [1.2.0] — 2026-11-04
 
 ### Added

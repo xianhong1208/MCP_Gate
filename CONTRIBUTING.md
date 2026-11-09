@@ -34,7 +34,7 @@ cd frontend && npm test       # node-based unit tests, including i18n key parity
 cd frontend && npm run build  # must succeed with 0 errors
 ```
 
-SQLite ignores the length of `VARCHAR(n)` columns and PostgreSQL enforces it, so run the PostgreSQL variant when you add a field that stores user input or remote text. CI (`.github/workflows/ci.yml`) runs both, plus ruff, the frontend checks, a check that the committed `static/web` matches a fresh build, and a build and smoke test of the `mcp-runtime` image.
+SQLite ignores the length of `VARCHAR(n)` columns and PostgreSQL enforces it, so run the PostgreSQL variant when you add a field that stores user input or remote text. CI (`.github/workflows/ci.yml`) runs both, plus ruff, the frontend checks, a check that the committed `static/web` matches a fresh build, a build and smoke test of the `mcp-runtime` image, and a dependency audit (`pip-audit` on the locked runtime dependencies, `npm audit` on the console's production dependencies). All five jobs are required checks on `dev` and `main`.
 
 `tests/test_fastmcp_interop.py` starts a real MCP Gate and a real FastMCP server on free ports and drives FastMCP's own OAuth client through registration, consent and token exchange. It is the acceptance test for anything that touches `src/oauth/`.
 

@@ -13,6 +13,7 @@ from src.config import Config
 from src.identity.passwords import (
     hash_password, password_error_message, validate_password_strength, verify_password,
 )
+from src.identity import setup_token as setup_token_store
 from src.identity.providers.base import ExternalIdentity
 from src.utils.field_limits import FieldTooLongError, check_max_length, clip, column_limit
 
@@ -37,11 +38,20 @@ def needs_setup(db: Session) -> bool:
     return AdminUserAdapter.get_count(db, include_inactive=True) == 0
 
 
-def setup_owner(db: Session, *, email: str, password: str, username: str = "owner") -> AdminUser:
+def setup_owner(db: Session, *, email: str, password: str, username: str = "owner",
+                setup_token: Optional[str] = None) -> AdminUser:
     """Create the owner. Atomic: the early needs_setup() check only spares the bcrypt work; the account takes the
-    unique owner slot, so of several concurrent calls exactly one succeeds and the others get 409."""
+    unique owner slot, so of several concurrent calls exactly one succeeds and the others get 409.
+
+    Requires the one-time setup token (src/identity/setup_token.py), which is discarded once the owner exists."""
     if not needs_setup(db):
         raise IdentityError("auth.setup_already_done", "Setup already completed", 409)
+    if not setup_token_store.matches(setup_token):
+        raise IdentityError(
+            "auth.setup_token_invalid",
+            # No path here: the caller is not signed in, and the log already names the file
+            "The setup token is missing or wrong. It is printed in the server log at startup and kept in the "
+            f"secrets file (data/secrets.json by default) as {setup_token_store.NAME}.", 403)
     email = _normalize_email(email)
     username = (username or "").strip()
     _check_length("username", username, AdminUser.username)
@@ -50,13 +60,15 @@ def setup_owner(db: Session, *, email: str, password: str, username: str = "owne
         raise IdentityError(err, password_error_message(err))
     password_hash = hash_password(password)
     try:
-        return AdminUserAdapter.create(
+        owner = AdminUserAdapter.create(
             db, email=email, username=username or _default_username(email),
             password_hash=password_hash, auth_provider="local", owner=True,
         )
     except AdapterError as e:
         raise IdentityError("auth.setup_already_done" if e.code == "auth.setup_already_done" else e.code,
                             e.fallback, 409)
+    setup_token_store.discard()
+    return owner
 
 
 def authenticate_local(db: Session, *, email: str, password: str) -> AdminUser:

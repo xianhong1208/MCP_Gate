@@ -1,11 +1,11 @@
 """Admin-console login / first-time setup / service registration API."""
 
-from tests.conftest import OWNER_EMAIL, OWNER_PASSWORD
+from tests.conftest import OWNER_EMAIL, OWNER_PASSWORD, SETUP_TOKEN
 
 
 def test_setup_then_login_flow(client):
     assert client.get("/api/session/status").json()["needs_setup"] is True
-    r = client.post("/api/session/setup", json={"email": OWNER_EMAIL, "password": OWNER_PASSWORD})
+    r = client.post("/api/session/setup", json={"setup_token": SETUP_TOKEN, "email": OWNER_EMAIL, "password": OWNER_PASSWORD})
     assert r.status_code == 200 and r.json()["user"]["email"] == OWNER_EMAIL
     assert "mcp_session" in r.cookies
     assert client.get("/api/session/status").json()["needs_setup"] is False
@@ -26,8 +26,8 @@ def test_setup_then_login_flow(client):
 
 
 def test_setup_rejects_weak_password_and_bad_email(client):
-    assert client.post("/api/session/setup", json={"email": "not-an-email", "password": OWNER_PASSWORD}).status_code == 400
-    assert client.post("/api/session/setup", json={"email": OWNER_EMAIL, "password": "short"}).status_code == 400
+    assert client.post("/api/session/setup", json={"setup_token": SETUP_TOKEN, "email": "not-an-email", "password": OWNER_PASSWORD}).status_code == 400
+    assert client.post("/api/session/setup", json={"setup_token": SETUP_TOKEN, "email": OWNER_EMAIL, "password": "short"}).status_code == 400
 
 
 def test_change_password_invalidates_old_session(owner_client):

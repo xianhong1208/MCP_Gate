@@ -68,6 +68,8 @@
     "setup": {
       "title": "Welcome — create your account",
       "subtitle": "This is a fresh install. The first account becomes the owner of this MCP Gate.",
+      "token": "Setup token",
+      "tokenHint": "Printed in the server log when MCP Gate starts, and kept in data/secrets.json as SETUP_TOKEN. It proves you run this server.",
       "email": "Email",
       "username": "Display name",
       "usernamePlaceholder": "Optional — defaults to your email",
@@ -1054,6 +1056,7 @@
       "external_email_unverified": "Your email address is not verified with this provider, so it cannot be used to sign in to an existing account. Verify it with the provider, or sign in with your password.",
       "provider_not_enabled": "This sign-in provider is not enabled.",
       "setup_already_done": "Setup has already been completed. Please sign in.",
+      "setup_token_invalid": "The setup token is missing or wrong. Copy it from the server log or from SETUP_TOKEN in data/secrets.json.",
       "invalid_current_password": "Current password is incorrect",
       "validation_email_invalid": "A valid email address is required",
       "validation_username_required": "Display name is required",

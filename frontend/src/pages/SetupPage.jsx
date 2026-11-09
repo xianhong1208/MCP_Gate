@@ -14,6 +14,7 @@ export default function SetupPage() {
   const navigate = useNavigate()
 
   const [checking, setChecking] = useState(true)
+  const [setupToken, setSetupToken] = useState('')
   const [email, setEmail] = useState('')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
@@ -47,7 +48,7 @@ export default function SetupPage() {
     }
     setIsLoading(true)
     try {
-      await setup(email, password, username)
+      await setup(email, password, username, setupToken.trim())
       navigate('/', { replace: true })
     } catch (err) {
       if (err.code === 'auth.setup_already_done') {
@@ -80,6 +81,20 @@ export default function SetupPage() {
       <form onSubmit={handleSubmit} className="space-y-4">
         {error && <Alert tone="danger">{error}</Alert>}
 
+        <Field label={t('auth.setup.token')} htmlFor="setup-token" help={t('auth.setup.tokenHint')}>
+          <Input
+            id="setup-token"
+            type="text"
+            value={setupToken}
+            onChange={(e) => setSetupToken(e.target.value)}
+            autoComplete="off"
+            spellCheck={false}
+            className="font-mono"
+            required
+            autoFocus
+          />
+        </Field>
+
         <Field label={t('auth.setup.email')} htmlFor="setup-email">
           <Input
             id="setup-email"
@@ -88,7 +103,6 @@ export default function SetupPage() {
             onChange={(e) => setEmail(e.target.value)}
             autoComplete="email"
             required
-            autoFocus
           />
         </Field>
 

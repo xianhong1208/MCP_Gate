@@ -15,6 +15,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  # Use the interpreter setup-python provides; never download one (see the setup-python steps).
+  UV_PYTHON_DOWNLOADS: never
   UV_VERSION: "0.9.24"
   # uv run must not re-resolve: the lockfile is the source of truth
   UV_FROZEN: "1"
@@ -33,7 +35,11 @@ jobs:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
           cache-dependency-glob: uv.lock
-      # Python comes from .python-version; uv installs it if the runner lacks it
+      # Python from the runner's tool cache: uv's own CPython download from GitHub releases
+      # fails with 504 on hosted runners often enough to turn CI red on its own.
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
       - name: Install dependencies
         run: uv sync --frozen
       - name: Ruff
@@ -72,6 +78,11 @@ jobs:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
           cache-dependency-glob: uv.lock
+      # Python from the runner's tool cache: uv's own CPython download from GitHub releases
+      # fails with 504 on hosted runners often enough to turn CI red on its own.
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
       - name: Install dependencies
         run: uv sync --frozen
       - name: Schema drift (Alembic migrations vs. models)
@@ -110,6 +121,34 @@ jobs:
             git diff --stat -- static/web
             exit 1
           fi
+
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ env.UV_VERSION }}
+      # Python from the runner's tool cache: uv's own CPython download from GitHub releases
+      # fails with 504 on hosted runners often enough to turn CI red on its own.
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+      - name: Python (pip-audit on the locked runtime dependencies)
+        run: |
+          # UV_FROZEN (set above) already exports exactly the lockfile; --locked conflicts with it.
+          uv export --no-dev --no-hashes --no-emit-project --format requirements-txt > requirements-audit.txt
+          uvx pip-audit -r requirements-audit.txt --no-deps --disable-pip --strict
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: frontend/.nvmrc
+      - name: npm (production dependencies, high and above)
+        working-directory: frontend
+        run: npm audit --omit=dev --audit-level=high
 
   docker-runtime:
     name: mcp-runtime image (build + smoke test as the runtime user)

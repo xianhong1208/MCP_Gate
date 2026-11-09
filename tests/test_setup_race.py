@@ -5,6 +5,7 @@ hunt fired 4 concurrent ``POST /api/session/setup`` with different emails: all r
 accounts, the extra ones invisible in the console. The guarantee now lives in the database (a unique
 ``owner_slot``), so it holds on SQLite and PostgreSQL alike and for any number of processes.
 """
+from tests.conftest import SETUP_TOKEN
 import threading
 
 import pytest
@@ -34,7 +35,8 @@ def test_concurrent_setup_creates_one_owner(seeded, monkeypatch):
     def racer(i):
         db = make_session()
         try:
-            identity_service.setup_owner(db, email=f"user{i}@example.com", password=f"password-{i}-long")
+            identity_service.setup_owner(db, email=f"user{i}@example.com", password=f"password-{i}-long",
+                                          setup_token=SETUP_TOKEN)
             results.append("ok")
         except IdentityError as e:
             results.append((e.code, e.status_code))

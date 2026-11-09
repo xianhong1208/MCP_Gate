@@ -14,12 +14,13 @@ from src.identity.providers.base import ExternalIdentity
 from src.identity.providers.github import GitHubLoginProvider
 from src.identity.providers.google import GoogleLoginProvider
 from src.identity.service import IdentityError
-from tests.conftest import OWNER_EMAIL, OWNER_PASSWORD
+from tests.conftest import OWNER_EMAIL, OWNER_PASSWORD, SETUP_TOKEN
 
 
 @pytest.fixture
 def owner(seeded, db_session):
-    return identity_service.setup_owner(db_session, email=OWNER_EMAIL, password=OWNER_PASSWORD)
+    return identity_service.setup_owner(db_session, email=OWNER_EMAIL, password=OWNER_PASSWORD,
+                                        setup_token=SETUP_TOKEN)
 
 
 def test_unverified_email_does_not_link_to_the_owner(owner, db_session):
