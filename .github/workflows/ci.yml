@@ -124,7 +124,8 @@ jobs:
           version: ${{ env.UV_VERSION }}
       - name: Python (pip-audit on the locked runtime dependencies)
         run: |
-          uv export --locked --no-dev --no-hashes --no-emit-project --format requirements-txt > requirements-audit.txt
+          # UV_FROZEN (set above) already exports exactly the lockfile; --locked conflicts with it.
+          uv export --no-dev --no-hashes --no-emit-project --format requirements-txt > requirements-audit.txt
           uvx pip-audit -r requirements-audit.txt --no-deps --disable-pip --strict
       - uses: actions/setup-node@v7
         with:
