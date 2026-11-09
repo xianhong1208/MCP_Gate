@@ -111,6 +111,29 @@ jobs:
             exit 1
           fi
 
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ env.UV_VERSION }}
+      - name: Python (pip-audit on the locked runtime dependencies)
+        run: |
+          # UV_FROZEN (set above) already exports exactly the lockfile; --locked conflicts with it.
+          uv export --no-dev --no-hashes --no-emit-project --format requirements-txt > requirements-audit.txt
+          uvx pip-audit -r requirements-audit.txt --no-deps --disable-pip --strict
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: frontend/.nvmrc
+      - name: npm (production dependencies, high and above)
+        working-directory: frontend
+        run: npm audit --omit=dev --audit-level=high
+
   docker-runtime:
     name: mcp-runtime image (build + smoke test as the runtime user)
     runs-on: ubuntu-latest
