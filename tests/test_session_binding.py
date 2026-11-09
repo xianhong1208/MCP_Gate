@@ -17,7 +17,7 @@ import pytest
 from starlette.websockets import WebSocketDisconnect
 
 from src.identity.session import SESSION_BINDING_HEADER, WS_PROTOCOL
-from tests.conftest import OWNER_EMAIL, OWNER_PASSWORD
+from tests.conftest import OWNER_EMAIL, OWNER_PASSWORD, SETUP_TOKEN
 
 
 def _as_loopback_listener(owner_client):
@@ -65,7 +65,7 @@ def test_bearer_session_jwt_needs_the_binding_too(owner_client):
 
 
 def test_binding_comes_in_the_body_never_in_a_cookie(client):
-    r = client.post("/api/session/setup", json={"email": OWNER_EMAIL, "password": OWNER_PASSWORD})
+    r = client.post("/api/session/setup", json={"setup_token": SETUP_TOKEN, "email": OWNER_EMAIL, "password": OWNER_PASSWORD})
     binding = r.json()["session_binding"]
     assert len(binding) >= 32
     assert binding not in " ".join(r.headers.get_list("set-cookie"))
@@ -136,7 +136,7 @@ def test_external_login_hands_the_binding_over_in_the_fragment(client, monkeypat
     from src.identity.providers.base import ExternalIdentity
     from src.identity.providers.github import GitHubLoginProvider
 
-    client.post("/api/session/setup", json={"email": OWNER_EMAIL, "password": OWNER_PASSWORD})
+    client.post("/api/session/setup", json={"setup_token": SETUP_TOKEN, "email": OWNER_EMAIL, "password": OWNER_PASSWORD})
     client.cookies.clear()
     client.headers.pop(SESSION_BINDING_HEADER, None)
     cfg = Config.get_config_model()

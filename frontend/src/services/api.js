@@ -102,10 +102,10 @@ export const sessionApi = {
   },
 
   /** First run: create the owner account and log in directly */
-  async setup(email, password, username) {
+  async setup(email, password, username, setupToken) {
     return request('/api/session/setup', {
       method: 'POST',
-      body: JSON.stringify({ email, password, username: username || null }),
+      body: JSON.stringify({ email, password, username: username || null, setup_token: setupToken }),
     })
   },
 

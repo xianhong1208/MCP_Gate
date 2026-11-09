@@ -37,6 +37,8 @@ class SetupRequest(BaseModel):
     email: str
     password: str
     username: Optional[str] = None
+    # The one-time token from the startup log / data/secrets.json (src/identity/setup_token.py)
+    setup_token: Optional[str] = None
 
 
 class ChangePasswordRequest(BaseModel):
@@ -80,7 +82,8 @@ async def setup(request: SetupRequest, http_request: Request, db: Session = Depe
     try:
         # bcrypt (rounds=12) takes ~0.25 s of CPU: keep it off the event loop
         user = await run_in_threadpool(identity_service.setup_owner, db, email=request.email,
-                                       password=request.password, username=request.username or "")
+                                       password=request.password, username=request.username or "",
+                                       setup_token=request.setup_token)
     except IdentityError as e:
         return _identity_error(e)
     AuditService.log_from_request(

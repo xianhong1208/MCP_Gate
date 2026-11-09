@@ -69,9 +69,10 @@ The startup banner tells you where everything is:
   Metadata:   http://localhost:4568/.well-known/oauth-authorization-server
   JWKS:       http://localhost:4568/.well-known/jwks.json
   No admin account yet → open http://localhost:4568/setup to create the owner
+  Setup token: 7Qw…  (also in data/secrets.json as SETUP_TOKEN; it stops working once the owner exists)
 ```
 
-Open <http://localhost:4568/setup>, create the owner account, and you are in the console.
+Open <http://localhost:4568/setup>, paste the **setup token** from that log, create the owner account, and you are in the console. The token is also kept in `data/secrets.json` as `SETUP_TOKEN` and stops working once the owner exists, so nobody else who reaches the server first can claim it.
 
 > **Deploying somewhere other than `localhost`?** Set `OAUTH_ISSUER` to the public URL (for example `https://mcp.example.com`) before you issue any tokens. It is written into every token as `iss` and into the discovery document, so it must be reachable by your MCP servers and clients, and changing it later invalidates every token. See [Deploy](docs/deploy.md).
 
@@ -199,6 +200,7 @@ Settings live in [`config/config.yaml`](config/config.yaml) and read their secre
 | `DATABASE_URL` | `sqlite:///data/mcp_center.db` | Point at `postgresql://…` to use PostgreSQL (`uv sync --extra postgres`). |
 | `SESSION_SECRET_KEY`, `ENCRYPTION_KEY` | auto-generated | Stored in `data/secrets.json` when unset. `ENCRYPTION_KEY` protects private keys and stored secrets; rotating it makes them unreadable. |
 | `ADMIN_EMAIL`, `ADMIN_PASSWORD` | — | Create the owner account at first start instead of using `/setup`. |
+| `MCP_GATE_SETUP_TOKEN` | auto-generated | The one-time token `/setup` asks for. Generated into `data/secrets.json` and printed in the log while no owner exists; set it when the log is hard to reach (a container). |
 | `OAUTH_ACCESS_EXPIRE_MINUTES`, `OAUTH_REFRESH_EXPIRE_DAYS` | `15`, `30` | OAuth token lifetimes (personal access tokens choose their own). |
 | `OAUTH_DCR_AUTO_APPROVE` | `true` | Whether dynamically registered clients are usable immediately (the consent screen still gates them) or must be approved in the console. |
 | `OAUTH_CIMD_ENABLED`, `OAUTH_CIMD_AUTO_APPROVE` | `true`, `true` | Accept https URLs as `client_id` ([Client ID Metadata Documents](#client-id-metadata-documents)); whether such a client is usable at once or waits for approval in the console. |

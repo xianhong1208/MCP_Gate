@@ -279,7 +279,10 @@ def _print_banner(summary: dict, host: str, port: int) -> None:
     logger.info(f"  Metadata:   {issuer}/.well-known/oauth-authorization-server")
     logger.info(f"  JWKS:       {issuer}/.well-known/jwks.json  (kid={summary.get('signing_kid', '?')[:12]}…)")
     if summary.get("users", 0) == 0:
+        from src.identity import setup_token
         logger.warning(f"  No admin account yet → open http://localhost:{port}/setup to create the owner")
+        logger.warning(f"  Setup token: {setup_token.current()}  (also in {setup_token.location()} as "
+                       f"{setup_token.NAME}; it stops working once the owner exists)")
     elif summary.get("owner_created"):
         logger.info("  Owner account created from ADMIN_EMAIL / ADMIN_PASSWORD")
     if os.environ.get("ENABLE_API_DOCS", "").lower() == "true":

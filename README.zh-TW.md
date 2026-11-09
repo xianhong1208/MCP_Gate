@@ -69,9 +69,10 @@ uv run python main.py
   Metadata:   http://localhost:4568/.well-known/oauth-authorization-server
   JWKS:       http://localhost:4568/.well-known/jwks.json
   No admin account yet → open http://localhost:4568/setup to create the owner
+  Setup token: 7Qw…  (also in data/secrets.json as SETUP_TOKEN; it stops working once the owner exists)
 ```
 
-打開 <http://localhost:4568/setup> 建立擁有者帳號,就進入管理台了。
+打開 <http://localhost:4568/setup>,貼上 log 裡的**設定碼**並建立擁有者帳號,就進入管理台了。設定碼也存在 `data/secrets.json` 的 `SETUP_TOKEN`,擁有者建立後即失效,所以先連到伺服器的其他人無法搶走擁有者身分。
 
 > **不是部署在 `localhost`?** 在簽發任何 token 之前,先把 `OAUTH_ISSUER` 設成公開網址(例如 `https://mcp.example.com`)。它會寫進每個 token 的 `iss` 與 discovery 文件,MCP server 和 client 都必須連得到它;之後更改會讓所有 token 失效。見[部署](docs/deploy.md)。
 
@@ -199,6 +200,7 @@ Access token 的 claim:`iss`、`sub`、`aud`、`scope`、`client_id`、`jti`、`
 | `DATABASE_URL` | `sqlite:///data/mcp_center.db` | 指向 `postgresql://…` 即改用 PostgreSQL(`uv sync --extra postgres`)。 |
 | `SESSION_SECRET_KEY`、`ENCRYPTION_KEY` | 自動產生 | 未設定時存在 `data/secrets.json`。`ENCRYPTION_KEY` 保護私鑰與儲存的 secret;更換會讓它們無法解密。 |
 | `ADMIN_EMAIL`、`ADMIN_PASSWORD` | — | 首次啟動直接建立擁有者帳號,不用走 `/setup`。 |
+| `MCP_GATE_SETUP_TOKEN` | 自動產生 | `/setup` 要求的一次性設定碼。尚無擁有者時自動產生到 `data/secrets.json` 並印在 log;log 不方便看時(例如容器)可自行設定。 |
 | `OAUTH_ACCESS_EXPIRE_MINUTES`、`OAUTH_REFRESH_EXPIRE_DAYS` | `15`、`30` | OAuth token 有效期(personal access token 各自設定)。 |
 | `OAUTH_DCR_AUTO_APPROVE` | `true` | 動態註冊的 client 是否立即可用(同意頁仍是閘門),或必須在管理台核准。 |
 | `OAUTH_CIMD_ENABLED`、`OAUTH_CIMD_AUTO_APPROVE` | `true`、`true` | 接受 https 網址當 `client_id`([Client ID Metadata Documents](#client-id-metadata-documents));這類 client 是否立即可用,或要在管理台核准。 |

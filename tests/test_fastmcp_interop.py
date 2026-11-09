@@ -21,7 +21,7 @@ import httpx
 import pytest
 import uvicorn
 
-from tests.conftest import OWNER_EMAIL, OWNER_PASSWORD
+from tests.conftest import OWNER_EMAIL, OWNER_PASSWORD, SETUP_TOKEN
 
 
 def _free_port() -> int:
@@ -64,7 +64,7 @@ def gate(seeded):
     try:
         with _ThreadServer(create_app(), port):
             with httpx.Client(base_url=url) as c:
-                r = c.post("/api/session/setup", json={"email": OWNER_EMAIL, "password": OWNER_PASSWORD})
+                r = c.post("/api/session/setup", json={"setup_token": SETUP_TOKEN, "email": OWNER_EMAIL, "password": OWNER_PASSWORD})
                 assert r.status_code == 200, r.text
                 cookie = r.cookies.get("mcp_session")
             # The console sends the session binding with every call (see test_session_binding.py)
