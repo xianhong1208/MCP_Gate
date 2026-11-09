@@ -4,6 +4,9 @@ All notable changes to MCP Gate (formerly MCP Center) are documented here. The f
 
 ## [Unreleased]
 
+### Added
+- **Dependency audit in CI.** A new *Dependency audit* job runs `pip-audit` on the locked runtime dependencies and `npm audit` (production dependencies, high severity and above) on the console, so a dependency with a published vulnerability fails the build (#10).
+
 ## [1.2.0] — 2026-11-04
 
 ### Added
