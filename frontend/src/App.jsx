@@ -1,6 +1,6 @@
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { useAuth } from './contexts/AuthContext'
-import { rememberRedirect } from './utils/redirect'
+import { forgetRedirectIfAt, rememberRedirect } from './utils/redirect'
 import Layout from './components/Layout'
 import Spinner from './components/ui/Spinner'
 import LoginPage from './pages/LoginPage'
@@ -41,6 +41,7 @@ function ProtectedRoute({ children }) {
     return <Navigate to="/login" replace />
   }
 
+  forgetRedirectIfAt(location.pathname + location.search)
   return children
 }
 

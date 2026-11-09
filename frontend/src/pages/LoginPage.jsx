@@ -1,10 +1,10 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import i18n from '../i18n'
 import { useAuth } from '../contexts/AuthContext'
 import { sessionApi } from '../services/api'
-import { consumeRedirect, peekRedirect } from '../utils/redirect'
+import { navigateAfterLoginOnce, peekRedirect } from '../utils/redirect'
 import { Eye, EyeOff, Globe } from 'lucide-react'
 import AuthShell from '../components/AuthShell'
 import { Button, IconButton, Input, Field, Alert, DividerWithText } from '../components/ui'
@@ -50,10 +50,13 @@ export default function LoginPage() {
   const [error, setError] = useState(() => describeLoginError(searchParams.get('error')))
   const [providers, setProviders] = useState(null)   // null = not loaded yet
 
-  // Already logged in: send the user straight back to where they were going (e.g. /consent?rid=...)
+  // Signed in (already, or just now): back to where the user was going, e.g. /consent?rid=... of an MCP client's
+  // authorization request. The only way this page leaves after sign-in, and it navigates once (#20).
+  const goOn = useRef(null)
+  if (goOn.current === null) goOn.current = navigateAfterLoginOnce(navigate)
   useEffect(() => {
-    if (!authLoading && isAuthenticated) navigate(consumeRedirect(), { replace: true })
-  }, [authLoading, isAuthenticated, navigate])
+    if (!authLoading && isAuthenticated) goOn.current()
+  }, [authLoading, isAuthenticated])
 
   // First run -> setup page; also fetch the available login methods
   useEffect(() => {
@@ -82,7 +85,7 @@ export default function LoginPage() {
     setIsLoading(true)
     try {
       await login(email, password)
-      navigate(consumeRedirect())
+      goOn.current()
     } catch (err) {
       setError(err.message || t('auth.errors.invalidCredentials'))
     } finally {
