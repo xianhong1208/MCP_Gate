@@ -32,6 +32,31 @@ export function peekRedirect(fallback = '/') {
   }
 }
 
+/** Forget the remembered page once the user is on it. Third-party login lands there straight from the server
+ * callback, without going through consumeRedirect, and a leftover value would send a later sign-in back to a consent
+ * request that has expired. */
+export function forgetRedirectIfAt(path) {
+  try {
+    if (sessionStorage.getItem(STORAGE_KEY) === path) sessionStorage.removeItem(STORAGE_KEY)
+  } catch { /* ignore when storage is unavailable */ }
+}
+
+/**
+ * A function that sends the browser to the remembered page (or `fallback`) the first time it is called and does
+ * nothing afterwards. Signing in finishes in more than one place that can fire (the login page's effect when the
+ * session appears, its submit handler, StrictMode running effects twice): the first call takes the remembered
+ * /consent?rid=..., and a second one used to find nothing left and go to '/', which won and ended the MCP client's
+ * authorization flow (#20).
+ */
+export function navigateAfterLoginOnce(navigate, fallback = '/') {
+  let done = false
+  return () => {
+    if (done) return
+    done = true
+    navigate(consumeRedirect(fallback), { replace: true })
+  }
+}
+
 /** Take and clear; always returns a safe path. */
 export function consumeRedirect(fallback = '/') {
   try {
