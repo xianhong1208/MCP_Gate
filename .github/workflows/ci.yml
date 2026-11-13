@@ -178,3 +178,19 @@ jobs:
           '
       - name: uvx runs a real package
         run: docker run --rm mcp-runtime:ci uvx pycowsay@0.0.0.2 "mcp-runtime ok"
+
+  docker-image:
+    name: Docker image (build + smoke test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Check docker-compose.yml
+        run: docker compose config --quiet
+      # Builds the image, starts it on fresh data and secrets volumes, checks health, discovery, sign-in and a signed
+      # token, that secrets.json is in its own volume, that a restart and a recreated container keep the same keys,
+      # and that docker-compose.yml as shipped comes up. Never pushes (publish-image.yml does, on release tags).
+      - name: Build and smoke-test the image
+        run: bash scripts/docker_smoke.sh

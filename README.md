@@ -29,7 +29,7 @@ MCP Gate puts standards-based authentication in front of every MCP server you ru
 
 ## Installation
 
-You need Python 3.11 or later and [uv](https://docs.astral.sh/uv/). Docker is needed only for the Marketplace.
+You need Python 3.11 or later and [uv](https://docs.astral.sh/uv/), or only Docker ([With Docker](#with-docker)). Docker is also needed for the Marketplace.
 
 ```bash
 git clone https://github.com/xianhong1208/MCP_Gate.git
@@ -57,6 +57,20 @@ The startup log says where everything is:
 Open <http://localhost:4568/setup>, paste the **setup token** from the log and create the owner account. (Or set `ADMIN_EMAIL` and `ADMIN_PASSWORD` before the first start.)
 
 > **Not on `localhost`?** Set `OAUTH_ISSUER` to the public URL (for example `https://mcp.example.com`) before you issue any tokens. It is written into every token, and changing it later invalidates them all. See [Deploy](docs/deploy.md).
+
+### With Docker
+
+The official image is [`tonyhuang1101/mcp-gate`](https://hub.docker.com/r/tonyhuang1101/mcp-gate) (amd64 and arm64, one tag per release from 1.4.0):
+
+```bash
+docker run -d --name mcp-gate -p 4568:4568 \
+  -e OAUTH_ISSUER=http://localhost:4568 \
+  -v mcp-gate-data:/app/data -v mcp-gate-secrets:/app/secrets \
+  tonyhuang1101/mcp-gate:1.4.0
+docker logs mcp-gate | grep "Setup token"
+```
+
+Or `docker compose up -d` with the repository's `docker-compose.yml` (settings in `.env`; `--profile postgres` adds PostgreSQL; uncomment `build: .` to build the checkout instead). `OAUTH_ISSUER` must be the address clients use to reach the container. The database and the generated secrets get one volume each: back them up separately. Logs go to `docker logs`; migrations run at every start. Volumes, backups, upgrades and running behind a proxy: [Deploy → Docker](docs/deploy.md#docker).
 
 ## Quick start
 
@@ -262,13 +276,12 @@ MCP Gate is the **authorization server**; your MCP servers are **resource server
 | Your machine | `uv run python main.py`, SQLite in `data/`. The default issuer is `http://localhost:4568`. |
 | A server, behind HTTPS | A reverse proxy (nginx or Caddy) in front, `OAUTH_ISSUER` set to the public URL, `SECURE_COOKIE=true`: see [Deploy](docs/deploy.md). |
 | PostgreSQL | `uv sync --extra postgres` and `DATABASE_URL=postgresql://…`. Migrations run at every start. |
-
-An official Docker image is planned for 1.4 (see the [roadmap](ROADMAP.md)).
+| Docker | `tonyhuang1101/mcp-gate` with `docker run` or `docker compose up -d`: an unprivileged user, the database and the secrets in two volumes; `--profile postgres` adds PostgreSQL. See [Deploy → Docker](docs/deploy.md#docker). |
 
 ## Documentation
 
 - [Reference](docs/reference.md): how it works, configuration, revocation feed, console, API
-- [Deploy behind a reverse proxy with HTTPS](docs/deploy.md)
+- [Deploy behind a reverse proxy with HTTPS](docs/deploy.md), [with Docker](docs/deploy.md#docker)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Architecture](docs/architecture.md)
 - [Security policy](SECURITY.md)

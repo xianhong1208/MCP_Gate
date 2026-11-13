@@ -93,6 +93,6 @@ Build the runtime image once: `docker build -t mcp-runtime:1 deploy/mcp-runtime`
 
 ## Get more detail
 
-- Set `LOG_LEVEL=DEBUG` in `.env`; logs are written under `logs/`.
+- Set `LOG_LEVEL=DEBUG` in `.env`; logs are written under `logs/` (`LOG_DIR`). The Docker image logs to the console only: `docker logs mcp-gate`.
 - Set `ENABLE_API_DOCS=true` and open `/docs` to call any endpoint by hand.
 - `GET /api/oauth/activity` (signed in) lists recent token events with client, audience and outcome.

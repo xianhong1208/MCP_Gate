@@ -14,10 +14,13 @@ server:
   host: "${SERVER_HOST:-0.0.0.0}"
   port: ${SERVER_PORT:-0}
 
+# LOG_FORMAT: colorized (readable) or json (one object per line, for log collectors).
+# LOG_DIR: where the daily category files go; set it to an empty value to log to the console only (the Docker
+# image does: `docker logs` has everything).
 logging:
   level: "${LOG_LEVEL:-INFO}"
-  format: "colorized"
-  log_dir: "logs"
+  format: "${LOG_FORMAT:-colorized}"
+  log_dir: "${LOG_DIR:-logs}"
   rotation: "00:00"
   rotation_max_size: "50 MB"
   retention: "30 days"

@@ -65,6 +65,19 @@ def test_shipped_config_files_load(monkeypatch):
         Config.set_model(previous)
 
 
+def test_logging_dir_and_format_come_from_the_environment(monkeypatch):
+    """LOG_DIR / LOG_FORMAT: defaults keep today's files; an empty LOG_DIR (the Docker image) means console only."""
+    shipped = os.path.join(os.path.dirname(__file__), "..", "config")
+    monkeypatch.delenv("LOG_DIR", raising=False)
+    monkeypatch.delenv("LOG_FORMAT", raising=False)
+    m = Config._load_config(shipped)
+    assert (m.logging.log_dir, m.logging.format) == ("logs", "colorized")
+    monkeypatch.setenv("LOG_DIR", "")
+    monkeypatch.setenv("LOG_FORMAT", "json")
+    m = Config._load_config(shipped)
+    assert (m.logging.log_dir, m.logging.format) == ("", "json")
+
+
 def test_effective_port_follows_issuer():
     from src.config.model import OAuthConfig, ServerConfig
     assert ConfigModel(oauth=OAuthConfig(issuer="http://192.168.1.10:5000")).effective_port == 5000

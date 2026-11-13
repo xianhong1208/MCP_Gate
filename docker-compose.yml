@@ -1,0 +1,68 @@
+# MCP Gate with Docker Compose.
+#
+#   cp .env.example .env                 # set OAUTH_ISSUER (and ADMIN_EMAIL / ADMIN_PASSWORD if you like)
+#   docker compose pull
+#   docker compose up -d
+#   docker compose logs mcp-gate         # the setup token, if no owner was created from .env
+#
+# Then open the issuer address (http://localhost:4568 by default). docs/deploy.md has the details: volumes,
+# backups, upgrades and running behind a reverse proxy.
+#
+# With PostgreSQL instead of SQLite: set POSTGRES_PASSWORD and
+#   DATABASE_URL=postgresql://mcpgate:<the same password>@postgres:5432/mcp_gate
+# in .env, then `docker compose --profile postgres up -d`.
+#
+# Secrets never go in this file: .env (git-ignored) or the generated secrets volume hold them.
+
+services:
+  mcp-gate:
+    # The official image; MCP_GATE_VERSION pins a release (for example 1.4.0), MCP_GATE_IMAGE names another image.
+    image: ${MCP_GATE_IMAGE:-tonyhuang1101/mcp-gate:${MCP_GATE_VERSION:-latest}}
+    # To build this checkout instead: uncomment `build`, set MCP_GATE_IMAGE=mcp-gate:local, `docker compose up -d --build`.
+    # build: .
+    restart: unless-stopped
+    init: true
+    ports:
+      # Publish on 127.0.0.1 only ("127.0.0.1:4568:4568") when a reverse proxy on this host is the only client.
+      - "${MCP_GATE_PORT:-4568}:4568"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # The address clients and MCP servers use to reach MCP Gate: it is written into every token as `iss`, so it
+      # must match how they reach it (this published port, or the reverse proxy's https:// URL). The container
+      # itself always listens on 4568.
+      OAUTH_ISSUER: ${OAUTH_ISSUER:-http://localhost:${MCP_GATE_PORT:-4568}}
+    volumes:
+      # Two volumes on purpose: the database alone cannot decrypt the signing keys it stores. Back up both,
+      # separately (docs/deploy.md, "Back up").
+      - mcp-gate-data:/app/data
+      - mcp-gate-secrets:/app/secrets
+      # Your own config directory instead of the five built-in files (also set MCP_GATE_CONFIG_DIR=/config):
+      # - ./config:/config:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+        required: false
+
+  postgres:
+    profiles: ["postgres"]
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: mcpgate
+      POSTGRES_DB: mcp_gate
+      # From .env; the container refuses to start without it
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+    volumes:
+      - mcp-gate-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mcpgate -d mcp_gate"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  mcp-gate-data:
+  mcp-gate-secrets:
+  mcp-gate-postgres:

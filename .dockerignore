@@ -1,0 +1,42 @@
+# Only what the image needs goes into the build context (see Dockerfile). Never local state or secrets.
+
+# Local state, secrets and logs
+data/
+secrets/
+logs/
+.env
+.env.*
+!.env.example
+*.db
+*.sqlite3
+
+# Environments, caches, build output
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+frontend/node_modules/
+frontend/dist/
+catalog/images/*.tar
+
+# Repository and editor metadata
+.git/
+.github/
+.claude/
+.idea/
+.vscode/
+.playwright-mcp/
+
+# Not used at run time
+tests/
+docs/
+design-system/
+examples/
+frontend/
+scripts/
+deploy/
