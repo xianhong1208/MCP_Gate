@@ -250,6 +250,10 @@ def init_database(*, run_migrations: bool = True) -> dict:
     identity = Config.get_identity_config()
     db = make_session()
     try:
+        # Before anything may generate ENCRYPTION_KEY: a lost or replaced secrets file must stop startup, not start a
+        # server whose signing key no longer decrypts (src/encryption_check.py)
+        from src.encryption_check import check_encryption_key
+        check_encryption_key(db)
         # Weak SESSION_SECRET_KEY / ENCRYPTION_KEY: warned always, refused only while the install is new (no
         # signing key yet, so nothing is encrypted with it); see src/utils/secret_policy.py
         from src.adapters import OAuthKeyAdapter
@@ -334,10 +338,11 @@ def main():
         ensure_database_ready(Config.get_database_config().url, logger)
         sys.exit(0 if run_migration_command(args.migrate_only, args.message, args.revision) else 1)
 
+    from src.encryption_check import EncryptionKeyMismatchError
     from src.utils.secret_policy import WeakSecretError
     try:
         summary = init_database(run_migrations=not args.no_migrate)
-    except WeakSecretError as e:
+    except (WeakSecretError, EncryptionKeyMismatchError) as e:
         logger.error(str(e))
         sys.exit(1)
     except Exception as e:

@@ -82,6 +82,14 @@ The list keeps at most 20 hosts (internet-named ones are dropped first, then the
 **`Address already in use`**
 Another process is listening on the port derived from `OAUTH_ISSUER`. Stop it or set `SERVER_PORT`.
 
+**`The encryption key does not match the database`** (MCP Gate exits at startup)
+The database holds signing keys (and stored secrets) encrypted with an `ENCRYPTION_KEY` that MCP Gate no longer has: the secrets directory or volume (`secrets/secrets.json`) was lost or replaced, it is a file from another install, or `ENCRYPTION_KEY` was changed in the environment. MCP Gate refuses to start rather than generate a new key, which would start a server whose every token request fails. The message names the key id the database needs and the ones configured. Fix it with one of:
+
+- restore `secrets/` (in Docker, the secrets volume) from the backup made with this database; see [Deploy → Back up](deploy.md#back-up);
+- set `ENCRYPTION_KEY` to the key the database was encrypted with, or put it (and any older ones, comma-separated) in `ENCRYPTION_KEYS_PREVIOUS`: MCP Gate then makes a new key for new writes and still reads the old ones; `python -m src.cli encryption-key rotate` later re-encrypts everything under the new key.
+
+`python -m src.cli encryption-key status` shows which values open with the keys you set. If the key is gone for good, the only way forward is an empty database (every client, token and signing key is lost, and resource servers must fetch the new JWKS). A new install with an empty database never hits this: its key is generated on the first start.
+
 **Tokens stop verifying after a config change**
 Changing `OAUTH_ISSUER` or `ENCRYPTION_KEY` invalidates tokens: the first changes `iss`, the second makes the stored private keys unreadable. Restore the old value or re-issue tokens. To change `ENCRYPTION_KEY`, rotate it instead: `python -m src.cli encryption-key rotate` (see `SECURITY.md`); if you already changed it in the environment, put the old value in `ENCRYPTION_KEYS_PREVIOUS` and run the command. `python -m src.cli encryption-key status` shows how many values each key holds and whether any is unreadable.
 

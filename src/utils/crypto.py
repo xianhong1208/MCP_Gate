@@ -63,6 +63,15 @@ def _gcm_decrypt(key: bytes, data: bytes) -> str:
     return (decryptor.update(encrypted) + decryptor.finalize()).decode()
 
 
+def _previous_keys(stored: dict, newest: str) -> List[str]:
+    previous = split_keys(os.environ.get(PREVIOUS_NAME)) + split_keys(stored.get(PREVIOUS_NAME))
+    # Changing ENCRYPTION_KEY in the environment by hand while the file still holds the old one: keep the file's
+    # key readable too, so nothing it encrypted becomes unreadable.
+    if stored.get("ENCRYPTION_KEY") and stored["ENCRYPTION_KEY"] != newest:
+        previous.append(stored["ENCRYPTION_KEY"])
+    return previous
+
+
 class TokenCrypto:
     """AES-256-GCM encrypt/decrypt with a keyring: the first key encrypts, any key decrypts what it made."""
 
@@ -95,12 +104,7 @@ class TokenCrypto:
         if not newest:
             newest = (secrets_store.get_secret("ENCRYPTION_KEY") if generate or not stored.get("ENCRYPTION_KEY")
                       else stored["ENCRYPTION_KEY"])
-        previous = split_keys(os.environ.get(PREVIOUS_NAME)) + split_keys(stored.get(PREVIOUS_NAME))
-        # Changing ENCRYPTION_KEY in the environment by hand while the file still holds the old one: keep the file's
-        # key readable too, so nothing it encrypted becomes unreadable.
-        if stored.get("ENCRYPTION_KEY") and stored["ENCRYPTION_KEY"] != newest:
-            previous.append(stored["ENCRYPTION_KEY"])
-        self._set_keys(newest, previous)
+        self._set_keys(newest, _previous_keys(stored, newest))
         self._version = version
 
     def reload_if_changed(self) -> bool:
@@ -163,6 +167,20 @@ class TokenCrypto:
             return True
         except Exception:
             return False
+
+
+def configured_keyring() -> Optional[TokenCrypto]:
+    """The keyring the environment and the secrets file hold, built without generating a key: None when neither
+    holds any key (no ENCRYPTION_KEY and no ENCRYPTION_KEYS_PREVIOUS). For the startup check, which must look before
+    get_crypto() would generate a fresh key (src/encryption_check.py)."""
+    from src.utils import secrets_store
+
+    stored = secrets_store.read_file()
+    newest = os.environ.get("ENCRYPTION_KEY", "").strip() or stored.get("ENCRYPTION_KEY", "")
+    keys = ([newest] if newest else []) + _previous_keys(stored, newest)
+    if not keys:
+        return None
+    return TokenCrypto(keys[0], keys[1:])
 
 
 _crypto_instance: Optional[TokenCrypto] = None

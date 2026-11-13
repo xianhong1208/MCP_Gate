@@ -6,7 +6,9 @@
 #
 # Starts the image on two fresh volumes, checks health, discovery and the console, signs in and verifies a token it
 # issues, checks the generated secrets landed in their own volume (not in the data volume), then restarts and
-# recreates the container and checks the same secrets and signing key are still in use. Everything it creates is removed on exit.
+# recreates the container and checks the same secrets and signing key are still in use, then starts it on an empty
+# secrets volume (a lost volume) and checks it refuses to start instead of generating a new key. Everything it creates
+# is removed on exit.
 # SMOKE_PREFIX / SMOKE_PORT change the container and volume names and the published port.
 set -euo pipefail
 
@@ -15,6 +17,7 @@ PREFIX="${SMOKE_PREFIX:-mcp-gate-smoke}"
 NAME="$PREFIX"
 DATA_VOLUME="$PREFIX-data"
 SECRETS_VOLUME="$PREFIX-secrets"
+LOST_VOLUME="$PREFIX-secrets-lost"
 PORT="${SMOKE_PORT:-4598}"
 BASE="http://localhost:$PORT"
 EMAIL="smoke@example.com"
@@ -27,7 +30,7 @@ cleanup() {
         docker logs --tail 100 "$NAME" 2>&1 || true
     fi
     docker rm -fv "$NAME" >/dev/null 2>&1 || true
-    docker volume rm "$DATA_VOLUME" "$SECRETS_VOLUME" >/dev/null 2>&1 || true
+    docker volume rm "$DATA_VOLUME" "$SECRETS_VOLUME" "$LOST_VOLUME" >/dev/null 2>&1 || true
     exit $status
 }
 trap cleanup EXIT
@@ -45,13 +48,14 @@ if [ "${SKIP_BUILD:-0}" != "1" ]; then
 fi
 
 docker rm -fv "$NAME" >/dev/null 2>&1 || true
-docker volume rm "$DATA_VOLUME" "$SECRETS_VOLUME" >/dev/null 2>&1 || true
+docker volume rm "$DATA_VOLUME" "$SECRETS_VOLUME" "$LOST_VOLUME" >/dev/null 2>&1 || true
 docker volume create "$DATA_VOLUME" >/dev/null
 docker volume create "$SECRETS_VOLUME" >/dev/null
 
+# start [secrets volume]: the secrets volume defaults to $SECRETS_VOLUME
 start() {
     docker run -d --name "$NAME" -p "127.0.0.1:$PORT:4568" \
-        -v "$DATA_VOLUME:/app/data" -v "$SECRETS_VOLUME:/app/secrets" \
+        -v "$DATA_VOLUME:/app/data" -v "${1:-$SECRETS_VOLUME}:/app/secrets" \
         -e OAUTH_ISSUER="$BASE" -e ADMIN_EMAIL="$EMAIL" -e ADMIN_PASSWORD="$PASSWORD" \
         --health-interval 2s --health-start-period 60s \
         "$IMAGE" >/dev/null
@@ -133,6 +137,33 @@ wait_healthy
 [ "$(login)" = 200 ] || fail "the owner cannot sign in after recreating the container"
 [ "$(signed_kid)" = "$kid_before" ] || fail "no token signed by the same key after recreating the container"
 echo "ok: after recreating the container the same key and secrets are in use, the owner signs in, a new token verifies"
+
+# A lost secrets volume: the database still holds signing keys encrypted with the old ENCRYPTION_KEY. The server must
+# exit with a clear error, not generate a new key, start healthy and then answer every token request with a 500
+docker rm -fv "$NAME" >/dev/null
+docker volume create "$LOST_VOLUME" >/dev/null
+start "$LOST_VOLUME"
+for _ in $(seq 1 90); do
+    [ "$(docker inspect -f '{{.State.Running}}' "$NAME")" = true ] || break
+    [ "$(docker inspect -f '{{.State.Health.Status}}' "$NAME")" = healthy ] && fail "started healthy on a lost secrets volume"
+    sleep 1
+done
+[ "$(docker inspect -f '{{.State.Running}}' "$NAME")" = false ] || fail "still running on a lost secrets volume"
+exit_code="$(docker inspect -f '{{.State.ExitCode}}' "$NAME")"
+[ "$exit_code" != 0 ] || fail "exited with code 0 on a lost secrets volume"
+docker logs "$NAME" 2>&1 | grep -q "The encryption key does not match the database" \
+    || fail "the log does not say the encryption key does not match the database"
+docker run --rm --entrypoint sh -v "$LOST_VOLUME:/vol/secrets:ro" "$IMAGE" \
+    -c '! grep -qs ENCRYPTION_KEY /vol/secrets/secrets.json' || fail "a new ENCRYPTION_KEY was generated"
+echo "ok: on a lost secrets volume the container exits ($exit_code) saying the key does not match; no key generated"
+
+# Restoring the secrets volume brings it back with the same key
+docker rm -fv "$NAME" >/dev/null
+docker volume rm "$LOST_VOLUME" >/dev/null
+start
+wait_healthy
+[ "$(signed_kid)" = "$kid_before" ] || fail "no token signed by the same key after restoring the secrets volume"
+echo "ok: with the secrets volume restored it starts healthy and signs with the same key"
 
 docker rm -fv "$NAME" >/dev/null
 
