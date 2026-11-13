@@ -82,7 +82,7 @@ def test_the_startup_banner_prints_the_token_while_no_owner_exists(generated_tok
     messages = []
     sink = logger.add(lambda m: messages.append(str(m)), level="WARNING")
     try:
-        main._print_banner({"users": 0, "signing_kid": "kid"}, "0.0.0.0", 4568)
+        main._print_banner({"users": 0, "signing_kid": "kid"}, "0.0.0.0", 4999)  # bind port != issuer port
         with_owner = len(messages)
         main._print_banner({"users": 1, "signing_kid": "kid"}, "0.0.0.0", 4568)
     finally:
@@ -90,4 +90,7 @@ def test_the_startup_banner_prints_the_token_while_no_owner_exists(generated_tok
 
     printed = "".join(messages[:with_owner])
     assert setup_token.current() in printed and str(generated_token) in printed
+    # The setup page is offered at the issuer (the address the browser uses), not at the bind port
+    from src.config import Config
+    assert f"{Config.get_oauth_config().issuer}/setup" in printed
     assert setup_token.current() not in "".join(messages[with_owner:])

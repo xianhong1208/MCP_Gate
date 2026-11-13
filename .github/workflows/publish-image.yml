@@ -1,0 +1,146 @@
+name: Publish image
+
+# The official image, docker.io/tonyhuang1101/mcp-gate, for linux/amd64 and linux/arm64, pushed to Docker Hub when a
+# release tag vX.Y.Z is pushed: tagged X.Y.Z, X.Y and latest (a pre-release such as v1.4.0-rc.1 only X.Y.Z). The
+# amd64 image is built and smoke-tested (scripts/docker_smoke.sh) before anything is pushed.
+#
+# Pushing needs the repository secrets DOCKERHUB_USERNAME and DOCKERHUB_TOKEN. Without them, or when run by hand on a
+# branch, the image is still built for both platforms and smoke-tested, nothing is pushed, and the run ends green
+# with a notice saying why. Pull requests never run this: CI's "Docker image (build + smoke test)" job covers them.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-image-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # The one place the Docker Hub repository is written (the docs and docker-compose.yml name it too)
+  IMAGE: tonyhuang1101/mcp-gate
+  PLATFORMS: linux/amd64,linux/arm64
+
+jobs:
+  publish:
+    name: Publish image (Docker Hub)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: What to publish
+        id: plan
+        env:
+          HAVE_SECRETS: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          version="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          push=false
+          if [ "$REF_TYPE" != tag ]; then
+            reason="Not a release tag ($REF_NAME)"
+          elif [ "$REF_NAME" != "v$version" ]; then
+            echo "::error::Tag $REF_NAME does not match pyproject.toml version $version"
+            exit 1
+          elif [ "$HAVE_SECRETS" != true ]; then
+            reason="The repository secrets DOCKERHUB_USERNAME / DOCKERHUB_TOKEN are not set"
+          else
+            push=true
+            reason="Release $REF_NAME"
+          fi
+          tags="$IMAGE:$version"
+          case "$version" in
+            *-*) ;;                                     # a pre-release: only its own tag
+            *) tags="$tags,$IMAGE:${version%.*},$IMAGE:latest" ;;
+          esac
+          {
+            echo "version=$version"
+            echo "push=$push"
+            echo "reason=$reason"
+            echo "tags=$tags"
+          } | tee -a "$GITHUB_OUTPUT"
+
+      - name: Not pushing
+        if: steps.plan.outputs.push != 'true'
+        env:
+          REASON: ${{ steps.plan.outputs.reason }}
+          TAGS: ${{ steps.plan.outputs.tags }}
+        run: |
+          echo "::notice title=Image not pushed::$REASON"
+          {
+            echo "### Image not pushed"
+            echo
+            echo "$REASON. The image is built for $PLATFORMS and smoke-tested anyway; a release would push \`${TAGS//,/\` \`}\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          platforms: arm64
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # Smoke-test first: nothing is pushed unless the amd64 image passes
+      - name: Build the amd64 image locally
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: mcp-gate:publish-check
+          build-args: |
+            VERSION=${{ steps.plan.outputs.version }}
+            REVISION=${{ github.sha }}
+          cache-from: type=gha,scope=publish-image
+          cache-to: type=gha,scope=publish-image,mode=max
+      - name: Smoke test
+        env:
+          IMAGE: mcp-gate:publish-check
+          SKIP_BUILD: "1"
+        run: bash scripts/docker_smoke.sh
+
+      - name: Log in to Docker Hub
+        if: steps.plan.outputs.push == 'true'
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build (and push) for every platform
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: ${{ env.PLATFORMS }}
+          push: ${{ steps.plan.outputs.push == 'true' }}
+          tags: ${{ steps.plan.outputs.tags }}
+          build-args: |
+            VERSION=${{ steps.plan.outputs.version }}
+            REVISION=${{ github.sha }}
+          annotations: |
+            index:org.opencontainers.image.title=MCP Gate
+            index:org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            index:org.opencontainers.image.licenses=MIT
+            index:org.opencontainers.image.version=${{ steps.plan.outputs.version }}
+            index:org.opencontainers.image.revision=${{ github.sha }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=publish-image
+          cache-to: type=gha,scope=publish-image,mode=max
+
+      - name: Summary
+        if: steps.plan.outputs.push == 'true'
+        env:
+          TAGS: ${{ steps.plan.outputs.tags }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          {
+            echo "### Published"
+            echo
+            echo "\`$IMAGE@$DIGEST\` as \`${TAGS//,/\` \`}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

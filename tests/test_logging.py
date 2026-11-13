@@ -164,6 +164,16 @@ class TestSetupLogging:
 
         assert any(tmp_path.glob("app_*.log"))
 
+    def test_setup_logging_empty_log_dir_writes_no_files(self, tmp_path, monkeypatch):
+        """An empty log_dir (LOG_DIR= in the Docker image) logs to the console only: no directory, no files"""
+        from src.logging.logger import setup_logging, get_logger
+
+        monkeypatch.chdir(tmp_path)
+        setup_logging(level="INFO", format_type="colorized", log_dir="")
+        get_logger("test-module").error("console only")
+
+        assert list(tmp_path.iterdir()) == []
+
     def test_json_sink_serializes_record(self, capsys):
         """Feeding a loguru message straight into json_sink outputs valid JSON"""
         import json

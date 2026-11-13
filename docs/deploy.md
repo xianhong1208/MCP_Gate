@@ -1,6 +1,6 @@
 # Deploy MCP Gate
 
-This guide takes MCP Gate from `localhost` to a public HTTPS address behind a reverse proxy. OAuth 2.1 requires HTTPS for every authorization-server endpoint, and MCP clients refuse `http://` issuers outside loopback.
+This guide takes MCP Gate from `localhost` to a public HTTPS address behind a reverse proxy. To run it in a container instead of a Python environment, read sections 1–3 and then [Docker](#docker). OAuth 2.1 requires HTTPS for every authorization-server endpoint, and MCP clients refuse `http://` issuers outside loopback.
 
 ## 1. Decide the public URL
 
@@ -172,3 +172,100 @@ curl -s https://mcp.example.com/.well-known/jwks.json | python -m json.tool
 ```
 
 `issuer` must equal `https://mcp.example.com` exactly, and every endpoint in the document must start with it. Then point a FastMCP server's `JWTVerifier(jwks_uri=..., issuer=...)` at those URLs and connect a client as in the [README](../README.md#quick-start).
+
+## Docker
+
+The official image is **`tonyhuang1101/mcp-gate`** on Docker Hub, for `linux/amd64` and `linux/arm64`, published from 1.4.0 on for every release as `<version>` (for example `1.4.0`), `<major>.<minor>` and `latest`. It is built from the repository's `Dockerfile`, which you can also build yourself (`docker build -t mcp-gate:local .`).
+
+What is in it: Python 3.13 (slim) with the locked dependencies, including the PostgreSQL driver; MCP Gate runs as the unprivileged user `mcpgate` (uid 10001) and listens on port **4568** inside the container whatever `OAUTH_ISSUER` says; a `HEALTHCHECK` calls `/health`; migrations run at every start, as without Docker.
+
+### Run it
+
+```bash
+docker run -d --name mcp-gate --restart unless-stopped \
+  -p 4568:4568 \
+  -e OAUTH_ISSUER=http://localhost:4568 \
+  -v mcp-gate-data:/app/data \
+  -v mcp-gate-secrets:/app/secrets \
+  tonyhuang1101/mcp-gate:1.4.0
+docker logs mcp-gate | grep "Setup token"
+```
+
+Or with Compose, using `docker-compose.yml` from the repository (it runs `tonyhuang1101/mcp-gate:latest`; `MCP_GATE_VERSION=1.4.0` in `.env` pins a release):
+
+```bash
+cp .env.example .env      # OAUTH_ISSUER, optionally ADMIN_EMAIL / ADMIN_PASSWORD
+docker compose up -d
+```
+
+To run your own build instead, uncomment `build: .` in `docker-compose.yml`, set `MCP_GATE_IMAGE=mcp-gate:local` and run `docker compose up -d --build`. Every setting is an environment variable, as in [section 2](#2-configure-mcp-gate): put them in `.env` (Compose reads it) or pass them with `-e`. Never put secrets in `docker-compose.yml`.
+
+### OAUTH_ISSUER
+
+`OAUTH_ISSUER` is the address clients and MCP servers use to reach MCP Gate, **outside** the container: the published port (`http://localhost:4568`, or `http://<host address>:4568` for other machines) or the reverse proxy's `https://` URL. It is written into every token, so it must match how they reach it, and changing it later invalidates every issued token. The container's own port stays 4568 (`SERVER_PORT` is set in the image): publish it on whatever host port you like. Compose defaults the issuer to `http://localhost:${MCP_GATE_PORT:-4568}`.
+
+Resource servers in the same Compose project may fetch the JWKS through the service name (`http://mcp-gate:4568/.well-known/jwks.json`); list that name in `ALLOWED_HOSTS=mcp-gate`. They still check `iss` against `OAUTH_ISSUER`.
+
+### Volumes
+
+| Path in the container | Compose volume | Holds |
+|---|---|---|
+| `/app/data` | `mcp-gate-data` | the SQLite database (`mcp_gate.db`, with its `-wal` / `-shm` files) |
+| `/app/secrets` | `mcp-gate-secrets` | `secrets.json`: `ENCRYPTION_KEY`, `SESSION_SECRET_KEY`, the setup token (mode `0700` / `0600`) |
+
+They are separate on purpose: the database holds the signing private keys encrypted with `ENCRYPTION_KEY`, so a copy of the data volume alone does not expose them. Never mount the secrets inside the data volume. An install that kept `secrets.json` in `data/` (before 1.4) can be moved in as it is: on first start the file is moved to `/app/secrets` across the two volumes and the move is logged.
+
+Configuration: the five files of `config/` are in the image. To change them, copy `config/` from the repository, edit it, mount it and point `MCP_GATE_CONFIG_DIR` at it (the directory must hold all five files):
+
+```yaml
+    volumes:
+      - ./config:/config:ro
+    environment:
+      MCP_GATE_CONFIG_DIR: /config
+```
+
+Logs go to the console only (`docker logs`, `docker compose logs`): the image sets `LOG_DIR` empty, which turns the daily files off. `LOG_FORMAT=json` writes one JSON object per line for a log collector. For the files as well, set `LOG_DIR=/app/logs` and mount a volume there.
+
+### Back up
+
+Back up both volumes, and keep the secrets apart from the database (another medium, or encrypted): you need both to restore, and losing `secrets.json` makes the stored private keys unreadable, which invalidates every token. With Compose (`docker run` users replace `docker compose exec -T mcp-gate` with `docker exec -i mcp-gate`):
+
+```bash
+umask 077
+# SQLite: an online backup, consistent while MCP Gate runs
+docker compose exec -T mcp-gate python -c "import sqlite3; d = sqlite3.connect('/tmp/backup.db'); sqlite3.connect('data/mcp_gate.db').backup(d); d.close()"
+docker compose exec -T mcp-gate cat /tmp/backup.db > mcp_gate.db
+docker compose exec -T mcp-gate rm /tmp/backup.db
+# The secrets, to be stored somewhere else
+docker compose exec -T mcp-gate cat /app/secrets/secrets.json > secrets.json
+```
+
+With PostgreSQL: `docker compose exec -T postgres pg_dump -U mcpgate mcp_gate > mcp_gate.sql`, plus `secrets.json` as above.
+
+To restore into fresh volumes, write the files as the image's user before the first start:
+
+```bash
+docker compose run --rm -T --no-deps --entrypoint sh mcp-gate -c 'umask 077; cat > /app/data/mcp_gate.db' < mcp_gate.db
+docker compose run --rm -T --no-deps --entrypoint sh mcp-gate -c 'umask 077; cat > /app/secrets/secrets.json' < secrets.json
+docker compose up -d
+```
+
+### Upgrade
+
+Back up first. Then pull the new image and recreate the container; the volumes stay, and migrations run on start:
+
+```bash
+docker compose pull && docker compose up -d      # or: docker pull tonyhuang1101/mcp-gate:<version>, then rm and run again
+```
+
+Migrations change the database, so going back to an older image needs the backup taken before the upgrade. Read the [changelog](../CHANGELOG.md) for anything a release asks you to do.
+
+### Behind a reverse proxy
+
+Publish the port on loopback only (`127.0.0.1:4568:4568`), set `OAUTH_ISSUER` to the public `https://` URL and `SECURE_COOKIE=true`, and point the proxy at `127.0.0.1:4568` as in [section 3](#3-reverse-proxy). The proxy's requests reach the container from the Docker network's gateway (for example `172.17.0.1`, or the Compose network's gateway: `docker network inspect <project>_default`), not from `127.0.0.1`: add that address to `security.trusted_proxies` in your mounted `config/security.yaml` so the audit log records the real client address. A proxy running in the same Compose project reaches `http://mcp-gate:4568` directly; list its container address the same way.
+
+### Limits
+
+- Run **one** container per database: the rate limiter and the scheduler live in the process (see [section 4](#4-run-as-a-service)).
+- The Marketplace and bring-your-own servers are not supported in the container yet: managed servers are reached on `127.0.0.1` of MCP Gate's host. Run MCP Gate without Docker if you need them.
+

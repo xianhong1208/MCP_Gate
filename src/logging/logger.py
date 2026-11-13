@@ -216,49 +216,8 @@ def intercept_stdlib_logging(level: str = "INFO") -> None:
         lib_logger.setLevel(floor if floor is not None else logging.NOTSET)
 
 
-def setup_logging(
-    level: str = "INFO",
-    format_type: str = "colorized",
-    log_dir: str = "logs",
-    rotation: str = "00:00",
-    rotation_max_size: str = "50 MB",
-    retention: str = "60 days",
-    compression: str = "zip",
-):
-    """Setup logging configuration with category-based file splits.
-
-    Files produced (assuming log_dir="logs"):
-        logs/app_YYYY-MM-DD.log     everything INFO+
-        logs/http_YYYY-MM-DD.log    HTTP requests
-        logs/auth_YYYY-MM-DD.log    authentication / authorization / security
-        logs/db_YYYY-MM-DD.log      database operations
-        logs/error_YYYY-MM-DD.log   all ERROR+ (cross-module safety net)
-
-    Rotation: daily at 00:00; kept for `retention`; old files are compressed automatically.
-
-    Args:
-        level: default level (DEBUG/INFO/WARNING/ERROR/CRITICAL)
-        format_type: console format -- "json" or "colorized"
-        log_dir: directory for the category log files
-        rotation: loguru rotation condition, e.g. "00:00" / "1 day" / "100 MB"
-        rotation_max_size: reserved (combined time+size rotation, currently unused)
-        retention: retention period, e.g. "60 days"
-        compression: compression for old files -- "zip" / "gz" / "bz2" / None
-    """
-    # Remove default handler
-    logger.remove()
-
-    # Global extra defaults -- so that someone using `from loguru import logger` directly without binding a module
-    # does not hit a KeyError on `{extra[module]}`
-    logger.configure(extra={"module": "unknown"})
-
-    # ---- Console sink ----
-    if format_type == "json":
-        logger.add(json_sink, level=level, colorize=False)
-    else:
-        logger.add(sys.stderr, format=colorized_format, level=level, colorize=True)
-
-    # ---- File sinks ----
+def _add_file_sinks(log_dir: str, level: str, rotation: str, retention: str, compression: str) -> None:
+    """The daily category files under ``log_dir`` (see setup_logging)."""
     from pathlib import Path
     dir_path = Path(log_dir)
     dir_path.mkdir(parents=True, exist_ok=True)
@@ -267,7 +226,6 @@ def setup_logging(
     # support a "time OR size" combined condition, and combining them needs a callable + private API, which is too
     # fragile, so plain time-based rotation is enough for now. A single-day blow-up is extremely rare; if it must be
     # guarded against, drop to "12:00" for half-day rotation)
-    del rotation_max_size  # explicitly mark as unused to keep lint quiet
 
     # The "everything" aggregate file
     logger.add(
@@ -306,12 +264,61 @@ def setup_logging(
         diagnose=True,  # ERRORs include variable values, which makes debugging much faster
     )
 
+
+def setup_logging(
+    level: str = "INFO",
+    format_type: str = "colorized",
+    log_dir: str = "logs",
+    rotation: str = "00:00",
+    rotation_max_size: str = "50 MB",
+    retention: str = "60 days",
+    compression: str = "zip",
+):
+    """Setup logging configuration with category-based file splits.
+
+    Files produced (assuming log_dir="logs"):
+        logs/app_YYYY-MM-DD.log     everything INFO+
+        logs/http_YYYY-MM-DD.log    HTTP requests
+        logs/auth_YYYY-MM-DD.log    authentication / authorization / security
+        logs/db_YYYY-MM-DD.log      database operations
+        logs/error_YYYY-MM-DD.log   all ERROR+ (cross-module safety net)
+
+    Rotation: daily at 00:00; kept for `retention`; old files are compressed automatically.
+
+    Args:
+        level: default level (DEBUG/INFO/WARNING/ERROR/CRITICAL)
+        format_type: console format -- "json" or "colorized"
+        log_dir: directory for the category log files; empty = console only (no files)
+        rotation: loguru rotation condition, e.g. "00:00" / "1 day" / "100 MB"
+        rotation_max_size: reserved (combined time+size rotation, currently unused)
+        retention: retention period, e.g. "60 days"
+        compression: compression for old files -- "zip" / "gz" / "bz2" / None
+    """
+    # Remove default handler
+    logger.remove()
+
+    # Global extra defaults -- so that someone using `from loguru import logger` directly without binding a module
+    # does not hit a KeyError on `{extra[module]}`
+    logger.configure(extra={"module": "unknown"})
+
+    # ---- Console sink ----
+    if format_type == "json":
+        logger.add(json_sink, level=level, colorize=False)
+    else:
+        # colorize=None: colours on a terminal, plain text when piped or collected (docker logs, journald)
+        logger.add(sys.stderr, format=colorized_format, level=level, colorize=None)
+
+    # ---- File sinks (none when log_dir is empty: console only, e.g. in a container) ----
+    del rotation_max_size  # reserved; see _add_file_sinks
+    if log_dir:
+        _add_file_sinks(log_dir, level, rotation, retention, compression)
+
     # ---- Stdlib logging (uvicorn, APScheduler, SQLAlchemy, ...) -> loguru ----
     intercept_stdlib_logging(level)
 
     logger.bind(module="logger").info(
         f"Logging configured: level={level}, format={format_type}, "
-        f"log_dir={log_dir}, rotation={rotation}, retention={retention}"
+        f"log_dir={log_dir or '(console only)'}, rotation={rotation}, retention={retention}"
     )
 
 

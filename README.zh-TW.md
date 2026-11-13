@@ -29,7 +29,7 @@ MCP Gate 把標準化的身分驗證放在你每一台 MCP server 前面。[Fast
 
 ## 安裝
 
-需要 Python 3.11 以上與 [uv](https://docs.astral.sh/uv/)。只有 Marketplace 需要 Docker。
+需要 Python 3.11 以上與 [uv](https://docs.astral.sh/uv/),或者只要有 Docker([用 Docker](#用-docker))。Marketplace 也需要 Docker。
 
 ```bash
 git clone https://github.com/xianhong1208/MCP_Gate.git
@@ -57,6 +57,20 @@ uv run python main.py
 打開 <http://localhost:4568/setup>,貼上 log 裡的**設定碼**並建立擁有者帳號。(也可以在第一次啟動前設好 `ADMIN_EMAIL` 與 `ADMIN_PASSWORD`。)
 
 > **不是跑在 `localhost`?** 在簽發任何 token 之前,先把 `OAUTH_ISSUER` 設成公開網址(例如 `https://mcp.example.com`)。它會寫進每張 token,之後再改會讓所有 token 失效。見[部署](docs/deploy.md)。
+
+### 用 Docker
+
+官方 image 是 [`tonyhuang1101/mcp-gate`](https://hub.docker.com/r/tonyhuang1101/mcp-gate)(amd64 與 arm64,從 1.4.0 起每個版本一個 tag):
+
+```bash
+docker run -d --name mcp-gate -p 4568:4568 \
+  -e OAUTH_ISSUER=http://localhost:4568 \
+  -v mcp-gate-data:/app/data -v mcp-gate-secrets:/app/secrets \
+  tonyhuang1101/mcp-gate:1.4.0
+docker logs mcp-gate | grep "Setup token"
+```
+
+也可以用 repo 裡的 `docker-compose.yml` 執行 `docker compose up -d`(設定放 `.env`;加 `--profile postgres` 會多開 PostgreSQL;想用自己 checkout 的程式碼,把 `build: .` 取消註解)。`OAUTH_ISSUER` 必須是 client 連到這個容器時用的網址。資料庫和自動產生的密鑰各放一個 volume,請分開備份。log 用 `docker logs` 看;每次啟動都會跑 migration。volume、備份、升級與放在反向代理後面:見[部署 → Docker](docs/deploy.md#docker)。
 
 ## 快速開始
 
@@ -262,13 +276,12 @@ MCP Gate 是**授權伺服器**;你的 MCP server 是 **resource server**,只驗
 | 自己的電腦 | `uv run python main.py`,SQLite 放在 `data/`。預設 issuer 是 `http://localhost:4568`。 |
 | 伺服器,走 HTTPS | 前面放反向代理(nginx 或 Caddy),`OAUTH_ISSUER` 設成公開網址,`SECURE_COOKIE=true`:見[部署](docs/deploy.md)。 |
 | PostgreSQL | `uv sync --extra postgres`,再設 `DATABASE_URL=postgresql://…`。每次啟動都會跑 migration。 |
-
-官方 Docker image 排在 1.4(見[發展路線圖](ROADMAP.zh-TW.md))。
+| Docker | `tonyhuang1101/mcp-gate`,用 `docker run` 或 `docker compose up -d`:以非 root 使用者執行,資料庫與密鑰放在兩個 volume;加 `--profile postgres` 就有 PostgreSQL。見[部署 → Docker](docs/deploy.md#docker)。 |
 
 ## 文件
 
 - [參考資料](docs/reference.zh-TW.md):運作原理、設定、撤銷清單、管理台、API
-- [反向代理與 HTTPS 部署](docs/deploy.md)
+- [反向代理與 HTTPS 部署](docs/deploy.md)、[用 Docker 部署](docs/deploy.md#docker)
 - [疑難排解](docs/troubleshooting.md)
 - [架構](docs/architecture.md)
 - [安全政策](SECURITY.md)
