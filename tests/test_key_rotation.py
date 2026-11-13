@@ -59,7 +59,7 @@ def _active_kid(client):
 # ---------------------------------------------------------------------------
 # publish first, then sign
 # ---------------------------------------------------------------------------
-def test_rotate_now_publishes_before_signing(owner_client, service):
+def test_rotate_now_publishes_before_signing(owner_client, service, db_session):
     """TC-KROT-01: "Rotate now" puts the new key in the JWKS at once, but tokens keep the old kid for a day."""
     old = _active_kid(owner_client)
     r = owner_client.post("/api/oauth/keys/rotate")
@@ -73,6 +73,9 @@ def test_rotate_now_publishes_before_signing(owner_client, service):
     assert timedelta(hours=23, minutes=59) < starts - datetime.fromisoformat(keys[new]["created_at"]) \
         <= timedelta(hours=24, seconds=5)
     assert _kid(_pat(owner_client, service)["access_token"]) == old
+    # Published for the whole window, not only for a retired key's grace period
+    _shift(db_session, new, created_at=-12 * 60)
+    assert new in _kids(owner_client)
 
 
 def test_second_rotation_while_one_is_published_is_refused(owner_client):
@@ -276,22 +279,28 @@ def test_key_retired_before_this_change_falls_back_to_the_longest_lifetime(owner
     assert CleanupScheduler.run_signing_key_job(db_session)["deleted"] == [old]
 
 
-def test_recently_retired_key_is_never_deleted(owner_client, db_session):
+def test_recently_retired_key_is_never_deleted(owner_client, db_session, monkeypatch):
     """TC-KROT-14: within the unrecorded-token window (scanner / Inspect-as tokens) a key stays, whatever
-    signed_until says."""
+    signed_until says -- even when it already left the JWKS (retired_key_publish_minutes = 0)."""
+    from src.config import Config
     from src.scheduler.cleanup_scheduler import CleanupScheduler
 
+    monkeypatch.setattr(Config.get_oauth_config(), "retired_key_publish_minutes", 0)
     old = _retire_old_key(owner_client, db_session, 1)
     key = _key(db_session, old)
     key.signed_until = datetime.now() - timedelta(days=1)
     db_session.commit()
+    assert old not in _kids(owner_client)
     assert CleanupScheduler.run_signing_key_job(db_session)["deleted"] == []
 
 
-def test_active_and_published_keys_are_never_deleted(owner_client, db_session):
-    """TC-KROT-15: the active key and a published key waiting to sign are never deleted."""
+def test_active_and_published_keys_are_never_deleted(owner_client, db_session, monkeypatch):
+    """TC-KROT-15: the active key and a published key waiting to sign are never deleted -- an explicit rule, not
+    only a consequence of their being in the JWKS."""
+    from src.oauth import signing_keys
     from src.scheduler.cleanup_scheduler import CleanupScheduler
 
+    monkeypatch.setattr(signing_keys, "is_published", lambda db, key: False)
     active = _active_kid(owner_client)
     new = owner_client.post("/api/oauth/keys/rotate").json()["kid"]
     for kid in (active, new):
@@ -394,3 +403,19 @@ def test_keys_listing_reports_the_schedule(owner_client):
     active = _keys(owner_client)[_active_kid(owner_client)]
     expected = datetime.fromisoformat(active["created_at"]) + timedelta(days=89)
     assert abs(datetime.fromisoformat(rotation["next_at"]) - expected) < timedelta(seconds=2)
+
+
+def test_a_live_token_record_keeps_a_key_whatever_signed_until_says(owner_client, service, db_session):
+    """TC-KROT-22: defence in depth: a recorded, unexpired token signed by the key (here a PAT whose lifetime was
+    extended in the database) keeps the key even after signed_until."""
+    from db.models import OAuthToken
+    from src.scheduler.cleanup_scheduler import CleanupScheduler
+
+    pat = _pat(owner_client, service)
+    old = _retire_old_key(owner_client, db_session, 60)
+    key = _key(db_session, old)
+    key.signed_until = datetime.now() - timedelta(days=1)
+    db_session.query(OAuthToken).filter(OAuthToken.jti == pat["jti"]).update(
+        {OAuthToken.revoked_at: None, OAuthToken.kind: "refresh"})
+    db_session.commit()
+    assert CleanupScheduler.run_signing_key_job(db_session)["deleted"] == []

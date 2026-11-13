@@ -260,3 +260,13 @@ def test_cli_arguments():
     assert (args.command, args.action, args.settle_seconds) == ("encryption-key", "rotate", 0.0)
     with pytest.raises(SystemExit):
         parse_args(["encryption-key", "delete"])
+
+
+def test_reencryption_never_overwrites_a_concurrent_edit(encrypted_rows, db_session):
+    """TC-ENC-14: the rotation's UPDATE only replaces the exact value it read; a value changed meanwhile stays."""
+    from src.adapters import EncryptedColumnAdapter
+
+    name = "services.auth_token_encrypted"
+    key, value = EncryptedColumnAdapter.values(db_session, name)[0]
+    assert EncryptedColumnAdapter.replace(db_session, name, key, value + "-stale", "new") is False
+    assert dict(EncryptedColumnAdapter.values(db_session, name))[key] == value
