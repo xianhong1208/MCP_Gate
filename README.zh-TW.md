@@ -1,52 +1,35 @@
 # MCP Gate
 
-**開源的 OAuth 2.1 授權伺服器與 Model Context Protocol server 管理台。**
-
-MCP Gate 把標準化的身分驗證放在你每一台 MCP server 前面。[FastMCP](https://github.com/PrefectHQ/fastmcp) server 只要一個 `RemoteAuthProvider` 就受到保護;Claude Code、Claude Desktop、Cursor 這類 MCP client 則直接用它們內建的 OAuth 流程連上——不用自訂 token、不用驗證回呼、不用在每台 server 各寫一套驗證。
-
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-green.svg)](pyproject.toml)
-[![OAuth 2.1](https://img.shields.io/badge/OAuth-2.1-6366f1.svg)](#運作原理)
-[![Works with FastMCP](https://img.shields.io/badge/FastMCP-3.x-22c55e.svg)](https://gofastmcp.com)
-[![Tests](https://img.shields.io/badge/tests-pytest-informational.svg)](CONTRIBUTING.md)
+[![CI](https://github.com/xianhong1208/MCP_Gate/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/xianhong1208/MCP_Gate/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/xianhong1208/MCP_Gate)](https://github.com/xianhong1208/MCP_Gate/releases/latest)
 
-[English](README.md) · [快速開始](#快速開始) · [運作原理](#運作原理) · [設定](#設定) · [部署](docs/deploy.md) · [疑難排解](docs/troubleshooting.md) · [架構](docs/architecture.md)
+**替你自己架的 MCP server 管登入、token 與管理台:專為 Model Context Protocol 打造的開源 OAuth 2.1 授權伺服器。**
 
-```
-┌──────────────────────┐   ① 401 + protected-resource metadata   ┌──────────────────────┐
-│      MCP client      │ ───────────────────────────────────────▶ │  你的 FastMCP server  │
-│ Claude Code / Cursor │ ◀─────────────────────────────────────── │   (resource server)   │
-│  Claude Desktop / …  │   ⑤ Authorization: Bearer <JWT>          │                      │
-└──────────┬───────────┘                                          └──────────┬───────────┘
-           │ ② discovery + 動態註冊(DCR)                                       │ ④ 抓一次 JWKS,
-           │ ③ authorize(PKCE)→ 同意頁 → code → token                         │    之後離線驗簽
-           ▼                                                                 ▼
-┌──────────────────────────────────────────────────────────────────────────────────────────┐
-│  MCP Gate — OAuth 2.1 授權伺服器 + 管理台                                                │
-│  /.well-known/oauth-authorization-server   /.well-known/jwks.json                        │
-│  /oauth/register  /oauth/authorize  /oauth/token  /oauth/revoke  /oauth/introspect       │
-└──────────────────────────────────────────────────────────────────────────────────────────┘
-```
+[English](README.md) · [參考資料](docs/reference.zh-TW.md) · [部署](docs/deploy.md) · [發展路線圖](ROADMAP.zh-TW.md) · [變更紀錄](CHANGELOG.md)
+
+![MCP Gate 管理台:一台 FastMCP server 的頁面,顯示 audience、已接上的撤銷清單與兩個工具](docs/images/console-service.png)
+
+MCP Gate 把標準化的身分驗證放在你每一台 MCP server 前面。[FastMCP](https://gofastmcp.com) server 加幾行就受到保護;Claude Code、Claude Desktop、Cursor 這類 MCP client 直接用它們內建的 OAuth 流程連上,腳本則用 personal access token。server 拿 MCP Gate 的公鑰在本地驗 token,MCP Gate 不在請求路徑上。
+
+## 最新消息
+
+**1.3.1**(2026-11-09):從同意頁登入後會回到原本的授權請求,兩個服務也不能再共用同一個 audience。1.3.0 為第一位擁有者加上一次性設定碼,並在 CI 加入相依套件稽核。各版本內容見[變更紀錄](CHANGELOG.md),接下來的方向見[發展路線圖](ROADMAP.zh-TW.md)。
 
 ## 主要特色
 
-- **標準化的授權伺服器。** 涵蓋 [MCP 規範(2025-06-18)](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization)的授權要求:RFC 8414 metadata、RFC 7591 動態註冊、[Client ID Metadata Documents](#client-id-metadata-documents)(MCP 2026-07-28 的註冊方式)、authorization code + PKCE(S256)、refresh token 輪替與重放偵測、RFC 7009 撤銷、RFC 7662 內省、RFC 8707 resource indicator、RFC 9207 `iss` 回應。
-- **非對稱簽章、離線驗證。** RS256 金鑰,公開 JWKS、可輪替。MCP server 用公鑰在本地驗 token;MCP Gate 不在請求路徑上。
-- **撤銷也能傳到離線驗證的 server。** 透過[撤銷清單](#撤銷清單),每個 MCP server 能在幾秒內得知自己的哪些 token 被撤銷(PAT 也包含在內),不必每個請求都問 MCP Gate。
-- **一段設定接上 FastMCP。** `RemoteAuthProvider` + `JWTVerifier(jwks_uri, issuer, audience)` 就完成保護。token 綁定每台 server 的 audience,給 A 的 token 永遠不能打 B。
-- **同意頁。** 動態註冊的 client 與以中繼資料網址識別的 client 第一次連線要請擁有者按「允許」;可依 client + server 記住。你自己登記的 client 免同意。
-- **Personal access token(PAT)。** 從管理台簽長效 bearer token 給腳本、CI 與不會走 OAuth 的 client,附上可直接貼的 `claude mcp add` 與 `mcpServers` 片段。
-- **服務登錄與健康監控。** 手動登記或自動掃描 MCP server、同步 tools 列表、每 30 秒健康檢查、狀態變更經 WebSocket 即時推播。
-- **Marketplace 與 orchestrator。** 從 catalog 一鍵部署 MCP server;或貼一段標準的 `{command, args, env}`,由 MCP Gate 掛上 HTTP bridge 執行,可以跑在 Docker 容器裡,也可以直接跑成本機行程(`MCP_RUNTIME=process`)。
-- **零設定啟動。** 預設 SQLite、首次啟動自動產生密鑰、瀏覽器內的擁有者帳號設定精靈。PostgreSQL 與 GitHub / Google 登入只差幾個環境變數。
+- **標準化的授權伺服器。** 涵蓋 [MCP 規範](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization)的授權部分:RFC 8414 metadata、RFC 7591 動態註冊、Client ID Metadata Documents(MCP 2026-07-28 的註冊方式)、authorization code + PKCE、refresh token 輪替與重放偵測、RFC 7009 撤銷、RFC 7662 內省、RFC 8707 resource indicator、RFC 9207 `iss`,以及 `private_key_jwt` client 驗證。
+- **離線驗證。** RS256 token 綁定每台 server 的 audience,給 A 的 token 永遠不能打 B。server 只抓一次 JWKS,之後在本地驗證。
+- **撤銷也傳得到離線驗證的 server。** server 輪詢撤銷清單,幾秒內就拒絕已撤銷的 token(PAT 也算在內),不必每個請求都問 MCP Gate。
+- **同意頁**:自行註冊的 client 第一次連線要你按允許,可依 client 與 server 記住決定。
+- **Personal access token(PAT)**:給腳本、CI 與不會走 OAuth 的 client,附可直接貼上的 `claude mcp add` 與 `mcpServers` 片段。
+- **服務登錄。** 手動登記或掃描 MCP server、同步工具清單、監看健康狀態,還能用某張 token 的身分查看它看得到的工具(「Inspect as」)。
+- **Marketplace 與 orchestrator。** 從 catalog 部署 MCP server,或貼一段 `{command, args, env}`,由 MCP Gate 掛上 HTTP bridge,跑在 Docker 或本機行程裡。
+- **零設定啟動。** 預設 SQLite、首次啟動自動產生密鑰、在瀏覽器裡建立擁有者帳號;換 PostgreSQL 只要一個環境變數。管理台有英文與繁體中文。
 
-## 安裝 MCP Gate
+## 安裝
 
-前置需求:
-
-- Python 3.11 以上與 [uv](https://docs.astral.sh/uv/)。
-- Docker——只有 Marketplace 需要;自帶 MCP server 也可以不用 Docker(`MCP_RUNTIME=process`,需要 PATH 上有 `supergateway`)。
-- Node.js 18 以上——只有要改管理台前端時才需要。
+需要 Python 3.11 以上與 [uv](https://docs.astral.sh/uv/)。只有 Marketplace 需要 Docker。
 
 ```bash
 git clone https://github.com/xianhong1208/MCP_Gate.git
@@ -56,13 +39,10 @@ cp .env.example .env      # 可省略:所有設定都有可用的預設值
 uv run python main.py
 ```
 
-啟動畫面會告訴你每樣東西在哪裡:
+啟動 log 會告訴你每樣東西在哪裡:
 
 ```
-╔══════════════════════════════════════════════════════╗
-║   MCP Gate — OAuth 2.1 AS for your MCP servers     ║
-╚══════════════════════════════════════════════════════╝
-  Version:    1.0.0
+  Version:    1.3.1
   Address:    http://0.0.0.0:4568
   Issuer:     http://localhost:4568
   Database:   sqlite:///data/mcp_center.db
@@ -72,219 +52,231 @@ uv run python main.py
   Setup token: 7Qw…  (also in data/secrets.json as SETUP_TOKEN; it stops working once the owner exists)
 ```
 
-打開 <http://localhost:4568/setup>,貼上 log 裡的**設定碼**並建立擁有者帳號,就進入管理台了。設定碼也存在 `data/secrets.json` 的 `SETUP_TOKEN`,擁有者建立後即失效,所以先連到伺服器的其他人無法搶走擁有者身分。
+打開 <http://localhost:4568/setup>,貼上 log 裡的**設定碼**並建立擁有者帳號。(也可以在第一次啟動前設好 `ADMIN_EMAIL` 與 `ADMIN_PASSWORD`。)
 
-> **不是部署在 `localhost`?** 在簽發任何 token 之前,先把 `OAUTH_ISSUER` 設成公開網址(例如 `https://mcp.example.com`)。它會寫進每個 token 的 `iss` 與 discovery 文件,MCP server 和 client 都必須連得到它;之後更改會讓所有 token 失效。見[部署](docs/deploy.md)。
+> **不是跑在 `localhost`?** 在簽發任何 token 之前,先把 `OAUTH_ISSUER` 設成公開網址(例如 `https://mcp.example.com`)。它會寫進每張 token,之後再改會讓所有 token 失效。見[部署](docs/deploy.md)。
 
 ## 快速開始
 
-順序很重要:**先登記 server**。MCP Gate 只替它認得的 audience 簽 token;client 要求一台未登記的 server 會得到 `invalid_target`。
+以下示範用 MCP Gate 保護一台 FastMCP server、用 personal access token 呼叫它,並開啟撤銷清單。假設 MCP Gate 在 `http://localhost:4568`,server 在 `http://127.0.0.1:8000/mcp`。
 
-### 1. 在管理台登記 server
+### 1. 登記 server
 
-打開 **Services → Register Service**,輸入 server 的 host、port 與 path(path 是 MCP 端點,預設 `/mcp`)。server 的 *audience*——token 對誰有效——預設就是它的 MCP URL,例如 `http://127.0.0.1:8000/mcp`。每個服務都需要自己的 audience:若另一個服務已使用相同的 audience(或 MCP URL),登記會以 `409 service.audience_taken` 拒絕,因為兩者會互相接受對方的 token。
+在管理台打開 **Services → Register Service**,輸入 host `127.0.0.1`、port `8000`、path `/mcp`。server 的 **audience**(token 對哪個網址有效)預設就是它的 MCP URL:`http://127.0.0.1:8000/mcp`。一定要先登記:MCP Gate 只替它認得的 audience 簽 token。
 
-### 2. 保護 FastMCP server
+### 2. (選用)為撤銷清單登記 client
 
-服務頁的 **Integration** 面板會替你產生這段:
+離線驗證的 server 單靠自己,會一直接受已撤銷的 token,直到它過期。要讓它在幾秒內拒絕,打開 **OAuth Clients → Register trusted client**,選:
+
+- grant type 只勾 `client_credentials`,不填 redirect URI;
+- 驗證方式 *Client secret*;
+- **Resource server for**:步驟 1 登記的 server。
+
+記下 client id 與 secret(secret 只顯示一次)。跳過這一步,下面的範例也能跑,只是沒有撤銷清單。
+
+### 3. 寫 server
+
+把 [`examples/mcp_gate_hooks.py`](examples/mcp_gate_hooks.py) 複製到 server 旁邊。裡面是 `MCPGateVerifier`:FastMCP 的 `JWTVerifier` 再加上撤銷清單與使用回報,只需要 `fastmcp` 和 `httpx`。接著把下面這段存成 `server.py`(就是 [`examples/fastmcp_server_hooks.py`](examples/fastmcp_server_hooks.py)):
 
 ```python
+"""A FastMCP server protected by MCP Gate, with the revocation feed.
+
+Every request must carry an access token issued by MCP Gate for this server's audience. Tokens are verified
+offline against MCP Gate's JWKS; MCP Gate is never on the request path. When a resource-server client is
+configured (MCP_GATE_CLIENT_ID / MCP_GATE_CLIENT_SECRET), MCPGateVerifier also polls MCP Gate's revocation
+feed, so a revoked token is refused within `poll_interval` seconds, and reports token usage to the console.
+
+    pip install fastmcp httpx          # or: uv add fastmcp httpx
+    cp examples/mcp_gate_hooks.py .    # MCPGateVerifier lives in that single file
+    MCP_GATE_URL=http://localhost:4568 python server.py
+
+Before starting it, register the server in the MCP Gate console (Services -> Register Service: host
+127.0.0.1, port 8000, path /mcp), so its audience is http://127.0.0.1:8000/mcp. For the revocation feed,
+also register a confidential client with grant type client_credentials and "Resource server for" set to
+this server, and export its id and secret. See the README's Quick start.
+"""
+
+import os
+
 from fastmcp import FastMCP
 from fastmcp.server.auth import RemoteAuthProvider
 from fastmcp.server.auth.providers.jwt import JWTVerifier
+from fastmcp.server.dependencies import get_access_token
 
-auth = RemoteAuthProvider(
-    token_verifier=JWTVerifier(
-        jwks_uri="http://localhost:4568/.well-known/jwks.json",
-        issuer="http://localhost:4568",
-        audience="http://127.0.0.1:8000/mcp",   # 必須和管理台上的 audience 一致
-    ),
-    authorization_servers=["http://localhost:4568"],
-    base_url="http://127.0.0.1:8000",
+from mcp_gate_hooks import MCPGateVerifier
+
+MCP_GATE = os.environ.get("MCP_GATE_URL", "http://localhost:4568").rstrip("/")  # MCP Gate's OAUTH_ISSUER
+HOST = os.environ.get("MCP_HOST", "127.0.0.1")
+PORT = int(os.environ.get("MCP_PORT", "8000"))
+BASE_URL = f"http://{HOST}:{PORT}"
+AUDIENCE = os.environ.get("MCP_AUDIENCE", f"{BASE_URL}/mcp")  # must equal the audience shown in the console
+
+verifier_settings = dict(
+    jwks_uri=f"{MCP_GATE}/.well-known/jwks.json",
+    issuer=MCP_GATE,
+    audience=AUDIENCE,
+    required_scopes=["mcp:tools:invoke"],
 )
 
-mcp = FastMCP(name="demo", auth=auth)
+if os.environ.get("MCP_GATE_CLIENT_ID"):
+    # Offline verification plus the revocation feed and usage reports.
+    verifier = MCPGateVerifier(
+        **verifier_settings,
+        client_id=os.environ["MCP_GATE_CLIENT_ID"],
+        client_secret=os.environ["MCP_GATE_CLIENT_SECRET"],
+        poll_interval=15,   # seconds between revocation-feed polls
+        flush_interval=30,  # seconds between usage reports
+    )
+else:
+    # Offline verification only: a revoked token keeps working until it expires.
+    verifier = JWTVerifier(**verifier_settings)
+
+auth = RemoteAuthProvider(
+    token_verifier=verifier,
+    authorization_servers=[MCP_GATE],  # served at /.well-known/oauth-protected-resource for OAuth clients
+    base_url=BASE_URL,
+)
+
+mcp = FastMCP(name="demo", instructions="A demo server protected by MCP Gate", auth=auth)
+
 
 @mcp.tool
 def hello(name: str) -> str:
+    """Return a greeting."""
     return f"Hello, {name}!"
 
-mcp.run(transport="http", host="127.0.0.1", port=8000)
+
+@mcp.tool
+def whoami() -> dict:
+    """Return who the caller's access token belongs to."""
+    token = get_access_token()
+    return {
+        "subject": token.subject if token else None,
+        "client_id": token.client_id if token else None,
+        "scopes": token.scopes if token else [],
+    }
+
+
+if __name__ == "__main__":
+    revocation = "on" if isinstance(verifier, MCPGateVerifier) else "off"
+    print(f"MCP Gate: {MCP_GATE}   audience: {AUDIENCE}   revocation feed: {revocation}")
+    mcp.run(transport="http", host=HOST, port=PORT)
 ```
 
-FastMCP 會自動提供 `/.well-known/oauth-protected-resource`,把 client 指向 MCP Gate。完整可執行的版本——含回傳 token 內容的 `whoami` 工具——在 [`examples/fastmcp_server.py`](examples/fastmcp_server.py)。
+### 4. 執行
 
-### 3. 連上 client
+```bash
+pip install fastmcp httpx                    # 或:uv add fastmcp httpx
+export MCP_GATE_URL=http://localhost:4568    # MCP Gate 的 OAUTH_ISSUER
+export MCP_GATE_CLIENT_ID=mcpc_…             # 步驟 2 拿到的;兩個都不設就不開撤銷清單
+export MCP_GATE_CLIENT_SECRET=…
+python server.py
+```
 
-**支援 OAuth 的 client**(Claude Code、Claude Desktop、Cursor、FastMCP `Client`)什麼都不用先做:
+它會印出 `MCP Gate: http://localhost:4568   audience: http://127.0.0.1:8000/mcp   revocation feed: on`。幾秒內,管理台上這台 server 的頁面就會顯示 **Revocation feed: Wired**。
+
+### 5. 用 personal access token 呼叫
+
+在管理台打開 **Issue Token**,選這台 server、填一個標籤,複製 token(只顯示一次)。然後:
+
+```python
+import asyncio
+import os
+
+from fastmcp import Client
+from fastmcp.client.auth import BearerAuth
+
+
+async def main():
+    pat = os.environ["MCP_GATE_PAT"]  # a personal access token issued for this server
+    async with Client("http://127.0.0.1:8000/mcp", auth=BearerAuth(pat)) as client:
+        print([tool.name for tool in await client.list_tools()])
+        print((await client.call_tool("hello", {"name": "MCP Gate"})).data)
+        print((await client.call_tool("whoami", {})).data)
+
+
+asyncio.run(main())
+```
+
+```
+['hello', 'whoami']
+Hello, MCP Gate!
+{'subject': '…', 'client_id': 'mcp-center-console', 'scopes': ['mcp:prompts:read', 'mcp:resources:read', 'mcp:tools:invoke', 'mcp:tools:read']}
+```
+
+不帶 token,server 會回 `401`,並把 client 指向 MCP Gate:
+
+```bash
+curl -i -X POST http://127.0.0.1:8000/mcp \
+  -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+# HTTP/1.1 401 Unauthorized
+# www-authenticate: Bearer scope="mcp:tools:invoke", resource_metadata="http://127.0.0.1:8000/.well-known/oauth-protected-resource/mcp"
+```
+
+在管理台撤銷這張 token(**Tokens → Revoke**);開著撤銷清單時,下一次呼叫會在一個輪詢週期內被拒絕(範例是 15 秒)。
+
+### 6. 連上 MCP client
+
+支援 OAuth 的 client 什麼都不用先做。第一次使用時,它會向 MCP Gate 註冊,並在瀏覽器開啟同意頁:
 
 ```bash
 claude mcp add --transport http demo http://127.0.0.1:8000/mcp
 ```
 
-第一次使用時 client 會自己向 MCP Gate 註冊,並在瀏覽器開啟同意頁。頁面顯示 client 名稱、目標 server、要求的 scope(預設 `mcp:tools:read`、`mcp:tools:invoke`、`mcp:resources:read`、`mcp:prompts:read`)與「記住這個決定」核取方塊。按 **Allow**,client 就拿到 token,之後自己 refresh。若尚未登入管理台,同意頁會先要求登入(密碼、GitHub / Google 或首次設定),登入後回到同一個授權請求。
-
-```python
-from fastmcp import Client
-
-async with Client("http://127.0.0.1:8000/mcp", auth="oauth") as client:
-    print(await client.list_tools())
-```
-
-**其他情況**——腳本、CI、不支援 OAuth 的 client——在管理台的 **Issue Token** 簽一個 personal access token:
+不支援 OAuth 的 client 把 personal access token 當標頭帶上:
 
 ```bash
 claude mcp add --transport http demo http://127.0.0.1:8000/mcp \
   --header "Authorization: Bearer <PERSONAL_ACCESS_TOKEN>"
 ```
 
-```python
-from fastmcp import Client
-from fastmcp.client.auth import BearerAuth
-
-async with Client("http://127.0.0.1:8000/mcp", auth=BearerAuth("<PERSONAL_ACCESS_TOKEN>")) as client:
-    print(await client.list_tools())
-```
-
-### 4. 驗證
-
-```bash
-curl -s http://localhost:4568/.well-known/oauth-authorization-server | python -m json.tool | head
-claude mcp list          # 預期:  demo: http://127.0.0.1:8000/mcp (HTTP) - ✓ Connected
-```
-
-在 Claude Code 裡呼叫範例 server 的 `whoami` 工具,它會回傳到達 server 的那張 token 的 subject、client 與 scope:
-
-```json
-{"subject": "9b76a95d-…", "client_id": "mcpc_6c68…", "scopes": ["mcp:prompts:read", "mcp:resources:read", "mcp:tools:invoke", "mcp:tools:read"], "email": "you@example.com"}
-```
+每台 server 頁面上的 **Integration** 面板,會依那台 server 的網址與 audience 產生這些片段,以及 server 程式碼。
 
 ## 運作原理
 
-MCP Gate 扮演 MCP 規範中的 **authorization server**;你的 MCP server 是 **resource server**,從不簽發、也不儲存 token。
-
-| 步驟 | 誰 | 發生什麼事 |
-|---|---|---|
-| Discovery | client → server → MCP Gate | server 回 `401` 並在 `WWW-Authenticate` 指向它的 protected-resource metadata,裡面寫著 MCP Gate 是授權伺服器;client 再抓 `/.well-known/oauth-authorization-server`。 |
-| 註冊 | client → MCP Gate | client 以自己中繼資料文件的 https 網址當 `client_id`(不需註冊,MCP Gate 會去抓那份文件),或動態註冊(`POST /oauth/register`)拿到 `client_id`。public client 用 PKCE;confidential client 拿到 secret,或登記公鑰後以簽章 JWT 認證(`private_key_jwt`,RFC 7523)。 |
-| 授權 | 瀏覽器 → MCP Gate | `/oauth/authorize` 驗證請求、用 `resource` 參數綁定目標 server,顯示同意頁(記住過或受信任的 client 直接略過)。 |
-| Token | client → MCP Gate | `/oauth/token` 用授權碼——檢查 PKCE、redirect URI、resource——換出 RS256 access token 與 refresh token。 |
-| 驗證 | server | server 抓一次 JWKS,之後在本地驗簽章、issuer、audience、有效期與 scope。 |
-| 撤銷 | 管理台或 client | 撤銷 refresh token 會讓整條鏈失效,`POST /oauth/introspect` 立刻回 `active: false`。離線驗簽的 token 會撐到過期——access token 撐滿其有效期(預設 15 分鐘),personal access token 最長可達 `pat_max_days`——除非 server 輪詢[撤銷清單](#撤銷清單)(`POST /oauth/revoked`)或改用 FastMCP 的 `IntrospectionTokenVerifier`。 |
-
-Access token 的 claim:`iss`、`sub`、`aud`、`scope`、`client_id`、`jti`、`iat`、`exp`、`token_use`,以及——簽給已登入擁有者的 token——`email` 與 `name`。
-
-想改「同意頁什麼時候出現」,修改 [`src/oauth/consent_policy.py`](src/oauth/consent_policy.py);整個政策只是一個小函式。
-
-### 名詞
-
-| 名詞 | 意思 |
-|---|---|
-| Issuer | MCP Gate 的公開網址(`OAUTH_ISSUER`)。寫進每個 token 的 `iss`;client 與 server 用它做 discovery。 |
-| Classic client | 在管理台手動登記、允許不用 PKCE 並套用預設 resource 的機密 client;給 OAuth 模組只認 client_id / client_secret 的平台用。 |
-| private_key_jwt | 不用共享 secret 的 client 認證:client 登記 JWKS(直接貼上或提供 `jwks_uri`),每次向 token 端點請求時簽一個短效 JWT。適合 CI 工作、後端服務等機器對機器的 client。 |
-| Audience | token 對哪個 MCP URL 有效(`aud` claim)。在管理台逐台設定;server 的 `JWTVerifier(audience=…)` 必須一致。 |
-| Resource server | 你的 MCP server。只驗 token、從不簽發。管理台稱之為 *service*。 |
-| Scope | token 在 server 上可以做什麼,例如 `mcp:tools:invoke`。管理台的全域 scope 註冊表定義共用集合;每台 server 還可以宣告只有簽給它的 token 才能帶的專屬 scope。 |
-| DCR | 動態註冊(RFC 7591):client 第一次連線時自己建立 `client_id`。MCP 2026-07-28 已改建議 CIMD,但仍支援。 |
-| CIMD | Client ID Metadata Document:client 的 `client_id` 是一個 https 網址,該網址以 JSON 提供它的中繼資料。不需事先註冊。 |
-| PAT | Personal access token:從管理台簽的長效 access token,當一般 bearer token 使用。 |
-
-## 設定
-
-所有設定在 [`config/config.yaml`](config/config.yaml),敏感值從環境變數(`.env`)讀取。你可能會碰到的:
-
-| 變數 | 預設 | 用途 |
-|---|---|---|
-| `OAUTH_ISSUER` | `http://localhost:4568` | MCP Gate 的公開網址,同時決定 MCP Gate bind 的 port。**非本機部署一定要改。** |
-| `DATABASE_URL` | `sqlite:///data/mcp_center.db` | 指向 `postgresql://…` 即改用 PostgreSQL(`uv sync --extra postgres`)。 |
-| `SESSION_SECRET_KEY`、`ENCRYPTION_KEY` | 自動產生 | 未設定時存在 `data/secrets.json`。`ENCRYPTION_KEY` 保護私鑰與儲存的 secret;更換會讓它們無法解密。 |
-| `ADMIN_EMAIL`、`ADMIN_PASSWORD` | — | 首次啟動直接建立擁有者帳號,不用走 `/setup`。 |
-| `MCP_GATE_SETUP_TOKEN` | 自動產生 | `/setup` 要求的一次性設定碼。尚無擁有者時自動產生到 `data/secrets.json` 並印在 log;log 不方便看時(例如容器)可自行設定。 |
-| `OAUTH_ACCESS_EXPIRE_MINUTES`、`OAUTH_REFRESH_EXPIRE_DAYS` | `15`、`30` | OAuth token 有效期(personal access token 各自設定)。 |
-| `OAUTH_DCR_AUTO_APPROVE` | `true` | 動態註冊的 client 是否立即可用(同意頁仍是閘門),或必須在管理台核准。 |
-| `OAUTH_CIMD_ENABLED`、`OAUTH_CIMD_AUTO_APPROVE` | `true`、`true` | 接受 https 網址當 `client_id`([Client ID Metadata Documents](#client-id-metadata-documents));這類 client 是否立即可用,或要在管理台核准。 |
-| `OAUTH_CIMD_ALLOWED_HOSTS` | — | 以逗號分隔、允許其 `client_id` 網址的主機(`*.example.com` 代表子網域)。空白表示任何公開主機。 |
-| `GITHUB_CLIENT_ID/_SECRET`、`GOOGLE_CLIENT_ID/_SECRET` | — | 啟用管理台的 GitHub / Google 登入(實驗性——已實作但尚未用真實帳號驗證)。Callback:`<issuer>/api/session/oauth/<provider>/callback`。 |
-| `SECURE_COOKIE` | `false` | 走 HTTPS 時設 `true`。 |
-| `CORS_ALLOWED_ORIGINS` | — | 以逗號分隔、可帶 cookie 存取管理台 API 的額外 origin。除非有其他網站必須呼叫它，否則請留空；Vite 開發伺服器不需要設定。 |
-| `ALLOWED_HOSTS` | — | 以逗號分隔、除 `OAUTH_ISSUER` 的 host、`localhost` 與 IP 位址外也要回應的主機名稱（例如容器的 service 名稱）；可用 `*.suffix` 萬用字元，`*` 會關閉此檢查。其他名稱一律回 421。 |
-| `ENABLE_API_DOCS` | — | `true` 會在 `/docs` 開放 OpenAPI。只讀環境變數,不在 `config.yaml` 內。 |
-
-### Client ID Metadata Documents
-
-MCP 授權規範(2026-07-28)把動態註冊列為過時,改建議 [Client ID Metadata Documents](https://datatracker.ietf.org/doc/draft-ietf-oauth-client-id-metadata-document/)(CIMD)。client 在某個 https 網址發布一份 JSON 文件,並以該網址當 `client_id`;MCP Gate 在 metadata 中宣告 `client_id_metadata_document_supported: true`,並在 client 第一次來到 `/oauth/authorize` 時去抓這份文件:
-
-```json
-{
-  "client_id": "https://app.example.com/oauth/client-metadata.json",
-  "client_name": "Example MCP Client",
-  "redirect_uris": ["http://127.0.0.1/callback"],
-  "grant_types": ["authorization_code", "refresh_token"],
-  "token_endpoint_auth_method": "none"
-}
+```
+┌──────────────────────┐   ① 401 + protected-resource metadata   ┌──────────────────────┐
+│      MCP client      │ ───────────────────────────────────────▶ │  你的 FastMCP server  │
+│ Claude Code / Cursor │ ◀─────────────────────────────────────── │   (resource server)   │
+│  Claude Desktop / …  │   ⑤ Authorization: Bearer <JWT>          │                      │
+└──────────┬───────────┘                                          └──────────┬───────────┘
+           │ ② discovery + dynamic client registration                       │ ④ 抓一次 JWKS,
+           │ ③ authorize (PKCE) → consent → code → token                     │    離線驗證;
+           ▼                                                                 ▼    輪詢撤銷清單
+┌──────────────────────────────────────────────────────────────────────────────────────────┐
+│  MCP Gate — OAuth 2.1 authorization server + console                                    │
+│  /.well-known/oauth-authorization-server   /.well-known/jwks.json   /oauth/revoked       │
+│  /oauth/register  /oauth/authorize  /oauth/token  /oauth/revoke  /oauth/introspect       │
+└──────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-- 文件中的 `client_id` 必須與網址完全相同;`client_name` 與 `redirect_uris` 為必填。redirect URI 完全比對,但 loopback 的可以是任何連接埠(和已註冊的 client 相同)。
-- public client(`none`)使用 PKCE。文件若宣告 `private_key_jwt`(在 `token_endpoint_auth_methods_supported` 或 `token_endpoint_auth_method` 中),就必須附上 `jwks` 或 `jwks_uri`,之後也必須以簽章 JWT 認證。共用密鑰的認證方式與 `client_secret` 一律拒絕。這類 client 不能用 `client_credentials`。
-- 這類 client 會出現在 **OAuth Clients**,以網址為 id(*中繼資料文件*)。撤銷它會封鎖該網址,直到你刪除它;刪除後該網址可再被抓取。token、同意紀錄與稽核紀錄都和其他 client 一樣運作。從未取得 token 的會在 `dcr_unused_client_days` 後清除,和動態註冊的 client 相同。
-- 同意頁會說明這個 client 只以網址的主機識別:名稱與連結都未經驗證。
-- MCP Gate 只抓公開位址(不抓 loopback、私有網段、link-local 或雲端 metadata 服務位址),不跟隨重新導向,5 秒內最多讀 5 KB,且要求 `application/json`。文件依 `Cache-Control: max-age` 快取,介於 1 分鐘到 1 天;抓取失敗後 30 秒內不再重試。所有限制都在 `config/config.yaml` 的 `oauth.cimd` 底下;`OAUTH_CIMD_PRIVATE_NETWORK_HOSTS` 可放行私有網路上指定的主機(僅限開發或內網)。
+MCP Gate 是**授權伺服器**;你的 MCP server 是 **resource server**,只驗證 token、從不簽發。每個步驟、token 內容、所有設定、Client ID Metadata Documents、撤銷清單、管理台各頁與 HTTP API,都在[參考資料](docs/reference.zh-TW.md)裡。
 
-動態註冊(`/oauth/register`)仍可並用;設定 `OAUTH_CIMD_ENABLED=false` 則只接受已註冊的 client。
+## 部署方式
 
-進階:`SERVER_HOST` / `SERVER_PORT` 可覆寫 bind 位址,只在它必須和 issuer 不同時使用(例如反向代理後面只聽 `127.0.0.1`)。完整的反向代理與 HTTPS 步驟見[部署](docs/deploy.md)。
-
-### 撤銷清單
-
-MCP server 是離線驗證 token,單靠自己的話,被撤銷的 token 會一直有效到過期為止:access token 是 15 分鐘,PAT 則是它的整個效期。改為定期拉撤銷清單的 server,會在一個拉取間隔內拒絕它:
-
-1. **替 server 註冊一個 client。** 在 **OAuth Clients** → *Register*:grant type 只選 `client_credentials`、不填 redirect URI、token endpoint 驗證選 *Client secret*(POST body 或 HTTP Basic)或 `private_key_jwt`,*Resource server for* 選這個 server。既有的 client 用它的 *Resource server…* 動作,或呼叫 `PUT /api/oauth/clients/{client_id}/resource-server`,body 為 `{"service_id": "<server id>"}`。
-2. **定期呼叫 `POST /oauth/revoked`**,帶上這個 client 的憑證;可加 `since=<unix 時間>` 只取較新的撤銷。回應是 `{"revoked": [{"jti", "revoked_at", "exp"}, …], "now": …}`:**只限該 server** 已撤銷、尚未過期的 access token、PAT 與 refresh token。沒綁定的 client 會拿到 `403`。同一個綁定也讓 server 能呼叫 `/oauth/introspect` 和回報 token 用量,同樣只限它自己的 token。
-3. **在管理台確認。** server 頁面有一列 *Revocation feed*:已接上(附最後一次拉取時間)、已停止拉取、從未拉取,或未接上。
-
-自己的 FastMCP server 可以用 [`examples/mcp_gate_hooks.py`](examples/mcp_gate_hooks.py) 裡的 `MCPGateVerifier` 來拉。Folio 與 AnyDoc 已內建(在各自的 `.env` 設定 `FOLIO_REVOCATION_*` / `ANYDOC_REVOCATION_*`)。
-
-## 使用管理台
-
-| 頁面 | 在這裡做什麼 |
+| 在哪裡 | 怎麼做 |
 |---|---|
-| **Dashboard** | 服務健康、token 活動、最近事件、系統狀態。 |
-| **Services** | 登記或掃描 MCP server、設定 audience 與允許的 scope、宣告 server 專屬 scope、更新 tools、執行健康檢查、複製接入片段。 |
-| **Tokens · Issue Token** | MCP Gate 簽發過的所有 token——OAuth 授權與 PAT——含撤銷、到期與最後使用資訊。 |
-| **OAuth Clients** | 動態註冊、中繼資料文件與受信任的 client:核准、撤銷、刪除;scope 註冊表;簽章金鑰輪替。 |
-| **Marketplace** | 從 catalog 部署 MCP server,或自帶 `{command, args, env}`。 |
-| **Audit Logs** | 誰、何時、從哪裡、做了什麼。 |
+| 自己的電腦 | `uv run python main.py`,SQLite 放在 `data/`。預設 issuer 是 `http://localhost:4568`。 |
+| 伺服器,走 HTTPS | 前面放反向代理(nginx 或 Caddy),`OAUTH_ISSUER` 設成公開網址,`SECURE_COOKIE=true`:見[部署](docs/deploy.md)。 |
+| PostgreSQL | `uv sync --extra postgres`,再設 `DATABASE_URL=postgresql://…`。每次啟動都會跑 migration。 |
 
-用 email + 密碼登入,設定好之後也可用 GitHub / Google。管理台刻意設計為單租戶:登入的人就是管理員。
-
-管理台預設為英文;頂列的語言切換可改為繁體中文,選擇會記在該瀏覽器。
-
-## API 參考
-
-| 類別 | 端點 |
-|---|---|
-| OAuth(公開) | `GET /.well-known/oauth-authorization-server` · `GET /.well-known/openid-configuration` · `GET /.well-known/jwks.json` · `POST /oauth/register` · `GET /oauth/authorize` · `GET/POST /oauth/authorize/requests/{id}[/decision]`(同意頁)· `POST /oauth/token` · `POST /oauth/revoke` · `POST /oauth/introspect` |
-| 管理台 session | `GET /api/session/status` · `POST /api/session/setup` · `POST /api/session/login` · `POST /api/session/logout` · `GET /api/session/me` · `PUT /api/session/me/{profile,password}` · `GET /api/session/oauth/{github,google}/{start,callback}` |
-| 管理 API(需登入) | `/api/services*` · `/api/oauth/{clients,scopes,tokens,consents,keys,activity,overview,snippets}` · `/api/discovery/*` · `/api/marketplace*` · `/api/managed*` · `/api/byo-mcp*` · `/api/stats/*` · `/api/audit/*` · `/api/system/*` |
-| 維運 | `GET /health` · `WS /ws/services`(服務狀態即時推播) |
-
-設 `ENABLE_API_DOCS=true` 後 `/docs` 有完整 OpenAPI 參考。
+官方 Docker image 排在 1.4(見[發展路線圖](ROADMAP.zh-TW.md))。
 
 ## 文件
 
+- [參考資料](docs/reference.zh-TW.md):運作原理、設定、撤銷清單、管理台、API
 - [反向代理與 HTTPS 部署](docs/deploy.md)
 - [疑難排解](docs/troubleshooting.md)
 - [架構](docs/architecture.md)
 - [安全政策](SECURITY.md)
-- [貢獻與開發環境](CONTRIBUTING.md)
-- [變更紀錄](CHANGELOG.md) · [藍圖](ROADMAP.md)
+- [發展路線圖](ROADMAP.zh-TW.md) · [變更紀錄](CHANGELOG.md)
 
-(以上文件為英文。)
+(部署、疑難排解、架構、安全政策與變更紀錄只有英文版。)
 
 ## 貢獻
 
-歡迎 issue 與 pull request。開發環境、CI 守住的分層規則與 PR 檢查清單見 [CONTRIBUTING.md](CONTRIBUTING.md)。
+歡迎開 issue 與 pull request。開發環境、CI 跑的檢查、分層規則與發布步驟見 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 授權
 

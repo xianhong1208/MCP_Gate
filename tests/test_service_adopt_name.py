@@ -20,15 +20,15 @@ def test_placeholder_is_replaced(monkeypatch):
     calls = {}
     monkeypatch.setattr(ServiceAdapter, "get_by_name", staticmethod(lambda db, name: None))
     monkeypatch.setattr(ServiceAdapter, "update", classmethod(lambda cls, db, sid, **kw: calls.update(kw)))
-    assert ServiceAdapter.adopt_server_name(None, _svc("mcp-127-0-0-1-5055"), "AnyDoc") == "AnyDoc"
-    assert calls == {"name": "AnyDoc"}
+    assert ServiceAdapter.adopt_server_name(None, _svc("mcp-127-0-0-1-5055"), "Morphyard") == "Morphyard"
+    assert calls == {"name": "Morphyard"}
 
 
 def test_operator_name_and_manual_services_are_left_alone(monkeypatch):
     monkeypatch.setattr(ServiceAdapter, "get_by_name", staticmethod(lambda db, name: None))
     monkeypatch.setattr(ServiceAdapter, "update", classmethod(lambda cls, db, sid, **kw: (_ for _ in ()).throw(AssertionError("must not rename"))))
-    assert ServiceAdapter.adopt_server_name(None, _svc("my-docs"), "AnyDoc") is None
-    assert ServiceAdapter.adopt_server_name(None, _svc("mcp-127-0-0-1-5055", source="manual"), "AnyDoc") is None
+    assert ServiceAdapter.adopt_server_name(None, _svc("my-docs"), "Morphyard") is None
+    assert ServiceAdapter.adopt_server_name(None, _svc("mcp-127-0-0-1-5055", source="manual"), "Morphyard") is None
     assert ServiceAdapter.adopt_server_name(None, _svc("mcp-127-0-0-1-5055"), "(requires auth)") is None
     assert ServiceAdapter.adopt_server_name(None, _svc("mcp-127-0-0-1-5055"), None) is None
 
@@ -36,7 +36,7 @@ def test_operator_name_and_manual_services_are_left_alone(monkeypatch):
 def test_taken_name_is_not_stolen(monkeypatch):
     monkeypatch.setattr(ServiceAdapter, "get_by_name", staticmethod(lambda db, name: object()))
     monkeypatch.setattr(ServiceAdapter, "update", classmethod(lambda cls, db, sid, **kw: (_ for _ in ()).throw(AssertionError("must not rename"))))
-    assert ServiceAdapter.adopt_server_name(None, _svc("mcp-127-0-0-1-5055"), "AnyDoc") is None
+    assert ServiceAdapter.adopt_server_name(None, _svc("mcp-127-0-0-1-5055"), "Morphyard") is None
 
 
 # ---- description (#34): filled from serverInfo only while empty or generated ----
@@ -54,23 +54,23 @@ def _capture_updates(monkeypatch):
 def test_describe_server():
     from src.adapters import describe_server
 
-    assert describe_server("AnyDoc", "1.2", "Converts documents") == "Converts documents"
-    assert describe_server("AnyDoc", "1.2") == "AnyDoc v1.2"
-    assert describe_server("AnyDoc") == "AnyDoc"
+    assert describe_server("Morphyard", "1.2", "Converts documents") == "Converts documents"
+    assert describe_server("Morphyard", "1.2") == "Morphyard v1.2"
+    assert describe_server("Morphyard") == "Morphyard"
     assert describe_server("(requires auth)") is None and describe_server(None) is None
 
 
 @pytest.mark.parametrize("current", [None, "", "MCP service at 127.0.0.1:5055",
-                                     "MCP service: AnyDoc v1.0\n\nold text"])
+                                     "MCP service: Morphyard v1.0\n\nold text"])
 def test_empty_or_generated_description_is_filled(monkeypatch, current):
     calls = _capture_updates(monkeypatch)
-    assert ServiceAdapter.adopt_server_description(None, _dsvc(current), "AnyDoc", "1.2") == "AnyDoc v1.2"
-    assert calls == [{"description": "AnyDoc v1.2"}]
+    assert ServiceAdapter.adopt_server_description(None, _dsvc(current), "Morphyard", "1.2") == "Morphyard v1.2"
+    assert calls == [{"description": "Morphyard v1.2"}]
 
 
 def test_operator_description_is_never_overwritten(monkeypatch):
     calls = _capture_updates(monkeypatch)
-    assert ServiceAdapter.adopt_server_description(None, _dsvc("Our document converter"), "AnyDoc", "1.2",
+    assert ServiceAdapter.adopt_server_description(None, _dsvc("Our document converter"), "Morphyard", "1.2",
                                                    "Converts documents") is None
     # locked servers tell us nothing
     assert ServiceAdapter.adopt_server_description(None, _dsvc(None), "(requires auth)") is None
@@ -85,7 +85,7 @@ def _online(monkeypatch):
     from src.discovery.scanner import MCPVerifyResult
 
     monkeypatch.setattr(scanner_mod.get_scanner(), "verify_mcp_service", AsyncMock(return_value=MCPVerifyResult(
-        success=True, reachable=True, server_name="AnyDoc", server_version="1.2",
+        success=True, reachable=True, server_name="Morphyard", server_version="1.2",
         server_description="Converts documents")))
 
 

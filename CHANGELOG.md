@@ -4,6 +4,9 @@ All notable changes to MCP Gate (formerly MCP Center) are documented here. The f
 
 ## [Unreleased]
 
+### Docs
+- **Docs: roadmap and README rewritten** (#28). `ROADMAP.md` and a new `ROADMAP.zh-TW.md` list what shipped and the plan for 1.4 to 1.9 and later, with a GitHub milestone per version and an issue per item. Both READMEs were rewritten: badges, a screenshot, and a quick start with a complete FastMCP server protected by MCP Gate (`examples/fastmcp_server_hooks.py`: JWKS verification, a required scope, and the revocation feed through `MCPGateVerifier` when a resource-server client is configured), called with a personal access token. How it works, configuration, the revocation feed, the console pages and the API moved to `docs/reference.md` and `docs/reference.zh-TW.md`.
+
 ## [1.3.1] — 2026-11-09
 
 ### Fixed
