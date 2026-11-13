@@ -3,7 +3,7 @@
 Until an owner exists, POST /api/session/setup creates one. It used to need no
 credential, and MCP Gate listens on every interface by default, so on a fresh
 install whoever reached the server first became the owner. The token is printed
-in the startup log and kept in data/secrets.json; setup requires it and discards
+in the startup log and kept in secrets/secrets.json; setup requires it and discards
 it once the owner exists.
 """
 

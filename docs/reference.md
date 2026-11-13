@@ -53,9 +53,11 @@ A key may be set in one file only: the same key in two files, or a missing file,
 |---|---|---|
 | `OAUTH_ISSUER` | `http://localhost:4568` | Public URL of MCP Gate. Also decides the port MCP Gate binds. **Change this for any non-local deployment.** |
 | `DATABASE_URL` | `sqlite:///data/mcp_gate.db` | Point at `postgresql://…` to use PostgreSQL (`uv sync --extra postgres`). |
-| `SESSION_SECRET_KEY`, `ENCRYPTION_KEY` | auto-generated | Stored in `data/secrets.json` when unset. `ENCRYPTION_KEY` protects private keys and stored secrets; rotating it makes them unreadable. |
+| `SESSION_SECRET_KEY`, `ENCRYPTION_KEY` | auto-generated | Stored in `secrets/secrets.json` when unset (see `MCP_GATE_SECRETS_DIR`). `ENCRYPTION_KEY` protects private keys and stored secrets; rotating it makes them unreadable. |
+| `MCP_GATE_SECRETS_DIR` | `secrets` | Directory for the generated secrets, kept apart from `data/` (mode `0700`, the file `0600`). An existing `data/secrets.json` is moved here on the first start. Back it up separately from `data/`; in Docker give it its own volume. |
+| `MCP_GATE_SECRETS_FILE` | — | An exact file to use instead (nothing is moved into it). |
 | `ADMIN_EMAIL`, `ADMIN_PASSWORD` | — | Create the owner account at first start instead of using `/setup`. |
-| `MCP_GATE_SETUP_TOKEN` | auto-generated | The one-time token `/setup` asks for. Generated into `data/secrets.json` and printed in the log while no owner exists; set it when the log is hard to reach (a container). |
+| `MCP_GATE_SETUP_TOKEN` | auto-generated | The one-time token `/setup` asks for. Generated into `secrets/secrets.json` and printed in the log while no owner exists; set it when the log is hard to reach (a container). |
 | `OAUTH_ACCESS_EXPIRE_MINUTES`, `OAUTH_REFRESH_EXPIRE_DAYS` | `15`, `30` | OAuth token lifetimes (personal access tokens choose their own). |
 | `OAUTH_DCR_AUTO_APPROVE` | `true` | Whether dynamically registered clients are usable immediately (the consent screen still gates them) or must be approved in the console. |
 | `OAUTH_CIMD_ENABLED`, `OAUTH_CIMD_AUTO_APPROVE` | `true`, `true` | Accept https URLs as `client_id` ([Client ID Metadata Documents](#client-id-metadata-documents)); whether such a client is usable at once or waits for approval in the console. |

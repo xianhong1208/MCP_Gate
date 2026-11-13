@@ -1,6 +1,6 @@
 """Strength check for the two server secrets, SESSION_SECRET_KEY and ENCRYPTION_KEY.
 
-Values MCP Gate generates itself (``data/secrets.json``) are 43 random URL-safe characters. The risk is a value
+Values MCP Gate generates itself (``secrets/secrets.json``) are 43 random URL-safe characters. The risk is a value
 set by hand: a placeholder copied from an example, a short word. A guessable SESSION_SECRET_KEY lets anyone forge
 a console session; a guessable ENCRYPTION_KEY exposes the signing private keys stored in the database.
 
@@ -106,6 +106,6 @@ def check_startup_secrets(*, fresh_install: bool) -> List[dict]:
     if refused:
         raise WeakSecretError(
             "Refusing to start a new install with a trivial secret: " + ", ".join(refused) + ". Set at least "
-            f"{MIN_LENGTH} random characters, or unset the variable and MCP Gate generates one in data/secrets.json."
+            f"{MIN_LENGTH} random characters, or unset the variable and MCP Gate generates one in secrets/secrets.json."
         )
     return weak

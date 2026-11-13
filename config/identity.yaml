@@ -28,7 +28,7 @@ identity:
 
 # Admin console login session (httpOnly cookie)
 session:
-  # Leave empty -> generated on first start and stored in data/secrets.json
+  # Leave empty -> generated on first start and stored in secrets/secrets.json
   secret_key: "${SESSION_SECRET_KEY:-}"
   expire_hours: ${SESSION_EXPIRE_HOURS:-12}
   idle_timeout_minutes: ${SESSION_IDLE_TIMEOUT_MINUTES:-30}

@@ -20,7 +20,7 @@ import pytest
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-# Tests do not read .env / data/secrets.json: fixed keys and a separate secrets file
+# Tests do not read .env / secrets/secrets.json: fixed keys and a separate secrets file
 os.environ.setdefault("ENCRYPTION_KEY", "test-encryption-key-not-for-production")
 os.environ.setdefault("SESSION_SECRET_KEY", "test-session-secret-key-not-for-production")
 os.environ["MCP_GATE_SECRETS_FILE"] = os.path.join(tempfile.gettempdir(), "mcp-gate-test-secrets.json")

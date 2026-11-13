@@ -78,8 +78,9 @@ catalog/images/*
 # --- Scratch config left behind by local test runs ---
 config/test_config.yaml
 
-# --- Runtime state: SQLite database and secrets generated on first start ---
+# --- Runtime state: SQLite database, and the secrets generated on first start (kept apart, #29) ---
 data/
+/secrets/
 
 # --- Screenshots and browser-automation leftovers in the repo root ---
 /*.png

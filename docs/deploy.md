@@ -131,7 +131,7 @@ sudo systemctl enable --now mcp-gate
 
 Run **one process only** — do not add uvicorn/gunicorn workers or scale out replicas. The rate limiter keeps its counters in memory and the scheduler (token purges, audit retention, health checks) runs inside the process, so several processes would each enforce their own limit and run every job once per process. MCP Gate warns at startup when `WEB_CONCURRENCY` or `UVICORN_WORKERS` is greater than 1.
 
-`data/` holds the SQLite database and `data/secrets.json`; back both up together. Losing `secrets.json` makes the encrypted private keys unreadable, which invalidates all tokens.
+`data/` holds the SQLite database; `secrets/` holds `secrets.json` with `ENCRYPTION_KEY` (directory mode `0700`, file `0600`; `MCP_GATE_SECRETS_DIR` moves it). They are kept apart on purpose, so a copy of `data/` alone does not carry the key that decrypts the private keys stored in it: **back up `secrets/` separately from `data/`** (another medium, or encrypted). You need both to restore; losing `secrets.json` makes the encrypted private keys unreadable, which invalidates all tokens. An install from before 1.4 kept the file at `data/secrets.json`; the first start moves it to `secrets/` and logs the move. In a container, mount `secrets/` as its own volume (or a Docker secret, with `MCP_GATE_SECRETS_FILE` pointing at it), never inside the data volume.
 
 ## 5. Optional: PostgreSQL
 
