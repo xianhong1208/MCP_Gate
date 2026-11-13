@@ -39,6 +39,8 @@ cp .env.example .env      # 可省略:所有設定都有可用的預設值
 uv run python main.py
 ```
 
+設定是環境變數(`.env`),由 `config/` 底下五個檔案讀取:`database.yaml`、`oauth.yaml`、`identity.yaml`、`security.yaml`、`system.yaml`。從 1.3(單一 `config.yaml`)升級:見[升級到 1.4](docs/reference.zh-TW.md#升級到-14)。
+
 啟動 log 會告訴你每樣東西在哪裡:
 
 ```

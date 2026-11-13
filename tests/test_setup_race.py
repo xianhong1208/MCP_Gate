@@ -97,7 +97,7 @@ def test_migration_gives_the_slot_to_the_earliest_existing_account(tmp_path, mon
     from src.config import Config
 
     url = f"sqlite:///{tmp_path / 'm.db'}"
-    monkeypatch.setenv("MCP_GATE_CONFIG", str(tmp_path / "missing.yaml"))
+    monkeypatch.setenv("MCP_GATE_CONFIG_DIR", str(tmp_path / "missing-config"))
     db_cfg = Config.get_database_config()
     saved = db_cfg.url
     db_cfg.url = url

@@ -1,0 +1,15 @@
+# MCP Gate configuration: database connection and pool
+#
+# The configuration is five files in this directory (database, oauth, identity, security, system), merged at
+# startup; a key may be set in one file only. Environment variable syntax:
+#   ${VAR_NAME}           required
+#   ${VAR_NAME:-default}  optional, with a default value
+# Sensitive and per-machine values (keys, passwords, URLs) come only from environment variables (.env); never write
+# them here directly.
+
+database:
+  # Defaults to a single SQLite file (zero dependencies); for PostgreSQL set DATABASE_URL=postgresql://user:pwd@host/db
+  url: "${DATABASE_URL:-sqlite:///data/mcp_gate.db}"
+  echo: false
+  pool_size: 5
+  max_overflow: 10

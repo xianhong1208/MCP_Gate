@@ -39,6 +39,8 @@ cp .env.example .env      # optional: every setting has a working default
 uv run python main.py
 ```
 
+Settings are environment variables (`.env`) read by five files under `config/`: `database.yaml`, `oauth.yaml`, `identity.yaml`, `security.yaml` and `system.yaml`. Upgrading from 1.3, where it was one `config.yaml`: see [Upgrading to 1.4](docs/reference.md#upgrading-to-14).
+
 The startup log says where everything is:
 
 ```

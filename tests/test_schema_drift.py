@@ -25,8 +25,8 @@ def scratch_db(tmp_path, monkeypatch):
     from db.database import reset_engine
     from src.config import Config
 
-    # alembic/env.py loads MCP_GATE_CONFIG when it can; point it nowhere so it keeps the in-memory test config
-    monkeypatch.setenv("MCP_GATE_CONFIG", str(tmp_path / "missing.yaml"))
+    # alembic/env.py loads MCP_GATE_CONFIG_DIR when it can; point it nowhere so it keeps the in-memory test config
+    monkeypatch.setenv("MCP_GATE_CONFIG_DIR", str(tmp_path / "missing-config"))
 
     schema = None
     if using_postgres():
