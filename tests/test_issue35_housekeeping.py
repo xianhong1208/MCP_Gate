@@ -128,8 +128,8 @@ def migrated_db(tmp_path, monkeypatch):
     from src.config import Config
 
     url = f"sqlite:///{tmp_path / 'migrations.db'}"
-    # env.py loads MCP_GATE_CONFIG; point it nowhere so it keeps the in-memory test config (and our URL)
-    monkeypatch.setenv("MCP_GATE_CONFIG", str(tmp_path / "missing.yaml"))
+    # env.py loads MCP_GATE_CONFIG_DIR; point it nowhere so it keeps the in-memory test config (and our URL)
+    monkeypatch.setenv("MCP_GATE_CONFIG_DIR", str(tmp_path / "missing-config"))
     db_cfg = Config.get_database_config()
     saved_url = db_cfg.url
     db_cfg.url = url

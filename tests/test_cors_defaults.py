@@ -19,7 +19,7 @@ def test_shipped_config_allows_no_extra_origins(monkeypatch):
     monkeypatch.delenv("CORS_ALLOWED_ORIGINS", raising=False)
     previous = Config.get_config_model()
     try:
-        Config.set_config(os.path.join(os.path.dirname(__file__), "..", "config", "config.yaml"))
+        Config.set_config_dir(os.path.join(os.path.dirname(__file__), "..", "config"))
         assert Config.get_cors_config().allowed_origins == []
     finally:
         Config.set_model(previous)
@@ -29,7 +29,7 @@ def test_origins_can_be_opted_in_from_the_environment(monkeypatch):
     monkeypatch.setenv("CORS_ALLOWED_ORIGINS", "http://localhost:5173, https://console.example ")
     previous = Config.get_config_model()
     try:
-        Config.set_config(os.path.join(os.path.dirname(__file__), "..", "config", "config.yaml"))
+        Config.set_config_dir(os.path.join(os.path.dirname(__file__), "..", "config"))
         assert Config.get_cors_config().allowed_origins == ["http://localhost:5173", "https://console.example"]
     finally:
         Config.set_model(previous)

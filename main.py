@@ -5,7 +5,7 @@ OAuth 2.1 Authorization Server + MCP server admin console.
 
 Usage:
     python main.py
-    python main.py --config config/config.yaml --port 4568
+    python main.py --config-dir config --port 4568
     python main.py --migrate-only status
 """
 
@@ -31,6 +31,7 @@ from fastapi.staticfiles import StaticFiles  # noqa: E402
 
 from db import make_session, seed_database  # noqa: E402
 from src.config import Config  # noqa: E402
+from src.config.manager import default_config_dir  # noqa: E402
 from src.discovery.websocket_manager import get_ws_manager  # noqa: E402
 from src.exceptions.handlers import register_exception_handlers  # noqa: E402
 from src.logging import RequestLoggingMiddleware, get_logger, setup_logging  # noqa: E402
@@ -223,7 +224,8 @@ def warn_if_multiple_workers(env=None) -> bool:
 
 def parse_args():
     parser = argparse.ArgumentParser(description="MCP Gate")
-    parser.add_argument("--config", type=str, default="config/config.yaml")
+    parser.add_argument("--config-dir", type=str, default=None,
+                        help="Directory holding the five config files (default: $MCP_GATE_CONFIG_DIR or config)")
     parser.add_argument("--host", type=str)
     parser.add_argument("--port", type=int)
     parser.add_argument("--reload", action="store_true")
@@ -303,7 +305,7 @@ def _print_banner(summary: dict, host: str, port: int) -> None:
 def main():
     args = parse_args()
     try:
-        Config.set_config(args.config)
+        Config.set_config_dir(args.config_dir or default_config_dir())
         config = Config.get_config_model()
     except Exception as e:
         print(f"Error loading config: {e}")
@@ -313,6 +315,9 @@ def main():
     setup_logging(level=log_config.level, format_type=log_config.format, log_dir=log_config.log_dir,
                   rotation=log_config.rotation, rotation_max_size=log_config.rotation_max_size,
                   retention=log_config.retention, compression=log_config.compression)
+    # Logged only now so they reach the log file too, not only the terminal
+    for notice in Config.get_startup_notices():
+        logger.error(notice)
     warn_if_multiple_workers()
 
     if args.migrate_only:

@@ -37,7 +37,17 @@ To change when the consent screen appears, edit [`src/oauth/consent_policy.py`](
 
 ## Configuration
 
-Settings live in [`config/config.yaml`](../config/config.yaml) and read their secrets from environment variables (`.env`). The ones you are likely to touch:
+Settings live in five files under [`config/`](../config/), merged at startup:
+
+| File | Holds |
+|---|---|
+| [`database.yaml`](../config/database.yaml) | `database`: connection and pool |
+| [`oauth.yaml`](../config/oauth.yaml) | `oauth`: issuer, token lifetimes, dynamic client registration, Client ID Metadata Documents (`oauth.cimd`) |
+| [`identity.yaml`](../config/identity.yaml) | `identity`: sign-in methods (local, GitHub, Google), bootstrap admin; `session`: console session |
+| [`security.yaml`](../config/security.yaml) | `rate_limit`, `security` (trusted proxies, cookies, allowed hosts), `cors` |
+| [`system.yaml`](../config/system.yaml) | `server`, `logging`, `scheduler` (cleanup, retention, health checks) |
+
+A key may be set in one file only: the same key in two files, or a missing file, stops startup with an error naming them. `MCP_GATE_CONFIG_DIR` (or `main.py --config-dir`) points at another directory holding the five files. Every secret or per-machine value is a `${VAR:-default}` reference read from the environment (`.env`), so the files hold no secrets and are committed. The variables you are likely to touch:
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -54,7 +64,24 @@ Settings live in [`config/config.yaml`](../config/config.yaml) and read their se
 | `SECURE_COOKIE` | `false` | Set to `true` behind HTTPS. |
 | `CORS_ALLOWED_ORIGINS` | — | Comma-separated extra origins given credentialed access to the console API. Leave empty unless another site must call it; the Vite dev server does not need it. |
 | `ALLOWED_HOSTS` | — | Comma-separated host names MCP Gate answers to besides the `OAUTH_ISSUER` host, `localhost` and IP addresses (e.g. a container service name); `*.suffix` wildcards, `*` disables the check. Other names get 421. |
-| `ENABLE_API_DOCS` | — | `true` exposes OpenAPI at `/docs`. Environment-only; not in `config.yaml`. |
+| `ENABLE_API_DOCS` | — | `true` exposes OpenAPI at `/docs`. Environment-only; not in the config files. |
+| `MCP_GATE_CONFIG_DIR` | `config` | The directory holding the five config files. |
+
+### Upgrading to 1.4
+
+1.4 no longer reads `config/config.yaml`. If it is still there, MCP Gate logs an error at startup (in the log file too) and runs on the five files; its values are ignored. `MCP_GATE_CONFIG` is no longer read either: use `MCP_GATE_CONFIG_DIR`, which names a directory.
+
+| Section of the old `config.yaml` | Now in |
+|---|---|
+| `database` | `config/database.yaml` |
+| `oauth` (with `oauth.cimd`) | `config/oauth.yaml` |
+| `identity`, `session` | `config/identity.yaml` |
+| `rate_limit`, `security`, `cors` | `config/security.yaml` |
+| `server`, `logging`, `scheduler` | `config/system.yaml` |
+
+- **You never edited `config.yaml`** (you set everything through `.env`): nothing to do. The pull brings the five files and removes `config.yaml`; `.env` keeps working as it is.
+- **You edited `config.yaml`**: move your edits into the matching file. `uv run python scripts/split_config.py --old <your old config.yaml> --force` does it for you: it copies each section, with its comments, into its file, then loads both configurations and checks that they are equal field by field. Then delete the old file.
+- **You set `MCP_GATE_CONFIG`**: replace it with `MCP_GATE_CONFIG_DIR=<the directory>`. `python -m db.migrate --config` is now `--config-dir`, and so is `main.py --config`.
 
 ### Client ID Metadata Documents
 
@@ -74,7 +101,7 @@ The MCP authorization specification (2026-07-28) deprecates dynamic registration
 - Public clients (`none`) use PKCE. A document declaring `private_key_jwt` (in `token_endpoint_auth_methods_supported` or `token_endpoint_auth_method`) must carry `jwks` or `jwks_uri`, and then must authenticate with a signed JWT. Shared-secret methods and `client_secret` are refused. `client_credentials` is not available to these clients.
 - The client appears under **OAuth Clients** with the URL as its id (*Metadata document*). Revoking it blocks that URL until you delete it; deleting it lets the URL be fetched again. Tokens, consents and the audit log work as for any other client. Unused ones are purged after `dcr_unused_client_days`, like dynamically registered clients.
 - The consent screen says the client is identified only by its URL's host: its name and links are unverified.
-- MCP Gate fetches only public addresses (no loopback, private, link-local or metadata-service ranges), does not follow redirects, reads at most 5 KB within 5 seconds, and requires `application/json`. Documents are cached for their `Cache-Control: max-age`, between 1 minute and 1 day; a failed fetch is not retried for 30 seconds. Every limit is under `oauth.cimd` in `config/config.yaml`; `OAUTH_CIMD_PRIVATE_NETWORK_HOSTS` lets named hosts on a private network through (development or intranet only).
+- MCP Gate fetches only public addresses (no loopback, private, link-local or metadata-service ranges), does not follow redirects, reads at most 5 KB within 5 seconds, and requires `application/json`. Documents are cached for their `Cache-Control: max-age`, between 1 minute and 1 day; a failed fetch is not retried for 30 seconds. Every limit is under `oauth.cimd` in `config/oauth.yaml`; `OAUTH_CIMD_PRIVATE_NETWORK_HOSTS` lets named hosts on a private network through (development or intranet only).
 
 Dynamic registration (`/oauth/register`) keeps working alongside; set `OAUTH_CIMD_ENABLED=false` to accept registered clients only.
 
