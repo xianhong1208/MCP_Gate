@@ -27,7 +27,7 @@ from db.models import (
     local_now,
 )
 from db.database import make_session
-from db.seed import CONSOLE_CLIENT_ID, SCANNER_CLIENT_ID
+from db.seed import CONSOLE_CLIENT_ID, LEGACY_CLIENT_IDS, SCANNER_CLIENT_ID
 from src.audit import AuditAction, AuditStatus, ResourceType, record_oauth_event
 from src.adapters import (
     OAuthAuthRequestAdapter, OAuthClientAdapter, OAuthCodeAdapter, OAuthConsentAdapter, OAuthScopeAdapter,
@@ -885,10 +885,17 @@ def authorization_code_grant(
     return _token_response(access, expires_in, scope, refresh)
 
 
+def _issued_to(claims: dict, client: OAuthClient) -> bool:
+    """The token was issued to this client. A token signed before the built-in clients were renamed carries the old
+    id (personal access tokens live up to a year), which still counts as the renamed client."""
+    claimed = claims.get("client_id")
+    return LEGACY_CLIENT_IDS.get(claimed, claimed) == client.client_id
+
+
 def refresh_token_grant(db: Session, *, client: OAuthClient, refresh_token: str, requested_scope: Optional[str],
                         resource: Optional[str] = None, ip: Optional[str] = None) -> dict:
     claims = verify_jwt(db, refresh_token, expect_use="refresh")
-    if claims.get("client_id") != client.client_id:
+    if not _issued_to(claims, client):
         raise OAuthError("invalid_grant", "refresh token belongs to another client")
     rec = OAuthTokenAdapter.get(db, claims.get("jti", ""))
     if rec is None:
@@ -961,7 +968,7 @@ def revoke_token(db: Session, *, client: OAuthClient, token: str, ip: Optional[s
         claims = verify_jwt(db, token)
     except OAuthError:
         return
-    if claims.get("client_id") != client.client_id:
+    if not _issued_to(claims, client):
         return
     rec = OAuthTokenAdapter.get(db, claims.get("jti", ""))
     if rec is None:
@@ -989,7 +996,7 @@ def introspect_token(db: Session, token: str, *, caller: OAuthClient, ip: Option
         return inactive
     if claims.get("token_use") != "refresh" and not _signed_by_published_key(db, token):
         return inactive  # a resource server would no longer accept it either
-    is_owner = claims.get("client_id") == caller.client_id
+    is_owner = _issued_to(claims, caller)
     if not is_owner:
         rs_audience = resource_server_audience(caller)
         if rs_audience is None or claims.get("token_use") != "access":

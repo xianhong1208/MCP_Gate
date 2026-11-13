@@ -19,7 +19,7 @@ _cache: Dict[str, str] = {}
 
 
 def _store_path() -> Path:
-    override = os.environ.get("MCP_GATE_SECRETS_FILE") or os.environ.get("MCP_CENTER_SECRETS_FILE")  # pre-rename name
+    override = os.environ.get("MCP_GATE_SECRETS_FILE")
     return Path(override) if override else _DEFAULT_PATH
 
 

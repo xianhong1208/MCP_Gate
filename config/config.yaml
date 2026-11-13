@@ -7,7 +7,7 @@
 
 database:
   # Defaults to a single SQLite file (zero dependencies); for PostgreSQL set DATABASE_URL=postgresql://user:pwd@host/db
-  url: "${DATABASE_URL:-sqlite:///data/mcp_center.db}"
+  url: "${DATABASE_URL:-sqlite:///data/mcp_gate.db}"
   echo: false
   pool_size: 5
   max_overflow: 10

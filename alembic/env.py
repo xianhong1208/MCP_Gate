@@ -24,14 +24,14 @@ except ImportError:
 from src.config import Config
 
 # Try to load config if not already loaded
-config_path = os.environ.get("MCP_GATE_CONFIG") or os.environ.get("MCP_CENTER_CONFIG", "config/config.yaml")
+config_path = os.environ.get("MCP_GATE_CONFIG", "config/config.yaml")
 try:
     Config.set_config(config_path)
 except Exception:
     pass  # Config may already be loaded
 
 # Import models for autogenerate support
-from db.database import Base
+from db.database import Base, move_legacy_sqlite_file
 from db import models  # noqa: F401 - ensure all models are imported
 
 # Alembic Config object
@@ -85,6 +85,9 @@ def run_migrations_online() -> None:
     In this scenario we need to create an Engine
     and associate a connection with the context.
     """
+    # `python -m db.migrate upgrade` reaches here without the app's engine: move the old file first, or the
+    # migration would create an empty mcp_gate.db next to it
+    move_legacy_sqlite_file(config.get_main_option("sqlalchemy.url"))
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",

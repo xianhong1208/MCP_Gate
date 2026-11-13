@@ -154,7 +154,7 @@ async def test_revoked_pat_still_valid_offline_but_inactive_on_introspect(gate, 
         r = c.post("/api/oauth/tokens/personal", json={"service_id": mcp_server["service"]["id"], "expires_days": 1, "label": "test"})
         pat, jti = r.json()["access_token"], r.json()["jti"]
         assert c.post(f"/api/oauth/tokens/{jti}/revoke").status_code == 200
-        intro = c.post("/oauth/introspect", data={"token": pat, "client_id": "mcp-center-console"}).json()
+        intro = c.post("/oauth/introspect", data={"token": pat, "client_id": "mcp-gate-console"}).json()
         assert intro["active"] is False
     async with Client(mcp_server["url"], auth=BearerAuth(pat)) as client:
         assert await client.list_tools()

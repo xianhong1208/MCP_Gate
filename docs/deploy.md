@@ -140,7 +140,7 @@ uv sync --extra postgres
 ```
 
 ```bash
-DATABASE_URL=postgresql://mcp:password@localhost/mcp_center
+DATABASE_URL=postgresql://mcp:password@localhost/mcp_gate
 ```
 
 MCP Gate creates the database if the role has `CREATEDB`, runs migrations, and seeds default scopes at startup.

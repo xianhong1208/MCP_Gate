@@ -42,7 +42,7 @@ Access token 的 claim:`iss`、`sub`、`aud`、`scope`、`client_id`、`jti`、`
 | 變數 | 預設 | 用途 |
 |---|---|---|
 | `OAUTH_ISSUER` | `http://localhost:4568` | MCP Gate 的公開網址,同時決定 MCP Gate bind 的 port。**非本機部署一定要改。** |
-| `DATABASE_URL` | `sqlite:///data/mcp_center.db` | 指向 `postgresql://…` 即改用 PostgreSQL(`uv sync --extra postgres`)。 |
+| `DATABASE_URL` | `sqlite:///data/mcp_gate.db` | 指向 `postgresql://…` 即改用 PostgreSQL(`uv sync --extra postgres`)。 |
 | `SESSION_SECRET_KEY`、`ENCRYPTION_KEY` | 自動產生 | 未設定時存在 `data/secrets.json`。`ENCRYPTION_KEY` 保護私鑰與儲存的 secret;更換會讓它們無法解密。 |
 | `ADMIN_EMAIL`、`ADMIN_PASSWORD` | — | 首次啟動直接建立擁有者帳號,不用走 `/setup`。 |
 | `MCP_GATE_SETUP_TOKEN` | 自動產生 | `/setup` 要求的一次性設定碼。尚無擁有者時自動產生到 `data/secrets.json` 並印在 log;log 不方便看時(例如容器)可自行設定。 |

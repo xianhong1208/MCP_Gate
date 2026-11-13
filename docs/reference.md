@@ -42,7 +42,7 @@ Settings live in [`config/config.yaml`](../config/config.yaml) and read their se
 | Variable | Default | Purpose |
 |---|---|---|
 | `OAUTH_ISSUER` | `http://localhost:4568` | Public URL of MCP Gate. Also decides the port MCP Gate binds. **Change this for any non-local deployment.** |
-| `DATABASE_URL` | `sqlite:///data/mcp_center.db` | Point at `postgresql://…` to use PostgreSQL (`uv sync --extra postgres`). |
+| `DATABASE_URL` | `sqlite:///data/mcp_gate.db` | Point at `postgresql://…` to use PostgreSQL (`uv sync --extra postgres`). |
 | `SESSION_SECRET_KEY`, `ENCRYPTION_KEY` | auto-generated | Stored in `data/secrets.json` when unset. `ENCRYPTION_KEY` protects private keys and stored secrets; rotating it makes them unreadable. |
 | `ADMIN_EMAIL`, `ADMIN_PASSWORD` | — | Create the owner account at first start instead of using `/setup`. |
 | `MCP_GATE_SETUP_TOKEN` | auto-generated | The one-time token `/setup` asks for. Generated into `data/secrets.json` and printed in the log while no owner exists; set it when the log is hard to reach (a container). |

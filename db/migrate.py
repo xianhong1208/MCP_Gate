@@ -378,7 +378,7 @@ Examples:
     parser.add_argument("-m", "--message", help="Migration message (for generate)")
     parser.add_argument("-r", "--revision", default="-1",
                        help="Target revision for upgrade/downgrade/stamp")
-    parser.add_argument("--config", default=os.environ.get("MCP_GATE_CONFIG") or os.environ.get("MCP_CENTER_CONFIG", "config/config.yaml"),
+    parser.add_argument("--config", default=os.environ.get("MCP_GATE_CONFIG", "config/config.yaml"),
                        help="Path to config.yaml")
     args = parser.parse_args()
 
