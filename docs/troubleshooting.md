@@ -83,7 +83,7 @@ The list keeps at most 20 hosts (internet-named ones are dropped first, then the
 Another process is listening on the port derived from `OAUTH_ISSUER`. Stop it or set `SERVER_PORT`.
 
 **Tokens stop verifying after a config change**
-Changing `OAUTH_ISSUER` or `ENCRYPTION_KEY` invalidates tokens: the first changes `iss`, the second makes the stored private keys unreadable. Restore the old value or re-issue tokens.
+Changing `OAUTH_ISSUER` or `ENCRYPTION_KEY` invalidates tokens: the first changes `iss`, the second makes the stored private keys unreadable. Restore the old value or re-issue tokens. To change `ENCRYPTION_KEY`, rotate it instead: `python -m src.cli encryption-key rotate` (see `SECURITY.md`); if you already changed it in the environment, put the old value in `ENCRYPTION_KEYS_PREVIOUS` and run the command. `python -m src.cli encryption-key status` shows how many values each key holds and whether any is unreadable.
 
 **Health shows `error` / `offline` for a server that works**
 The health check connects with a self-minted token for servers that require auth. If the server uses its own static bearer token instead, set it on the service (**Edit → Static bearer token**). For servers without auth, untick **Requires authentication**.

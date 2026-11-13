@@ -97,6 +97,10 @@ class OAuthConfig(BaseModel):
     # token lifetime plus 5 minutes of clock skew. A retired key also stays published while any live access token
     # or PAT it signed is still recorded (PATs can outlive this by months).
     retired_key_publish_minutes: Optional[int] = None
+    # #30: a new signing key is made every this many days (0 = only by hand, "Rotate now" in the console) ...
+    signing_key_rotation_days: int = Field(90, ge=0)
+    # ... and published in the JWKS this long before it signs anything, so resource servers cache it first
+    signing_key_prepublish_minutes: int = Field(1440, ge=0)
     # Client ID Metadata Documents (an https URL as client_id, no registration)
     cimd: ClientMetadataConfig = ClientMetadataConfig()
 

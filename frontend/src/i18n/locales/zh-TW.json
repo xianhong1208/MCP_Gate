@@ -789,19 +789,44 @@
     "keys": {
       "title": "簽章金鑰",
       "subtitle": "用來簽 token 的 RS256 金鑰,公開於 /.well-known/jwks.json。",
-      "rotate": "輪替金鑰",
+      "rotate": "立即輪替",
       "rotating": "輪替中...",
       "rotateConfirmTitle": "輪替簽章金鑰",
-      "rotateConfirmBody": "新簽發的 token 會改用新金鑰;既有 token 到期前仍有效。有快取 JWKS 的 server 可能需要幾分鐘才會取得新金鑰。",
-      "rotated": "簽章金鑰已輪替",
+      "rotateConfirmBody": "新金鑰會立刻公開在 JWKS,{{hours}} 小時後才開始簽 token,讓有快取 JWKS 的 server 先拿到它。目前金鑰簽過的 token 到期前仍然有效。",
+      "rotated": "新金鑰已公開,將於 {{date}} 開始簽發",
+      "rotatedNow": "新金鑰已公開並開始簽發",
       "rotateFailed": "金鑰輪替失敗",
+      "rotatePendingHint": "已有一把新金鑰公開中,正等著開始簽發",
+      "schedule": "金鑰每 {{days}} 天自動輪替;新金鑰會在開始簽發前 {{hours}} 小時先公開。",
+      "scheduleOff": "自動輪替已關閉(oauth.signing_key_rotation_days = 0)。",
+      "nextRotation": "下次輪替:{{date}}。",
       "created": "建立於 {{date}}",
-      "active": "使用中",
-      "inactive": "已退役",
+      "signsFrom": "{{date}} 起簽發",
+      "retiredOn": "{{date}} 退役",
+      "revokedOn": "{{date}} 撤銷",
+      "liveTokens_other": "{{count}} 個未過期的 token",
       "empty": "沒有簽章金鑰",
-      "published": "已停用，仍公開",
-      "publishedHint": "不再簽發新 token，但會留在 JWKS 中，直到它簽過的最後一個 token 過期。",
-      "retiredHint": "已不在 JWKS 中：它簽過的 token 不再被接受。"
+      "state": {
+        "active": "使用中",
+        "pending": "已公開,尚未簽發",
+        "published": "已退役,仍公開",
+        "retired": "已退役",
+        "revoked": "已撤銷"
+      },
+      "hint": {
+        "active": "所有新 token 都由它簽發。",
+        "pending": "已在 JWKS 中,讓 resource server 在它簽任何 token 之前先快取起來。",
+        "published": "不再簽發新 token,但會留在 JWKS 中,直到它簽過的最後一個 token 過期。",
+        "retired": "已不在 JWKS 中:它簽過的 token 不再被接受。它簽過的 token 全部過期後會被刪除。",
+        "revoked": "已撤銷:不在 JWKS 中,它簽過的 token 一律不被接受。"
+      },
+      "revoke": "撤銷",
+      "revokeAria": "撤銷金鑰 {{kid}}",
+      "revokeConfirmTitle": "要撤銷這把簽章金鑰嗎?",
+      "revokeConfirmBody_other": "緊急情況用,例如金鑰外洩。它會立刻從 JWKS 移除,它簽過的 {{count}} 個未過期 token 會失效(一併撤銷)。這個動作無法復原。",
+      "revokeActiveNote": "這是使用中的金鑰:會立刻換上新金鑰,沒有平常一天的預先公開,resource server 會在收到它簽的第一個 token 時重新抓 JWKS。",
+      "revoked_other": "金鑰已撤銷,{{count}} 個 token 已失效",
+      "revokeFailed": "金鑰撤銷失敗"
     },
     "resourceServer": {
       "label": "代表的資源伺服器",
@@ -1002,7 +1027,7 @@
       "oauth_consent_delete": "移除同意紀錄",
       "oauth_scope_upsert": "儲存 Scope",
       "oauth_scope_delete": "刪除 Scope",
-      "oauth_key_rotate": "輪替簽章金鑰",
+      "oauth_key_rotate": "排定簽章金鑰輪替",
       "oauth_client_auth_failed": "用戶端驗證失敗",
       "oauth_consent_approve": "同意授權",
       "oauth_consent_deny": "拒絕授權",
@@ -1019,7 +1044,10 @@
       "admin_update": "管理員更新",
       "cleanup_expired": "清除過期項目",
       "rate_limit_exceeded": "速率限制",
-      "oauth_client_bind": "設定 Client 資源伺服器"
+      "oauth_client_bind": "設定 Client 資源伺服器",
+      "oauth_key_activate": "啟用簽章金鑰",
+      "oauth_key_revoke": "撤銷簽章金鑰",
+      "oauth_key_delete": "刪除簽章金鑰"
     },
     "detail": {
       "title": "稽核日誌詳情",
@@ -1086,7 +1114,10 @@
       "invalid_scope": "無效的 scope",
       "unauthorized_client": "此 client 不允許使用該 grant",
       "unsupported_grant_type": "不支援的 grant type",
-      "server_error": "授權伺服器錯誤"
+      "server_error": "授權伺服器錯誤",
+      "key_rotation_pending": "已有一把新金鑰公開中,將於 {{activates_at}} 開始簽發",
+      "key_not_found": "找不到簽章金鑰",
+      "key_already_revoked": "這把簽章金鑰已經撤銷"
     },
     "validation": {
       "too_long": "「{{field}}」太長（最多 {{max}} 個字元）。"
