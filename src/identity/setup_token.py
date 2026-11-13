@@ -3,7 +3,7 @@
 Until an owner exists, /api/session/setup creates one. Without a credential that
 is whoever reaches the server first, and it listens on every interface by default.
 So while no owner exists a random token is generated, printed in the startup log
-and kept in data/secrets.json as SETUP_TOKEN (mode 0600, readable only by the
+and kept in secrets/secrets.json as SETUP_TOKEN (mode 0600, readable only by the
 account running MCP Gate); setup requires it and discards it once the owner exists.
 Jenkins guards its setup wizard the same way.
 

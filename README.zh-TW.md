@@ -49,7 +49,7 @@ uv run python main.py
   Metadata:   http://localhost:4568/.well-known/oauth-authorization-server
   JWKS:       http://localhost:4568/.well-known/jwks.json
   No admin account yet → open http://localhost:4568/setup to create the owner
-  Setup token: 7Qw…  (also in data/secrets.json as SETUP_TOKEN; it stops working once the owner exists)
+  Setup token: 7Qw…  (also in secrets/secrets.json as SETUP_TOKEN; it stops working once the owner exists)
 ```
 
 打開 <http://localhost:4568/setup>,貼上 log 裡的**設定碼**並建立擁有者帳號。(也可以在第一次啟動前設好 `ADMIN_EMAIL` 與 `ADMIN_PASSWORD`。)

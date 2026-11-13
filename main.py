@@ -314,6 +314,13 @@ def main():
                   rotation=log_config.rotation, rotation_max_size=log_config.rotation_max_size,
                   retention=log_config.retention, compression=log_config.compression)
     warn_if_multiple_workers()
+    # Before anything reads a secret, and after logging is set up so the move lands in the log file (#29)
+    from src.utils.secrets_store import migrate_legacy_store
+    try:
+        migrate_legacy_store()
+    except OSError as e:
+        logger.error(f"Could not move data/secrets.json into the secrets directory: {e}")
+        sys.exit(1)
 
     if args.migrate_only:
         from db.migrate import run_migration_command

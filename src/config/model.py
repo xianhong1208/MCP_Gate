@@ -25,7 +25,7 @@ class ServerConfig(BaseModel):
 class SessionConfig(BaseModel):
     """Admin console login session (an HS256 JWT inside an httpOnly cookie).
 
-    When secret_key is empty, the secrets store generates one and persists it (data/secrets.json).
+    When secret_key is empty, the secrets store generates one and persists it (secrets/secrets.json).
     """
     secret_key: str = ""
     expire_hours: int = 12

@@ -49,7 +49,7 @@ The startup log says where everything is:
   Metadata:   http://localhost:4568/.well-known/oauth-authorization-server
   JWKS:       http://localhost:4568/.well-known/jwks.json
   No admin account yet → open http://localhost:4568/setup to create the owner
-  Setup token: 7Qw…  (also in data/secrets.json as SETUP_TOKEN; it stops working once the owner exists)
+  Setup token: 7Qw…  (also in secrets/secrets.json as SETUP_TOKEN; it stops working once the owner exists)
 ```
 
 Open <http://localhost:4568/setup>, paste the **setup token** from the log and create the owner account. (Or set `ADMIN_EMAIL` and `ADMIN_PASSWORD` before the first start.)

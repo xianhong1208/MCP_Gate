@@ -409,7 +409,7 @@ def test_old_secrets_file_variable_is_ignored(tmp_path, monkeypatch):
 
     monkeypatch.delenv("MCP_GATE_SECRETS_FILE", raising=False)
     monkeypatch.setenv("MCP_" + "CENTER_SECRETS_FILE", str(tmp_path / "old.json"))
-    assert secrets_store._store_path() == secrets_store._DEFAULT_PATH
+    assert secrets_store._store_path() == secrets_store._DEFAULT_DIR / secrets_store.FILE_NAME
 
 
 @pytest.mark.parametrize("module", ["db/migrate.py", "alembic/env.py"])
