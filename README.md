@@ -1,52 +1,35 @@
 # MCP Gate
 
-**An open-source OAuth 2.1 authorization server and management console for your Model Context Protocol servers.**
-
-MCP Gate puts standards-based authentication in front of every MCP server you run. A [FastMCP](https://github.com/PrefectHQ/fastmcp) server becomes protected with one `RemoteAuthProvider`, and MCP clients such as Claude Code, Claude Desktop and Cursor connect through the OAuth flow they already implement — no custom tokens, no verification callbacks, no per-server auth code.
-
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-green.svg)](pyproject.toml)
-[![OAuth 2.1](https://img.shields.io/badge/OAuth-2.1-6366f1.svg)](#how-it-works)
-[![Works with FastMCP](https://img.shields.io/badge/FastMCP-3.x-22c55e.svg)](https://gofastmcp.com)
-[![Tests](https://img.shields.io/badge/tests-pytest-informational.svg)](CONTRIBUTING.md)
+[![CI](https://github.com/xianhong1208/MCP_Gate/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/xianhong1208/MCP_Gate/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/xianhong1208/MCP_Gate)](https://github.com/xianhong1208/MCP_Gate/releases/latest)
 
-[繁體中文](README.zh-TW.md) · [Quick start](#quick-start) · [How it works](#how-it-works) · [Configuration](#configuration) · [Deploy](docs/deploy.md) · [Troubleshooting](docs/troubleshooting.md) · [Architecture](docs/architecture.md)
+**Sign-in, tokens and a console for the MCP servers you run: an open-source OAuth 2.1 authorization server built for the Model Context Protocol.**
 
-```
-┌──────────────────────┐   ① 401 + protected-resource metadata   ┌──────────────────────┐
-│      MCP client      │ ───────────────────────────────────────▶ │   your FastMCP server │
-│ Claude Code / Cursor │ ◀─────────────────────────────────────── │   (resource server)   │
-│  Claude Desktop / …  │   ⑤ Authorization: Bearer <JWT>          │                      │
-└──────────┬───────────┘                                          └──────────┬───────────┘
-           │ ② discovery + dynamic client registration                       │ ④ fetch JWKS once,
-           │ ③ authorize (PKCE) → consent → code → token                     │    verify offline
-           ▼                                                                 ▼
-┌──────────────────────────────────────────────────────────────────────────────────────────┐
-│  MCP Gate — OAuth 2.1 authorization server + console                                    │
-│  /.well-known/oauth-authorization-server   /.well-known/jwks.json                        │
-│  /oauth/register  /oauth/authorize  /oauth/token  /oauth/revoke  /oauth/introspect       │
-└──────────────────────────────────────────────────────────────────────────────────────────┘
-```
+[繁體中文](README.zh-TW.md) · [Reference](docs/reference.md) · [Deploy](docs/deploy.md) · [Roadmap](ROADMAP.md) · [Changelog](CHANGELOG.md)
+
+![The MCP Gate console: a FastMCP server's page with its audience, a wired revocation feed and its two tools](docs/images/console-service.png)
+
+MCP Gate puts standards-based authentication in front of every MCP server you run. A [FastMCP](https://gofastmcp.com) server is protected with a few lines, MCP clients such as Claude Code, Claude Desktop and Cursor connect through the OAuth flow they already implement, and scripts use personal access tokens. Your servers verify tokens offline against MCP Gate's public keys; MCP Gate is never on the request path.
+
+## What's new
+
+**1.3.1** (2026-11-09): signing in from the consent screen returns to the authorization request, and two services can no longer share one audience. 1.3.0 added a one-time setup token for the first owner and a dependency audit in CI. See the [changelog](CHANGELOG.md) for every release, and the [roadmap](ROADMAP.md) for what comes next.
 
 ## Key features
 
-- **Standards-based authorization server.** Covers the authorization requirements of the [MCP specification (2025-06-18)](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization): RFC 8414 metadata, RFC 7591 dynamic client registration, [Client ID Metadata Documents](#client-id-metadata-documents) (the registration method of MCP 2026-07-28), authorization code + PKCE (S256), refresh-token rotation with replay detection, RFC 7009 revocation, RFC 7662 introspection, RFC 8707 resource indicators, RFC 9207 `iss` responses.
-- **Asymmetric signing, offline verification.** RS256 keys with JWKS publishing and rotation. MCP servers verify tokens locally with the public key; MCP Gate is never on the request path.
-- **Revocation that reaches offline verifiers.** A [revocation feed](#revocation-feed) lets each MCP server learn, within seconds, which of its tokens were revoked — personal access tokens included — without calling MCP Gate per request.
-- **One-block FastMCP integration.** `RemoteAuthProvider` + `JWTVerifier(jwks_uri, issuer, audience)` protects a server. Tokens are bound to each server's audience, so a token for one server never works on another.
-- **Consent screen.** Dynamically registered clients and clients identified by a metadata URL ask the owner for permission on first connect; decisions can be remembered per client and server. Clients you register yourself skip the prompt.
-- **Personal access tokens (PATs).** Mint long-lived bearer tokens from the console for scripts, CI and clients that cannot run an OAuth flow, with ready-to-paste `claude mcp add` and `mcpServers` snippets.
-- **Server registry and health.** Register or auto-discover MCP servers, sync their tool lists, monitor health every 30 seconds and stream status changes over WebSocket.
-- **Marketplace and orchestrator.** Deploy MCP servers from a catalog with one click, or paste a standard `{command, args, env}` block and let MCP Gate run it behind an HTTP bridge, as a Docker container or as a local process (`MCP_RUNTIME=process`).
-- **Zero-config start.** SQLite by default, secrets generated on first run, an in-browser setup wizard for the owner account. PostgreSQL and GitHub / Google sign-in are a few environment variables away.
+- **A standards-based authorization server.** Covers the authorization part of the [MCP specification](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization): RFC 8414 metadata, RFC 7591 dynamic client registration, Client ID Metadata Documents (the registration method of MCP 2026-07-28), authorization code + PKCE, refresh-token rotation with replay detection, RFC 7009 revocation, RFC 7662 introspection, RFC 8707 resource indicators, RFC 9207 `iss`, and `private_key_jwt` client authentication.
+- **Offline verification.** RS256 tokens bound to each server's audience, so a token for one server never works on another. Servers fetch the JWKS once and verify locally.
+- **Revocation that reaches offline verifiers.** A server polls the revocation feed and refuses a revoked token within seconds, personal access tokens included, without calling MCP Gate per request.
+- **A consent screen** for clients that register themselves, with decisions remembered per client and server.
+- **Personal access tokens** for scripts, CI and clients without OAuth, with ready-to-paste `claude mcp add` and `mcpServers` snippets.
+- **A server registry.** Register or scan MCP servers, sync their tools, watch their health, and see each tool list as a given token sees it ("Inspect as").
+- **Marketplace and orchestrator.** Deploy MCP servers from a catalog, or paste a `{command, args, env}` block and let MCP Gate run it in Docker or as a local process behind an HTTP bridge.
+- **Zero-config start.** SQLite by default, secrets generated on first run, an in-browser setup for the owner account; PostgreSQL is one environment variable away. The console speaks English and Traditional Chinese.
 
-## Install MCP Gate
+## Installation
 
-Prerequisites:
-
-- Python 3.11 or later and [uv](https://docs.astral.sh/uv/).
-- Docker — only for the Marketplace; bring-your-own servers can also run without it (`MCP_RUNTIME=process` needs `supergateway` on the PATH).
-- Node.js 18 or later — only if you work on the console UI.
+You need Python 3.11 or later and [uv](https://docs.astral.sh/uv/). Docker is needed only for the Marketplace.
 
 ```bash
 git clone https://github.com/xianhong1208/MCP_Gate.git
@@ -56,13 +39,10 @@ cp .env.example .env      # optional: every setting has a working default
 uv run python main.py
 ```
 
-The startup banner tells you where everything is:
+The startup log says where everything is:
 
 ```
-╔══════════════════════════════════════════════════════╗
-║   MCP Gate — OAuth 2.1 AS for your MCP servers     ║
-╚══════════════════════════════════════════════════════╝
-  Version:    1.0.0
+  Version:    1.3.1
   Address:    http://0.0.0.0:4568
   Issuer:     http://localhost:4568
   Database:   sqlite:///data/mcp_center.db
@@ -72,218 +52,230 @@ The startup banner tells you where everything is:
   Setup token: 7Qw…  (also in data/secrets.json as SETUP_TOKEN; it stops working once the owner exists)
 ```
 
-Open <http://localhost:4568/setup>, paste the **setup token** from that log, create the owner account, and you are in the console. The token is also kept in `data/secrets.json` as `SETUP_TOKEN` and stops working once the owner exists, so nobody else who reaches the server first can claim it.
+Open <http://localhost:4568/setup>, paste the **setup token** from the log and create the owner account. (Or set `ADMIN_EMAIL` and `ADMIN_PASSWORD` before the first start.)
 
-> **Deploying somewhere other than `localhost`?** Set `OAUTH_ISSUER` to the public URL (for example `https://mcp.example.com`) before you issue any tokens. It is written into every token as `iss` and into the discovery document, so it must be reachable by your MCP servers and clients, and changing it later invalidates every token. See [Deploy](docs/deploy.md).
+> **Not on `localhost`?** Set `OAUTH_ISSUER` to the public URL (for example `https://mcp.example.com`) before you issue any tokens. It is written into every token, and changing it later invalidates them all. See [Deploy](docs/deploy.md).
 
 ## Quick start
 
-The order matters: **register the server first**. MCP Gate only issues tokens for audiences it knows; a client that asks for an unregistered server gets `invalid_target`.
+This walk-through protects a FastMCP server with MCP Gate, calls it with a personal access token, and turns on the revocation feed. It assumes MCP Gate at `http://localhost:4568` and the server at `http://127.0.0.1:8000/mcp`.
 
-### 1. Register the server in the console
+### 1. Register the server
 
-Open **Services → Register Service** and enter the server's host, port and path (the path is the MCP endpoint, `/mcp` by default). The server's *audience* — the URL a token is valid for — defaults to its MCP URL, for example `http://127.0.0.1:8000/mcp`. Each service needs its own audience: registering a second service with an audience (or MCP URL) another service already has is refused with `409 service.audience_taken`, since tokens for one would be accepted by the other.
+In the console, open **Services → Register Service** and enter host `127.0.0.1`, port `8000` and path `/mcp`. The server's **audience**, the URL its tokens are valid for, defaults to its MCP URL: `http://127.0.0.1:8000/mcp`. Register first: MCP Gate only issues tokens for audiences it knows.
 
-### 2. Protect the FastMCP server
+### 2. (Optional) Register a client for the revocation feed
 
-The **Integration** panel on the service page generates this for you:
+On its own, a server that verifies offline keeps accepting a revoked token until it expires. To have it refuse revoked tokens within seconds, open **OAuth Clients → Register trusted client** and choose:
+
+- grant type `client_credentials` only, no redirect URIs;
+- authentication *Client secret*;
+- **Resource server for**: the server you registered in step 1.
+
+Copy the client id and secret; the secret is shown once. Skip this step and the example below runs without the feed.
+
+### 3. Write the server
+
+Copy [`examples/mcp_gate_hooks.py`](examples/mcp_gate_hooks.py) next to your server. It holds `MCPGateVerifier`, FastMCP's `JWTVerifier` plus the revocation feed and usage reports, and needs only `fastmcp` and `httpx`. Then save this as `server.py` (it is [`examples/fastmcp_server_hooks.py`](examples/fastmcp_server_hooks.py)):
 
 ```python
+"""A FastMCP server protected by MCP Gate, with the revocation feed.
+
+Every request must carry an access token issued by MCP Gate for this server's audience. Tokens are verified
+offline against MCP Gate's JWKS; MCP Gate is never on the request path. When a resource-server client is
+configured (MCP_GATE_CLIENT_ID / MCP_GATE_CLIENT_SECRET), MCPGateVerifier also polls MCP Gate's revocation
+feed, so a revoked token is refused within `poll_interval` seconds, and reports token usage to the console.
+
+    pip install fastmcp httpx          # or: uv add fastmcp httpx
+    cp examples/mcp_gate_hooks.py .    # MCPGateVerifier lives in that single file
+    MCP_GATE_URL=http://localhost:4568 python server.py
+
+Before starting it, register the server in the MCP Gate console (Services -> Register Service: host
+127.0.0.1, port 8000, path /mcp), so its audience is http://127.0.0.1:8000/mcp. For the revocation feed,
+also register a confidential client with grant type client_credentials and "Resource server for" set to
+this server, and export its id and secret. See the README's Quick start.
+"""
+
+import os
+
 from fastmcp import FastMCP
 from fastmcp.server.auth import RemoteAuthProvider
 from fastmcp.server.auth.providers.jwt import JWTVerifier
+from fastmcp.server.dependencies import get_access_token
 
-auth = RemoteAuthProvider(
-    token_verifier=JWTVerifier(
-        jwks_uri="http://localhost:4568/.well-known/jwks.json",
-        issuer="http://localhost:4568",
-        audience="http://127.0.0.1:8000/mcp",   # must match the audience in the console
-    ),
-    authorization_servers=["http://localhost:4568"],
-    base_url="http://127.0.0.1:8000",
+from mcp_gate_hooks import MCPGateVerifier
+
+MCP_GATE = os.environ.get("MCP_GATE_URL", "http://localhost:4568").rstrip("/")  # MCP Gate's OAUTH_ISSUER
+HOST = os.environ.get("MCP_HOST", "127.0.0.1")
+PORT = int(os.environ.get("MCP_PORT", "8000"))
+BASE_URL = f"http://{HOST}:{PORT}"
+AUDIENCE = os.environ.get("MCP_AUDIENCE", f"{BASE_URL}/mcp")  # must equal the audience shown in the console
+
+verifier_settings = dict(
+    jwks_uri=f"{MCP_GATE}/.well-known/jwks.json",
+    issuer=MCP_GATE,
+    audience=AUDIENCE,
+    required_scopes=["mcp:tools:invoke"],
 )
 
-mcp = FastMCP(name="demo", auth=auth)
+if os.environ.get("MCP_GATE_CLIENT_ID"):
+    # Offline verification plus the revocation feed and usage reports.
+    verifier = MCPGateVerifier(
+        **verifier_settings,
+        client_id=os.environ["MCP_GATE_CLIENT_ID"],
+        client_secret=os.environ["MCP_GATE_CLIENT_SECRET"],
+        poll_interval=15,   # seconds between revocation-feed polls
+        flush_interval=30,  # seconds between usage reports
+    )
+else:
+    # Offline verification only: a revoked token keeps working until it expires.
+    verifier = JWTVerifier(**verifier_settings)
+
+auth = RemoteAuthProvider(
+    token_verifier=verifier,
+    authorization_servers=[MCP_GATE],  # served at /.well-known/oauth-protected-resource for OAuth clients
+    base_url=BASE_URL,
+)
+
+mcp = FastMCP(name="demo", instructions="A demo server protected by MCP Gate", auth=auth)
+
 
 @mcp.tool
 def hello(name: str) -> str:
+    """Return a greeting."""
     return f"Hello, {name}!"
 
-mcp.run(transport="http", host="127.0.0.1", port=8000)
+
+@mcp.tool
+def whoami() -> dict:
+    """Return who the caller's access token belongs to."""
+    token = get_access_token()
+    return {
+        "subject": token.subject if token else None,
+        "client_id": token.client_id if token else None,
+        "scopes": token.scopes if token else [],
+    }
+
+
+if __name__ == "__main__":
+    revocation = "on" if isinstance(verifier, MCPGateVerifier) else "off"
+    print(f"MCP Gate: {MCP_GATE}   audience: {AUDIENCE}   revocation feed: {revocation}")
+    mcp.run(transport="http", host=HOST, port=PORT)
 ```
 
-FastMCP serves `/.well-known/oauth-protected-resource` automatically, pointing clients at MCP Gate. A complete, runnable version — including a `whoami` tool that returns the token's claims — is in [`examples/fastmcp_server.py`](examples/fastmcp_server.py).
+### 4. Run it
 
-### 3. Connect a client
+```bash
+pip install fastmcp httpx                    # or: uv add fastmcp httpx
+export MCP_GATE_URL=http://localhost:4568    # MCP Gate's OAUTH_ISSUER
+export MCP_GATE_CLIENT_ID=mcpc_…             # from step 2; leave both unset to run without the feed
+export MCP_GATE_CLIENT_SECRET=…
+python server.py
+```
 
-**Clients that speak OAuth** (Claude Code, Claude Desktop, Cursor, the FastMCP `Client`) need nothing up front:
+It prints `MCP Gate: http://localhost:4568   audience: http://127.0.0.1:8000/mcp   revocation feed: on`. Within a few seconds the server's page in the console shows **Revocation feed: Wired**.
+
+### 5. Call it with a personal access token
+
+In the console, open **Issue Token**, choose the server, give the token a label and copy it (it is shown once). Then:
+
+```python
+import asyncio
+import os
+
+from fastmcp import Client
+from fastmcp.client.auth import BearerAuth
+
+
+async def main():
+    pat = os.environ["MCP_GATE_PAT"]  # a personal access token issued for this server
+    async with Client("http://127.0.0.1:8000/mcp", auth=BearerAuth(pat)) as client:
+        print([tool.name for tool in await client.list_tools()])
+        print((await client.call_tool("hello", {"name": "MCP Gate"})).data)
+        print((await client.call_tool("whoami", {})).data)
+
+
+asyncio.run(main())
+```
+
+```
+['hello', 'whoami']
+Hello, MCP Gate!
+{'subject': '…', 'client_id': 'mcp-center-console', 'scopes': ['mcp:prompts:read', 'mcp:resources:read', 'mcp:tools:invoke', 'mcp:tools:read']}
+```
+
+Without a token the server answers `401` and points the client at MCP Gate:
+
+```bash
+curl -i -X POST http://127.0.0.1:8000/mcp \
+  -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+# HTTP/1.1 401 Unauthorized
+# www-authenticate: Bearer scope="mcp:tools:invoke", resource_metadata="http://127.0.0.1:8000/.well-known/oauth-protected-resource/mcp"
+```
+
+Revoke the token in the console (**Tokens → Revoke**) and, with the feed on, the next call is refused within one poll interval (15 seconds in the example).
+
+### 6. Connect an MCP client
+
+Clients that speak OAuth need nothing up front. On first use they register with MCP Gate and open the consent screen in your browser:
 
 ```bash
 claude mcp add --transport http demo http://127.0.0.1:8000/mcp
 ```
 
-On first use the client registers itself with MCP Gate and opens the consent screen in your browser. The screen shows the client name, the target server, the requested scopes (`mcp:tools:read`, `mcp:tools:invoke`, `mcp:resources:read`, `mcp:prompts:read` by default) and a **Remember this decision** checkbox. Click **Allow**; the client receives a token and refreshes it by itself from then on. If you are not signed in to the console, the consent screen asks you to sign in first (password, GitHub / Google, or the first-run setup) and then comes back to the same request.
-
-```python
-from fastmcp import Client
-
-async with Client("http://127.0.0.1:8000/mcp", auth="oauth") as client:
-    print(await client.list_tools())
-```
-
-**Everything else** — scripts, CI jobs, clients without OAuth — uses a personal access token issued from **Issue Token** in the console:
+Clients without OAuth take the personal access token as a header:
 
 ```bash
 claude mcp add --transport http demo http://127.0.0.1:8000/mcp \
   --header "Authorization: Bearer <PERSONAL_ACCESS_TOKEN>"
 ```
 
-```python
-from fastmcp import Client
-from fastmcp.client.auth import BearerAuth
-
-async with Client("http://127.0.0.1:8000/mcp", auth=BearerAuth("<PERSONAL_ACCESS_TOKEN>")) as client:
-    print(await client.list_tools())
-```
-
-### 4. Verify
-
-```bash
-curl -s http://localhost:4568/.well-known/oauth-authorization-server | python -m json.tool | head
-claude mcp list          # expect:  demo: http://127.0.0.1:8000/mcp (HTTP) - ✓ Connected
-```
-
-In Claude Code, call the `whoami` tool from the example server. It returns the subject, client and scopes of the token that reached the server:
-
-```json
-{"subject": "9b76a95d-…", "client_id": "mcpc_6c68…", "scopes": ["mcp:prompts:read", "mcp:resources:read", "mcp:tools:invoke", "mcp:tools:read"], "email": "you@example.com"}
-```
+The **Integration** panel on each server's page generates these snippets, and the server code, for that server's own URL and audience.
 
 ## How it works
 
-MCP Gate plays the **authorization server** role from the MCP specification. Your MCP servers are **resource servers**: they never issue or store tokens.
-
-| Step | Who | What happens |
-|---|---|---|
-| Discovery | client → server → MCP Gate | The server answers `401` with a `WWW-Authenticate` header pointing at its protected-resource metadata, which names MCP Gate as the authorization server. The client fetches `/.well-known/oauth-authorization-server`. |
-| Registration | client → MCP Gate | The client either uses the https URL of its metadata document as `client_id` (no registration; MCP Gate fetches the document) or registers dynamically (`POST /oauth/register`) and gets a `client_id`. Public clients use PKCE; confidential clients get a secret, or register a public key and authenticate with a signed JWT (`private_key_jwt`, RFC 7523). |
-| Authorization | browser → MCP Gate | `/oauth/authorize` validates the request, binds it to the target server through the `resource` parameter, and shows the consent screen (or skips it for remembered or trusted clients). |
-| Token | client → MCP Gate | `/oauth/token` exchanges the code — checking PKCE, redirect URI and resource — for an RS256 access token plus a refresh token. |
-| Verification | server | The server fetches JWKS once, then verifies signature, issuer, audience, expiry and scopes locally. |
-| Revocation | console or client | Revoking a refresh token invalidates its whole family, and `POST /oauth/introspect` reports `active: false` immediately. Tokens verified offline stay valid until they expire — an access token for its lifetime (15 minutes by default), a personal access token for up to `pat_max_days` — unless the server polls the [revocation feed](#revocation-feed) (`POST /oauth/revoked`) or uses FastMCP's `IntrospectionTokenVerifier`. |
-
-Access-token claims: `iss`, `sub`, `aud`, `scope`, `client_id`, `jti`, `iat`, `exp`, `token_use`, and — for tokens issued to a signed-in owner — `email` and `name`.
-
-To change when the consent screen appears, edit [`src/oauth/consent_policy.py`](src/oauth/consent_policy.py); the policy is one small function.
-
-### Terms
-
-| Term | Meaning |
-|---|---|
-| Issuer | MCP Gate's public URL (`OAUTH_ISSUER`). Written into every token as `iss`; clients and servers use it for discovery. |
-| Classic client | A manually registered confidential client allowed to skip PKCE and use a default resource, for platforms whose OAuth module only knows client_id / client_secret. |
-| private_key_jwt | Client authentication without a shared secret: the client registers a JWKS (inline or by `jwks_uri`) and signs a short-lived JWT per token request. Meant for machine-to-machine clients such as CI jobs and backend services. |
-| Audience | The MCP URL a token is valid for (the `aud` claim). Set per server in the console; the server's `JWTVerifier(audience=…)` must match. |
-| Resource server | Your MCP server. It verifies tokens and never issues them. The console calls these *services*. |
-| Scope | What a token may do on a server, for example `mcp:tools:invoke`. The console's global scope registry defines the shared set; a server can additionally declare scopes of its own that only tokens for that server may carry. |
-| DCR | Dynamic client registration (RFC 7591): a client creates its own `client_id` on first connect. Deprecated by MCP 2026-07-28 in favour of CIMD; still supported. |
-| CIMD | Client ID Metadata Document: the client's `client_id` is an https URL serving its metadata as JSON. Nothing is registered in advance. |
-| PAT | Personal access token: a long-lived access token minted from the console, used as a plain bearer token. |
-
-## Configuration
-
-Settings live in [`config/config.yaml`](config/config.yaml) and read their secrets from environment variables (`.env`). The ones you are likely to touch:
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `OAUTH_ISSUER` | `http://localhost:4568` | Public URL of MCP Gate. Also decides the port MCP Gate binds. **Change this for any non-local deployment.** |
-| `DATABASE_URL` | `sqlite:///data/mcp_center.db` | Point at `postgresql://…` to use PostgreSQL (`uv sync --extra postgres`). |
-| `SESSION_SECRET_KEY`, `ENCRYPTION_KEY` | auto-generated | Stored in `data/secrets.json` when unset. `ENCRYPTION_KEY` protects private keys and stored secrets; rotating it makes them unreadable. |
-| `ADMIN_EMAIL`, `ADMIN_PASSWORD` | — | Create the owner account at first start instead of using `/setup`. |
-| `MCP_GATE_SETUP_TOKEN` | auto-generated | The one-time token `/setup` asks for. Generated into `data/secrets.json` and printed in the log while no owner exists; set it when the log is hard to reach (a container). |
-| `OAUTH_ACCESS_EXPIRE_MINUTES`, `OAUTH_REFRESH_EXPIRE_DAYS` | `15`, `30` | OAuth token lifetimes (personal access tokens choose their own). |
-| `OAUTH_DCR_AUTO_APPROVE` | `true` | Whether dynamically registered clients are usable immediately (the consent screen still gates them) or must be approved in the console. |
-| `OAUTH_CIMD_ENABLED`, `OAUTH_CIMD_AUTO_APPROVE` | `true`, `true` | Accept https URLs as `client_id` ([Client ID Metadata Documents](#client-id-metadata-documents)); whether such a client is usable at once or waits for approval in the console. |
-| `OAUTH_CIMD_ALLOWED_HOSTS` | — | Comma-separated hosts whose `client_id` URLs are accepted (`*.example.com` for subdomains). Empty accepts any public host. |
-| `GITHUB_CLIENT_ID/_SECRET`, `GOOGLE_CLIENT_ID/_SECRET` | — | Enable GitHub / Google sign-in for the console (experimental — the providers are implemented but not yet verified against live accounts). Callback: `<issuer>/api/session/oauth/<provider>/callback`. |
-| `SECURE_COOKIE` | `false` | Set to `true` behind HTTPS. |
-| `CORS_ALLOWED_ORIGINS` | — | Comma-separated extra origins given credentialed access to the console API. Leave empty unless another site must call it; the Vite dev server does not need it. |
-| `ALLOWED_HOSTS` | — | Comma-separated host names MCP Gate answers to besides the `OAUTH_ISSUER` host, `localhost` and IP addresses (e.g. a container service name); `*.suffix` wildcards, `*` disables the check. Other names get 421. |
-| `ENABLE_API_DOCS` | — | `true` exposes OpenAPI at `/docs`. Environment-only; not in `config.yaml`. |
-
-### Client ID Metadata Documents
-
-The MCP authorization specification (2026-07-28) deprecates dynamic registration in favour of [Client ID Metadata Documents](https://datatracker.ietf.org/doc/draft-ietf-oauth-client-id-metadata-document/) (CIMD). A client publishes a JSON document at an https URL and uses that URL as its `client_id`; MCP Gate advertises `client_id_metadata_document_supported: true` and fetches the document when the client first shows up at `/oauth/authorize`:
-
-```json
-{
-  "client_id": "https://app.example.com/oauth/client-metadata.json",
-  "client_name": "Example MCP Client",
-  "redirect_uris": ["http://127.0.0.1/callback"],
-  "grant_types": ["authorization_code", "refresh_token"],
-  "token_endpoint_auth_method": "none"
-}
+```
+┌──────────────────────┐   ① 401 + protected-resource metadata   ┌──────────────────────┐
+│      MCP client      │ ───────────────────────────────────────▶ │   your FastMCP server │
+│ Claude Code / Cursor │ ◀─────────────────────────────────────── │   (resource server)   │
+│  Claude Desktop / …  │   ⑤ Authorization: Bearer <JWT>          │                      │
+└──────────┬───────────┘                                          └──────────┬───────────┘
+           │ ② discovery + dynamic client registration                       │ ④ fetch JWKS once,
+           │ ③ authorize (PKCE) → consent → code → token                     │    verify offline;
+           ▼                                                                 ▼    poll revocations
+┌──────────────────────────────────────────────────────────────────────────────────────────┐
+│  MCP Gate — OAuth 2.1 authorization server + console                                    │
+│  /.well-known/oauth-authorization-server   /.well-known/jwks.json   /oauth/revoked       │
+│  /oauth/register  /oauth/authorize  /oauth/token  /oauth/revoke  /oauth/introspect       │
+└──────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-- The document's `client_id` must equal the URL exactly; `client_name` and `redirect_uris` are required. Redirect URIs match exactly, except that loopback ones match on any port (as for registered clients).
-- Public clients (`none`) use PKCE. A document declaring `private_key_jwt` (in `token_endpoint_auth_methods_supported` or `token_endpoint_auth_method`) must carry `jwks` or `jwks_uri`, and then must authenticate with a signed JWT. Shared-secret methods and `client_secret` are refused. `client_credentials` is not available to these clients.
-- The client appears under **OAuth Clients** with the URL as its id (*Metadata document*). Revoking it blocks that URL until you delete it; deleting it lets the URL be fetched again. Tokens, consents and the audit log work as for any other client. Unused ones are purged after `dcr_unused_client_days`, like dynamically registered clients.
-- The consent screen says the client is identified only by its URL's host: its name and links are unverified.
-- MCP Gate fetches only public addresses (no loopback, private, link-local or metadata-service ranges), does not follow redirects, reads at most 5 KB within 5 seconds, and requires `application/json`. Documents are cached for their `Cache-Control: max-age`, between 1 minute and 1 day; a failed fetch is not retried for 30 seconds. Every limit is under `oauth.cimd` in `config/config.yaml`; `OAUTH_CIMD_PRIVATE_NETWORK_HOSTS` lets named hosts on a private network through (development or intranet only).
+MCP Gate is the **authorization server**; your MCP servers are **resource servers** that verify tokens and never issue them. The [reference](docs/reference.md) covers each step, the token claims, every setting, Client ID Metadata Documents, the revocation feed, the console pages and the HTTP API.
 
-Dynamic registration (`/oauth/register`) keeps working alongside; set `OAUTH_CIMD_ENABLED=false` to accept registered clients only.
+## Deployment options
 
-Advanced: `SERVER_HOST` / `SERVER_PORT` override the bind address when it must differ from the issuer, for example listening on `127.0.0.1` behind a reverse proxy. See [Deploy](docs/deploy.md) for the full reverse-proxy and HTTPS procedure.
-
-### Revocation feed
-
-MCP servers verify tokens offline, so on its own a server keeps accepting a revoked token until it expires — 15 minutes for an access token, as long as its lifetime for a personal access token. A server that polls the revocation feed rejects it within one poll interval instead:
-
-1. **Register a client for the server.** Under **OAuth Clients** → *Register*: grant type `client_credentials` only, no redirect URIs, token endpoint authentication *Client secret* (POST body or HTTP Basic) or `private_key_jwt`, and *Resource server for* set to the server. For an existing client use its *Resource server…* action, or `PUT /api/oauth/clients/{client_id}/resource-server` with `{"service_id": "<server id>"}`.
-2. **Poll `POST /oauth/revoked`** with that client's credentials, optionally `since=<unix time>` for only the newer revocations. The answer is `{"revoked": [{"jti", "revoked_at", "exp"}, …], "now": …}`: revoked, unexpired access tokens, personal access tokens and refresh tokens of **that server only**. Unbound clients get `403`. The same binding lets the server call `/oauth/introspect` and report token usage, again only for its own tokens.
-3. **Check it in the console.** The server's page shows a *Revocation feed* row: wired (with the last poll time), stopped polling, never polled, or not wired.
-
-For your own FastMCP server, `MCPGateVerifier` in [`examples/mcp_gate_hooks.py`](examples/mcp_gate_hooks.py) does the polling. Folio and AnyDoc have it built in (`FOLIO_REVOCATION_*` / `ANYDOC_REVOCATION_*` in their `.env`).
-
-## Use the console
-
-| Page | What you do there |
+| Where | How |
 |---|---|
-| **Dashboard** | Service health, token activity, recent events, system status. |
-| **Services** | Register or scan MCP servers, set audience and allowed scopes, declare server-specific scopes, refresh tools, run health checks, copy integration snippets. |
-| **Tokens · Issue Token** | Every token issued by MCP Gate — OAuth grants and PATs — with revoke, expiry and last-use information. |
-| **OAuth Clients** | Dynamically registered, metadata-document and trusted clients: approve, revoke, delete; scope registry; signing-key rotation. |
-| **Marketplace** | Deploy MCP servers from the catalog or bring your own `{command, args, env}`. |
-| **Audit Logs** | Who did what, when, and from where. |
+| Your machine | `uv run python main.py`, SQLite in `data/`. The default issuer is `http://localhost:4568`. |
+| A server, behind HTTPS | A reverse proxy (nginx or Caddy) in front, `OAUTH_ISSUER` set to the public URL, `SECURE_COOKIE=true`: see [Deploy](docs/deploy.md). |
+| PostgreSQL | `uv sync --extra postgres` and `DATABASE_URL=postgresql://…`. Migrations run at every start. |
 
-Sign in with email and password, or with GitHub / Google once configured. The console is single-tenant by design: whoever signs in is the administrator.
-
-The console is in English by default; the switcher in the top bar changes it to Traditional Chinese, and the choice is remembered per browser.
-
-## API reference
-
-| Group | Endpoints |
-|---|---|
-| OAuth (public) | `GET /.well-known/oauth-authorization-server` · `GET /.well-known/openid-configuration` · `GET /.well-known/jwks.json` · `POST /oauth/register` · `GET /oauth/authorize` · `GET/POST /oauth/authorize/requests/{id}[/decision]` (consent screen) · `POST /oauth/token` · `POST /oauth/revoke` · `POST /oauth/introspect` |
-| Console session | `GET /api/session/status` · `POST /api/session/setup` · `POST /api/session/login` · `POST /api/session/logout` · `GET /api/session/me` · `PUT /api/session/me/{profile,password}` · `GET /api/session/oauth/{github,google}/{start,callback}` |
-| Management (authenticated) | `/api/services*` · `/api/oauth/{clients,scopes,tokens,consents,keys,activity,overview,snippets}` · `/api/discovery/*` · `/api/marketplace*` · `/api/managed*` · `/api/byo-mcp*` · `/api/stats/*` · `/api/audit/*` · `/api/system/*` |
-| Operational | `GET /health` · `WS /ws/services` (live service status) |
-
-Set `ENABLE_API_DOCS=true` for the full OpenAPI reference at `/docs`.
+An official Docker image is planned for 1.4 (see the [roadmap](ROADMAP.md)).
 
 ## Documentation
 
+- [Reference](docs/reference.md): how it works, configuration, revocation feed, console, API
 - [Deploy behind a reverse proxy with HTTPS](docs/deploy.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Architecture](docs/architecture.md)
 - [Security policy](SECURITY.md)
-- [Contributing and development setup](CONTRIBUTING.md)
-- [Changelog](CHANGELOG.md) · [Roadmap](ROADMAP.md)
+- [Roadmap](ROADMAP.md) · [Changelog](CHANGELOG.md)
 
 ## Contributing
 
-Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the development setup, the layering rule enforced in CI, and the pull-request checklist.
+Issues and pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) covers the development setup, the checks CI runs, the layering rule and the release steps.
 
-## License
+## Licence
 
 [MIT](LICENSE)
