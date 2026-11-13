@@ -24,7 +24,7 @@ ADMIN_PASSWORD=...
 
 How the bind port is chosen: `SERVER_PORT` if set, otherwise the port in `OAUTH_ISSUER`, otherwise `4568`.
 
-`config/config.yaml`: add the proxy's address to `security.trusted_proxies` so audit logs record the real client IP from `X-Forwarded-For`:
+`config/security.yaml`: add the proxy's address to `security.trusted_proxies` so audit logs record the real client IP from `X-Forwarded-For`:
 
 ```yaml
 security:
