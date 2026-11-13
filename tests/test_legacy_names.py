@@ -167,7 +167,7 @@ def test_migrating_from_the_cli_moves_the_old_file_first(tmp_path, monkeypatch):
     from db.database import reset_engine
     from src.config import Config
 
-    monkeypatch.setenv("MCP_GATE_CONFIG", str(tmp_path / "missing.yaml"))
+    monkeypatch.setenv("MCP_GATE_CONFIG_DIR", str(tmp_path / "missing-config"))
     sqlite3_db(tmp_path / "mcp_center.db")
     url = f"sqlite:///{tmp_path / 'mcp_gate.db'}"
     db_cfg = Config.get_database_config()
@@ -418,4 +418,4 @@ def test_old_config_variable_is_not_read(module):
 
     source = (Path(__file__).resolve().parent.parent / module).read_text(encoding="utf-8")
     assert "MCP_" + "CENTER" not in source
-    assert 'os.environ.get("MCP_GATE_CONFIG", "config/config.yaml")' in source
+    assert "default_config_dir()" in source

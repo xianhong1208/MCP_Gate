@@ -5,6 +5,7 @@ import os
 import pytest
 import yaml
 
+from src.config.layout import CONFIG_FILES
 from src.config.manager import Config, expand_env_vars
 from src.config.model import ConfigModel
 
@@ -32,15 +33,14 @@ def test_yaml_env_values_are_coerced(tmp_path, monkeypatch):
     """`${PORT:-4568}` expands to a string; pydantic must coerce it to int / bool."""
     monkeypatch.setenv("MCP_TEST_PORT", "5555")
     monkeypatch.setenv("MCP_TEST_DCR", "false")
-    cfg = {
-        "server": {"port": "${MCP_TEST_PORT:-4568}"},
-        "oauth": {"issuer": "http://x:5555", "dcr_auto_approve": "${MCP_TEST_DCR:-true}"},
-    }
-    path = tmp_path / "config.yaml"
-    path.write_text(yaml.safe_dump(cfg))
+    for name in CONFIG_FILES:
+        (tmp_path / name).write_text("")
+    (tmp_path / "system.yaml").write_text(yaml.safe_dump({"server": {"port": "${MCP_TEST_PORT:-4568}"}}))
+    (tmp_path / "oauth.yaml").write_text(yaml.safe_dump(
+        {"oauth": {"issuer": "http://x:5555", "dcr_auto_approve": "${MCP_TEST_DCR:-true}"}}))
     previous = Config.get_config_model()
     try:
-        Config.set_config(str(path))
+        Config.set_config_dir(str(tmp_path))
         m = Config.get_config_model()
         assert m.server.port == 5555
         assert m.oauth.dcr_auto_approve is False
@@ -49,13 +49,13 @@ def test_yaml_env_values_are_coerced(tmp_path, monkeypatch):
         Config.set_model(previous)
 
 
-def test_shipped_config_yaml_loads(monkeypatch):
-    """The repo's config/config.yaml must load with no environment variables set at all."""
+def test_shipped_config_files_load(monkeypatch):
+    """The repo's five config/*.yaml files must load with no environment variables set at all."""
     for key in ("DATABASE_URL", "SERVER_PORT", "OAUTH_ISSUER", "SESSION_SECRET_KEY"):
         monkeypatch.delenv(key, raising=False)
     previous = Config.get_config_model()
     try:
-        Config.set_config(os.path.join(os.path.dirname(__file__), "..", "config", "config.yaml"))
+        Config.set_config_dir(os.path.join(os.path.dirname(__file__), "..", "config"))
         m = Config.get_config_model()
         assert m.server.port == 0            # 0 = derive from issuer
         assert m.effective_port == 4568
@@ -81,7 +81,7 @@ def test_scheduler_section_defaults_and_yaml(tmp_path, monkeypatch):
         (6, 30, 90, 30, 8, 10.0, 5)
     monkeypatch.delenv("AUDIT_RETENTION_DAYS", raising=False)
     monkeypatch.setenv("HEALTH_CHECK_SECONDS", "45")
-    shipped = Config._load_config(os.path.join(os.path.dirname(__file__), "..", "config", "config.yaml"))
+    shipped = Config._load_config(os.path.join(os.path.dirname(__file__), "..", "config"))
     assert shipped.scheduler.audit_retention_days == 90 and shipped.scheduler.health_check_seconds == 45
     with pytest.raises(ValueError):
         SchedulerConfig(health_check_concurrency=0)

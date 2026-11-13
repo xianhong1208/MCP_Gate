@@ -37,7 +37,17 @@ Access token 的 claim:`iss`、`sub`、`aud`、`scope`、`client_id`、`jti`、`
 
 ## 設定
 
-所有設定在 [`config/config.yaml`](../config/config.yaml),敏感值從環境變數(`.env`)讀取。你可能會碰到的:
+所有設定在 [`config/`](../config/) 底下的五個檔案,啟動時合併:
+
+| 檔案 | 內容 |
+|---|---|
+| [`database.yaml`](../config/database.yaml) | `database`:連線與連線池 |
+| [`oauth.yaml`](../config/oauth.yaml) | `oauth`:issuer、token 有效期、動態 client 註冊、Client ID Metadata Documents(`oauth.cimd`) |
+| [`identity.yaml`](../config/identity.yaml) | `identity`:登入方式(本機、GitHub、Google)、預設管理員;`session`:管理台 session |
+| [`security.yaml`](../config/security.yaml) | `rate_limit`、`security`(受信任的 proxy、cookie、允許的主機)、`cors` |
+| [`system.yaml`](../config/system.yaml) | `server`、`logging`、`scheduler`(清理、保留期、健康檢查) |
+
+同一個 key 只能寫在一個檔案:同一個 key 出現在兩個檔案,或缺少任何一個檔案,啟動時都會報錯並指出是哪些檔案。`MCP_GATE_CONFIG_DIR`(或 `main.py --config-dir`)可指向另一個放這五個檔案的目錄。所有敏感值或每台機器不同的值都是 `${VAR:-default}`,從環境變數(`.env`)讀取,所以這些檔案不含 secret,會 commit 進 repo。你可能會碰到的變數:
 
 | 變數 | 預設 | 用途 |
 |---|---|---|
@@ -54,7 +64,24 @@ Access token 的 claim:`iss`、`sub`、`aud`、`scope`、`client_id`、`jti`、`
 | `SECURE_COOKIE` | `false` | 走 HTTPS 時設 `true`。 |
 | `CORS_ALLOWED_ORIGINS` | — | 以逗號分隔、可帶 cookie 存取管理台 API 的額外 origin。除非有其他網站必須呼叫它，否則請留空；Vite 開發伺服器不需要設定。 |
 | `ALLOWED_HOSTS` | — | 以逗號分隔、除 `OAUTH_ISSUER` 的 host、`localhost` 與 IP 位址外也要回應的主機名稱（例如容器的 service 名稱）；可用 `*.suffix` 萬用字元，`*` 會關閉此檢查。其他名稱一律回 421。 |
-| `ENABLE_API_DOCS` | — | `true` 會在 `/docs` 開放 OpenAPI。只讀環境變數,不在 `config.yaml` 內。 |
+| `ENABLE_API_DOCS` | — | `true` 會在 `/docs` 開放 OpenAPI。只讀環境變數,不在設定檔內。 |
+| `MCP_GATE_CONFIG_DIR` | `config` | 放五個設定檔的目錄。 |
+
+### 升級到 1.4
+
+1.4 不再讀 `config/config.yaml`。如果它還在,MCP Gate 啟動時會記一筆錯誤(log 檔裡也有),並照五個檔案運作;舊檔的值會被忽略。`MCP_GATE_CONFIG` 也不再讀取,請改用指向目錄的 `MCP_GATE_CONFIG_DIR`。
+
+| 舊 `config.yaml` 的區段 | 現在在 |
+|---|---|
+| `database` | `config/database.yaml` |
+| `oauth`(含 `oauth.cimd`) | `config/oauth.yaml` |
+| `identity`、`session` | `config/identity.yaml` |
+| `rate_limit`、`security`、`cors` | `config/security.yaml` |
+| `server`、`logging`、`scheduler` | `config/system.yaml` |
+
+- **沒改過 `config.yaml`**(全部用 `.env` 設定):不用做任何事。pull 之後就有五個檔案、`config.yaml` 也會被移除;`.env` 照常可用。
+- **改過 `config.yaml`**:把修改搬到對應的檔案。`uv run python scripts/split_config.py --old <你的舊 config.yaml> --force` 會幫你做:把每個區段連同註解複製到對應檔案,再載入新舊兩份設定逐欄比對是否相同。之後刪掉舊檔。
+- **有設 `MCP_GATE_CONFIG`**:改成 `MCP_GATE_CONFIG_DIR=<目錄>`。`python -m db.migrate --config` 改為 `--config-dir`,`main.py --config` 也一樣。
 
 ### Client ID Metadata Documents
 
@@ -74,7 +101,7 @@ MCP 授權規範(2026-07-28)把動態註冊列為過時,改建議 [Client ID Met
 - public client(`none`)使用 PKCE。文件若宣告 `private_key_jwt`(在 `token_endpoint_auth_methods_supported` 或 `token_endpoint_auth_method` 中),就必須附上 `jwks` 或 `jwks_uri`,之後也必須以簽章 JWT 認證。共用密鑰的認證方式與 `client_secret` 一律拒絕。這類 client 不能用 `client_credentials`。
 - 這類 client 會出現在 **OAuth Clients**,以網址為 id(*中繼資料文件*)。撤銷它會封鎖該網址,直到你刪除它;刪除後該網址可再被抓取。token、同意紀錄與稽核紀錄都和其他 client 一樣運作。從未取得 token 的會在 `dcr_unused_client_days` 後清除,和動態註冊的 client 相同。
 - 同意頁會說明這個 client 只以網址的主機識別:名稱與連結都未經驗證。
-- MCP Gate 只抓公開位址(不抓 loopback、私有網段、link-local 或雲端 metadata 服務位址),不跟隨重新導向,5 秒內最多讀 5 KB,且要求 `application/json`。文件依 `Cache-Control: max-age` 快取,介於 1 分鐘到 1 天;抓取失敗後 30 秒內不再重試。所有限制都在 `config/config.yaml` 的 `oauth.cimd` 底下;`OAUTH_CIMD_PRIVATE_NETWORK_HOSTS` 可放行私有網路上指定的主機(僅限開發或內網)。
+- MCP Gate 只抓公開位址(不抓 loopback、私有網段、link-local 或雲端 metadata 服務位址),不跟隨重新導向,5 秒內最多讀 5 KB,且要求 `application/json`。文件依 `Cache-Control: max-age` 快取,介於 1 分鐘到 1 天;抓取失敗後 30 秒內不再重試。所有限制都在 `config/oauth.yaml` 的 `oauth.cimd` 底下;`OAUTH_CIMD_PRIVATE_NETWORK_HOSTS` 可放行私有網路上指定的主機(僅限開發或內網)。
 
 動態註冊(`/oauth/register`)仍可並用;設定 `OAUTH_CIMD_ENABLED=false` 則只接受已註冊的 client。
 

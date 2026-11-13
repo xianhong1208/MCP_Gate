@@ -22,11 +22,11 @@ except ImportError:
 
 # Load application config
 from src.config import Config
+from src.config.manager import default_config_dir
 
-# Try to load config if not already loaded
-config_path = os.environ.get("MCP_GATE_CONFIG", "config/config.yaml")
+# Try to load config if not already loaded (MCP_GATE_CONFIG_DIR, else config/)
 try:
-    Config.set_config(config_path)
+    Config.set_config_dir(default_config_dir())
 except Exception:
     pass  # Config may already be loaded
 
