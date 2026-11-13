@@ -288,13 +288,13 @@ def test_personal_access_token(owner_client, service):
     assert pat["kind"] == "pat" and pat["label"] == "laptop"
     claims = jwt.decode(pat["access_token"], _jwks_key(owner_client, pat["access_token"]),
                         algorithms=["RS256"], audience=RESOURCE, issuer="http://testserver")
-    assert claims["client_id"] == "mcp-center-console"
+    assert claims["client_id"] == "mcp-gate-console"
 
     listed = owner_client.get("/api/oauth/tokens", params={"kind": "pat"}).json()["tokens"]
     assert [t["jti"] for t in listed] == [pat["jti"]]
 
     assert owner_client.post(f"/api/oauth/tokens/{pat['jti']}/revoke").status_code == 200
-    intro = owner_client.post("/oauth/introspect", data={"token": pat["access_token"], "client_id": "mcp-center-console"}).json()
+    intro = owner_client.post("/oauth/introspect", data={"token": pat["access_token"], "client_id": "mcp-gate-console"}).json()
     assert intro["active"] is False
 
 

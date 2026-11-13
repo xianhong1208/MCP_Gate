@@ -1,7 +1,7 @@
 """Startup seed data (idempotent).
 
 1. OAuth scope registry
-2. Built-in client `mcp-center-console` (used by the console to sign PATs / by the scanner to self-sign tokens)
+2. Built-in clients `mcp-gate-console` (personal access tokens) and `mcp-gate-scanner` (self-signed scanner tokens)
 3. Owner account (created only when both ADMIN_EMAIL and ADMIN_PASSWORD are set; otherwise left to the /setup page)
 """
 
@@ -21,8 +21,14 @@ DEFAULT_SCOPES: List[Tuple[str, str, bool]] = [
     ("offline_access", "Request a refresh token", False),
 ]
 
-CONSOLE_CLIENT_ID = "mcp-center-console"
-SCANNER_CLIENT_ID = "mcp-center-scanner"
+CONSOLE_CLIENT_ID = "mcp-gate-console"
+SCANNER_CLIENT_ID = "mcp-gate-scanner"
+# The ids these clients had before migration a1c3e5f7b9d1 renamed them. Tokens signed before it still carry the
+# old id in their client_id claim (a JWT cannot be changed), so the owner checks treat it as the new one.
+LEGACY_CLIENT_IDS: Dict[str, str] = {
+    "mcp-center-console": CONSOLE_CLIENT_ID,
+    "mcp-center-scanner": SCANNER_CLIENT_ID,
+}
 
 SYSTEM_CLIENTS: List[Dict] = [
     {

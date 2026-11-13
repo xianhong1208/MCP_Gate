@@ -45,7 +45,7 @@ uv run python main.py
   Version:    1.3.1
   Address:    http://0.0.0.0:4568
   Issuer:     http://localhost:4568
-  Database:   sqlite:///data/mcp_center.db
+  Database:   sqlite:///data/mcp_gate.db
   Metadata:   http://localhost:4568/.well-known/oauth-authorization-server
   JWKS:       http://localhost:4568/.well-known/jwks.json
   No admin account yet → open http://localhost:4568/setup to create the owner
@@ -201,7 +201,7 @@ asyncio.run(main())
 ```
 ['hello', 'whoami']
 Hello, MCP Gate!
-{'subject': '…', 'client_id': 'mcp-center-console', 'scopes': ['mcp:prompts:read', 'mcp:resources:read', 'mcp:tools:invoke', 'mcp:tools:read']}
+{'subject': '…', 'client_id': 'mcp-gate-console', 'scopes': ['mcp:prompts:read', 'mcp:resources:read', 'mcp:tools:invoke', 'mcp:tools:read']}
 ```
 
 不帶 token,server 會回 `401`,並把 client 指向 MCP Gate:

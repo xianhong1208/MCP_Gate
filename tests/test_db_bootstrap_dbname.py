@@ -19,7 +19,7 @@ from src.utils.db_bootstrap import (
 
 @pytest.mark.parametrize(
     "dbname",
-    ["mcp_center", "postgres", "mcp-center", "db$1", "_internal", "a"],
+    ["mcp_gate", "postgres", "mcp-gate", "db$1", "_internal", "a"],
 )
 def test_valid_dbnames_accepted(dbname):
     assert _validate_dbname(dbname) == dbname
@@ -53,12 +53,12 @@ def test_oversized_dbname_rejected():
 @pytest.mark.parametrize(
     "url",
     [
-        "postgresql://postgres:password@localhost:5432/mcp_center",
-        "postgresql://mcp_center:pwd@localhost:5432/mcp_center",
-        "postgresql://user:password@db:5432/mcp_center",
+        "postgresql://postgres:password@localhost:5432/mcp_gate",
+        "postgresql://mcp_gate:pwd@localhost:5432/mcp_gate",
+        "postgresql://user:password@db:5432/mcp_gate",
     ],
 )
 def test_readme_urls_parse_and_validate(url):
     """Every DATABASE_URL example in README / docs must pass"""
     dbname = _parse_db_url(url)["dbname"]
-    assert _validate_dbname(dbname) == "mcp_center"
+    assert _validate_dbname(dbname) == "mcp_gate"

@@ -10,7 +10,7 @@ class DatabaseConfig(BaseModel):
 
     Defaults to a single SQLite file (zero dependencies); set DATABASE_URL to postgresql://... to switch to PostgreSQL.
     """
-    url: str = "sqlite:///data/mcp_center.db"
+    url: str = "sqlite:///data/mcp_gate.db"
     echo: bool = False
     pool_size: int = 5
     max_overflow: int = 10
