@@ -21,6 +21,10 @@ from src.config import Config
 
 logger = logging.getLogger(__name__)
 
+# How often the signing-key job runs: a published key takes over at most this late (the first token issued after
+# its activates_at promotes it sooner), and an automatic rotation is published at most this late
+KEY_JOB_MINUTES = 1
+
 # Consecutive failed checks after which a service is "offline" rather than "error"
 OFFLINE_AFTER_FAILURES = 3
 
@@ -77,6 +81,9 @@ class CleanupScheduler:
                                id="cleanup_old_usage", name="Clean up old token events", replace_existing=True)
         self.scheduler.add_job(self._cleanup_old_audit_logs, CronTrigger(hour=4, minute=0),
                                id="cleanup_old_audit_logs", name="Clean up old audit logs", replace_existing=True)
+        self.scheduler.add_job(self._signing_keys_task, IntervalTrigger(minutes=KEY_JOB_MINUTES),
+                               id="signing_keys", name="Rotate, activate and delete signing keys (#30)",
+                               replace_existing=True)
         if self.health_check_enabled:
             self.scheduler.add_job(self._health_check_task, IntervalTrigger(seconds=self.health_check_seconds),
                                    id="health_check", name="Check MCP service health", replace_existing=True)
@@ -138,6 +145,33 @@ class CleanupScheduler:
 
     async def _cleanup_old_audit_logs(self) -> int:
         return self._scheduled("old_audit_logs", self._purge_old_audit_logs)
+
+    async def _signing_keys_task(self) -> Optional[dict]:
+        db: Session = database.make_session()
+        try:
+            return self.run_signing_key_job(db)
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Signing key job failed: {e}")
+            return None
+        finally:
+            db.close()
+
+    @staticmethod
+    def run_signing_key_job(db: Session) -> dict:
+        """Promote a due published key, publish the next one when the rotation period is up, delete retired keys
+        nothing needs any more (src/oauth/signing_keys.py); each step is audited as the scheduler (an activation
+        by activate_due_key itself, wherever it happens)."""
+        from src.audit import AuditAction
+        from src.audit.audit_service import record_key_event
+        from src.oauth import signing_keys
+
+        done = signing_keys.run_key_maintenance(db)
+        if done["published"]:
+            record_key_event(db, AuditAction.OAUTH_KEY_ROTATE, done["published"], {"automatic": True})
+        for kid in done["deleted"]:
+            record_key_event(db, AuditAction.OAUTH_KEY_DELETE, kid)
+        return done
 
     def _purge_oauth(self, db: Session) -> int:
         purged = OAuthAuthRequestAdapter.delete_expired(db)

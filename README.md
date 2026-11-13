@@ -19,7 +19,7 @@ MCP Gate puts standards-based authentication in front of every MCP server you ru
 ## Key features
 
 - **A standards-based authorization server.** Covers the authorization part of the [MCP specification](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization): RFC 8414 metadata, RFC 7591 dynamic client registration, Client ID Metadata Documents (the registration method of MCP 2026-07-28), authorization code + PKCE, refresh-token rotation with replay detection, RFC 7009 revocation, RFC 7662 introspection, RFC 8707 resource indicators, RFC 9207 `iss`, and `private_key_jwt` client authentication.
-- **Offline verification.** RS256 tokens bound to each server's audience, so a token for one server never works on another. Servers fetch the JWKS once and verify locally.
+- **Offline verification.** RS256 tokens bound to each server's audience, so a token for one server never works on another. Servers fetch the JWKS once and verify locally. Signing keys rotate on their own every 90 days, each published a day before it signs; a leaked key can be revoked from the console, and `ENCRYPTION_KEY` rotates with one command.
 - **Revocation that reaches offline verifiers.** A server polls the revocation feed and refuses a revoked token within seconds, personal access tokens included, without calling MCP Gate per request.
 - **A consent screen** for clients that register themselves, with decisions remembered per client and server.
 - **Personal access tokens** for scripts, CI and clients without OAuth, with ready-to-paste `claude mcp add` and `mcpServers` snippets.

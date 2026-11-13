@@ -19,7 +19,7 @@ MCP Gate 把標準化的身分驗證放在你每一台 MCP server 前面。[Fast
 ## 主要特色
 
 - **標準化的授權伺服器。** 涵蓋 [MCP 規範](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization)的授權部分:RFC 8414 metadata、RFC 7591 動態註冊、Client ID Metadata Documents(MCP 2026-07-28 的註冊方式)、authorization code + PKCE、refresh token 輪替與重放偵測、RFC 7009 撤銷、RFC 7662 內省、RFC 8707 resource indicator、RFC 9207 `iss`,以及 `private_key_jwt` client 驗證。
-- **離線驗證。** RS256 token 綁定每台 server 的 audience,給 A 的 token 永遠不能打 B。server 只抓一次 JWKS,之後在本地驗證。
+- **離線驗證。** RS256 token 綁定每台 server 的 audience,給 A 的 token 永遠不能打 B。server 只抓一次 JWKS,之後在本地驗證。簽章金鑰每 90 天自動輪替,新金鑰在開始簽發前一天先公開;外洩的金鑰可以在管理台撤銷,`ENCRYPTION_KEY` 也能用一個指令輪替。
 - **撤銷也傳得到離線驗證的 server。** server 輪詢撤銷清單,幾秒內就拒絕已撤銷的 token(PAT 也算在內),不必每個請求都問 MCP Gate。
 - **同意頁**:自行註冊的 client 第一次連線要你按允許,可依 client 與 server 記住決定。
 - **Personal access token(PAT)**:給腳本、CI 與不會走 OAuth 的 client,附可直接貼上的 `claude mcp add` 與 `mcpServers` 片段。

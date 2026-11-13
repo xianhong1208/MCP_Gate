@@ -53,12 +53,14 @@ Access token 的 claim:`iss`、`sub`、`aud`、`scope`、`client_id`、`jti`、`
 |---|---|---|
 | `OAUTH_ISSUER` | `http://localhost:4568` | MCP Gate 的公開網址,同時決定 MCP Gate bind 的 port。**非本機部署一定要改。** |
 | `DATABASE_URL` | `sqlite:///data/mcp_gate.db` | 指向 `postgresql://…` 即改用 PostgreSQL(`uv sync --extra postgres`)。 |
-| `SESSION_SECRET_KEY`、`ENCRYPTION_KEY` | 自動產生 | 未設定時存在 `secrets/secrets.json`(見 `MCP_GATE_SECRETS_DIR`)。`ENCRYPTION_KEY` 保護私鑰與儲存的 secret;更換會讓它們無法解密。 |
+| `SESSION_SECRET_KEY`、`ENCRYPTION_KEY` | 自動產生 | 未設定時存在 `secrets/secrets.json`(見 `MCP_GATE_SECRETS_DIR`)。`ENCRYPTION_KEY` 保護私鑰與儲存的 secret;請用 `python -m src.cli encryption-key rotate` 輪替,不要直接改(會讓它們無法解密)。 |
+| `ENCRYPTION_KEYS_PREVIOUS` | — | 舊的加密金鑰,以逗號分隔,仍可解密它們加密過的資料。只有輪替放在環境變數裡的金鑰時才需要;輪替指令會把自己的舊金鑰記在 secrets 檔裡。 |
 | `MCP_GATE_SECRETS_DIR` | `secrets` | 自動產生的 secret 所在目錄,與 `data/` 分開(目錄 `0700`、檔案 `0600`)。舊的 `data/secrets.json` 會在第一次啟動時搬過來。請和 `data/` 分開備份;Docker 請給它獨立的 volume。 |
 | `MCP_GATE_SECRETS_FILE` | — | 改用指定的檔案(不會搬任何東西進去)。 |
 | `ADMIN_EMAIL`、`ADMIN_PASSWORD` | — | 首次啟動直接建立擁有者帳號,不用走 `/setup`。 |
 | `MCP_GATE_SETUP_TOKEN` | 自動產生 | `/setup` 要求的一次性設定碼。尚無擁有者時自動產生到 `secrets/secrets.json` 並印在 log;log 不方便看時(例如容器)可自行設定。 |
 | `OAUTH_ACCESS_EXPIRE_MINUTES`、`OAUTH_REFRESH_EXPIRE_DAYS` | `15`、`30` | OAuth token 有效期(personal access token 各自設定)。 |
+| `OAUTH_SIGNING_KEY_ROTATION_DAYS`、`OAUTH_SIGNING_KEY_PREPUBLISH_MINUTES` | `90`、`1440` | 簽章金鑰每 N 天自動輪替(`0` = 只在按「立即輪替」時輪替);新金鑰在開始簽發前這麼多分鐘就放進 JWKS,讓 resource server 先快取。 |
 | `OAUTH_DCR_AUTO_APPROVE` | `true` | 動態註冊的 client 是否立即可用(同意頁仍是閘門),或必須在管理台核准。 |
 | `OAUTH_CIMD_ENABLED`、`OAUTH_CIMD_AUTO_APPROVE` | `true`、`true` | 接受 https 網址當 `client_id`([Client ID Metadata Documents](#client-id-metadata-documents));這類 client 是否立即可用,或要在管理台核准。 |
 | `OAUTH_CIMD_ALLOWED_HOSTS` | — | 以逗號分隔、允許其 `client_id` 網址的主機(`*.example.com` 代表子網域)。空白表示任何公開主機。 |

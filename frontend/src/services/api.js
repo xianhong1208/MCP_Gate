@@ -412,6 +412,9 @@ export const oauthApi = {
     async rotate() {
       return request('/api/oauth/keys/rotate', { method: 'POST' })
     },
+    async revoke(kid) {
+      return request(`/api/oauth/keys/${encodeURIComponent(kid)}/revoke`, { method: 'POST' })
+    },
   },
 
   /** Recent token events (issued / introspect / revoked) */

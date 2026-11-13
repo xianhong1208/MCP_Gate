@@ -5,7 +5,7 @@ from urllib.parse import parse_qs, urlparse
 import jwt
 import pytest
 
-from tests.conftest import make_pkce
+from tests.conftest import make_pkce, rotate_and_activate
 
 REDIRECT_URI = "http://localhost:9999/callback"
 RESOURCE = "http://127.0.0.1:8123/mcp"
@@ -316,8 +316,7 @@ def test_admin_client_management(owner_client):
 
 def test_key_rotation_keeps_old_tokens_verifiable(owner_client, service):
     pat = owner_client.post("/api/oauth/tokens/personal", json={"service_id": service["id"], "expires_days": 1, "label": "test"}).json()
-    r = owner_client.post("/api/oauth/keys/rotate")
-    assert r.status_code == 200
+    rotate_and_activate(owner_client)
     keys = owner_client.get("/api/oauth/keys").json()["keys"]
     assert len(keys) == 2 and sum(1 for k in keys if k["is_active"]) == 1
     jwks = owner_client.get("/.well-known/jwks.json").json()

@@ -541,18 +541,75 @@ class OAuthSigningKeyCRUD:
         return db.query(OAuthSigningKey).order_by(OAuthSigningKey.created_at.desc()).all()
 
     @staticmethod
+    def get_pending(db: Session) -> Optional[OAuthSigningKey]:
+        """The key a rotation published that does not sign yet (at most one is kept)."""
+        return (db.query(OAuthSigningKey)
+                .filter(OAuthSigningKey.is_active.is_(False), OAuthSigningKey.rotated_at.is_(None),
+                        OAuthSigningKey.revoked_at.is_(None))
+                .order_by(OAuthSigningKey.activates_at.asc()).first())
+
+    @staticmethod
     def create(db: Session, *, kid: str, alg: str, public_jwk: str, private_pem_enc: str,
-               make_active: bool = True) -> OAuthSigningKey:
+               make_active: bool = True, activates_at: Optional[datetime] = None) -> OAuthSigningKey:
+        """``make_active`` retires the active key and signs from now; otherwise the key is published only and
+        starts signing at ``activates_at`` (see activate)."""
         if make_active:
-            for old in db.query(OAuthSigningKey).filter(OAuthSigningKey.is_active.is_(True)).all():
-                old.is_active = False
-                old.rotated_at = old.rotated_at or local_now()
-        key = OAuthSigningKey(kid=kid, alg=alg, public_jwk=public_jwk,
-                              private_pem_enc=private_pem_enc, is_active=make_active)
+            OAuthSigningKeyCRUD._retire_active(db)
+        key = OAuthSigningKey(kid=kid, alg=alg, public_jwk=public_jwk, private_pem_enc=private_pem_enc,
+                              is_active=make_active, activates_at=None if make_active else activates_at)
         db.add(key)
         db.commit()
         db.refresh(key)
         return key
+
+    @staticmethod
+    def _retire_active(db: Session, now: Optional[datetime] = None) -> None:
+        for old in db.query(OAuthSigningKey).filter(OAuthSigningKey.is_active.is_(True)).all():
+            old.is_active = False
+            old.rotated_at = old.rotated_at or now or local_now()
+
+    @staticmethod
+    def activate(db: Session, kid: str) -> Optional[OAuthSigningKey]:
+        """Make a published (pending) key the signer and retire the one it replaces, in one commit."""
+        key = OAuthSigningKeyCRUD.get_by_kid(db, kid)
+        if key is None or key.revoked_at is not None or key.rotated_at is not None:
+            return None
+        if not key.is_active:
+            now = local_now()
+            OAuthSigningKeyCRUD._retire_active(db, now)
+            key.is_active = True
+            key.activates_at = now if key.activates_at is None or key.activates_at > now else key.activates_at
+            db.commit()
+            db.refresh(key)
+        return key
+
+    @staticmethod
+    def note_signed(db: Session, kid: str, expires_at: datetime) -> None:
+        """Raise the key's signed_until to ``expires_at``. One conditional UPDATE, left for the caller's commit
+        (it goes in with the token record): concurrent issuers can only raise it, never lower it."""
+        db.query(OAuthSigningKey).filter(
+            OAuthSigningKey.kid == kid,
+            or_(OAuthSigningKey.signed_until.is_(None), OAuthSigningKey.signed_until < expires_at),
+        ).update({OAuthSigningKey.signed_until: expires_at}, synchronize_session=False)
+
+    @staticmethod
+    def revoke(db: Session, key: OAuthSigningKey, *, token_window: tuple) -> int:
+        """Emergency revocation: the key stops signing and leaves the JWKS, its private key is wiped, and every
+        unexpired token record it signed is revoked (reason ``key_revoked``, so the revocation feed carries them);
+        one commit. Returns how many tokens were revoked."""
+        now = local_now()
+        key.revoked_at = now
+        key.is_active = False
+        key.rotated_at = key.rotated_at or now
+        key.private_pem_enc = ""
+        count = 0
+        for token in OAuthTokenCRUD.live_signed_by(db, key.kid, *token_window, kinds=None).all():
+            token.revoked_at = now
+            token.revoke_reason = "key_revoked"
+            count += 1
+        db.commit()
+        db.refresh(key)
+        return count
 
     @staticmethod
     def delete(db: Session, kid: str) -> bool:
@@ -562,6 +619,35 @@ class OAuthSigningKeyCRUD:
         db.delete(key)
         db.commit()
         return True
+
+
+class EncryptedColumnCRUD:
+    """Every column that holds a value encrypted with ENCRYPTION_KEY (src/utils/crypto.py), for the key rotation
+    command. A new encrypted column must be listed here (tests/test_encryption_rotation.py checks the models)."""
+
+    COLUMNS = {
+        "oauth_signing_keys.private_pem_enc": (OAuthSigningKey, "kid", "private_pem_enc"),
+        "services.auth_token_encrypted": (Service, "id", "auth_token_encrypted"),
+        "managed_mcp_processes.env_vars_encrypted": (ManagedMcpProcess, "id", "env_vars_encrypted"),
+    }
+
+    @staticmethod
+    def values(db: Session, name: str) -> List[tuple]:
+        """(primary key, ciphertext) of every non-empty value in the column."""
+        model, pk, column = EncryptedColumnCRUD.COLUMNS[name]
+        col = getattr(model, column)
+        rows = db.query(getattr(model, pk), col).filter(col.isnot(None), col != "").all()
+        db.rollback()  # read-only: end the transaction so a running server is not held up (SQLite)
+        return [(r[0], r[1]) for r in rows]
+
+    @staticmethod
+    def replace(db: Session, name: str, key, old: str, new: str) -> bool:
+        """Swap ``old`` for ``new`` only if the row still holds ``old`` (a concurrent edit wins); commits."""
+        model, pk, column = EncryptedColumnCRUD.COLUMNS[name]
+        updated = db.query(model).filter(getattr(model, pk) == key, getattr(model, column) == old).update(
+            {getattr(model, column): new}, synchronize_session=False)
+        db.commit()
+        return updated == 1
 
 
 class OAuthClientCRUD:
@@ -893,6 +979,28 @@ class OAuthTokenCRUD:
             OAuthToken.kind.in_(kinds), OAuthToken.revoked_at.is_(None), OAuthToken.expires_at >= local_now(),
             OAuthToken.issued_at >= start, OAuthToken.issued_at <= end,
         ).first() is not None
+
+    @staticmethod
+    def live_signed_by(db: Session, kid: str, start: datetime, end: datetime, kinds: Optional[tuple] = ("access", "pat")):
+        """Query of the recorded, unrevoked, unexpired tokens signed by ``kid``: those that record it, plus those
+        from before #30 (no kid) issued while it was the signer, [start, end]. ``kinds=None``: every kind."""
+        q = db.query(OAuthToken).filter(
+            OAuthToken.revoked_at.is_(None), OAuthToken.expires_at >= local_now(),
+            or_(OAuthToken.kid == kid,
+                (OAuthToken.kid.is_(None)) & (OAuthToken.issued_at >= start) & (OAuthToken.issued_at <= end)),
+        )
+        return q.filter(OAuthToken.kind.in_(kinds)) if kinds else q
+
+    @staticmethod
+    def any_live_signed_by(db: Session, kid: str, start: datetime, end: datetime,
+                           kinds: Optional[tuple] = ("access", "pat")) -> bool:
+        return OAuthTokenCRUD.live_signed_by(db, kid, start, end, kinds).with_entities(OAuthToken.jti).first() \
+            is not None
+
+    @staticmethod
+    def count_live_signed_by(db: Session, kid: str, start: datetime, end: datetime,
+                             kinds: Optional[tuple] = None) -> int:
+        return OAuthTokenCRUD.live_signed_by(db, kid, start, end, kinds).count()
 
     @staticmethod
     def apply_usage(db: Session, token: OAuthToken, *, count: int, last_seen: Optional[datetime]) -> OAuthToken:

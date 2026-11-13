@@ -27,7 +27,13 @@ import os
 import secrets
 import threading
 from pathlib import Path
-from typing import Dict, Optional
+from contextlib import contextmanager
+from typing import Callable, Dict, Optional
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - not on Linux
+    fcntl = None
 
 logger = logging.getLogger(__name__)
 
@@ -181,6 +187,50 @@ def _save_file(data: Dict[str, str]) -> None:
     tmp.replace(path)
 
 
+@contextmanager
+def _file_lock():
+    """Serialise read-modify-write of the secrets file across processes (a running server discarding the setup
+    token while ``python -m src.cli encryption-key rotate`` writes the keyring must not lose either change)."""
+    _ensure_dir()
+    path = _store_path()
+    lock_path = path.with_name(f".{path.name}.lock")
+    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, FILE_MODE)
+    try:
+        if fcntl is not None:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        if fcntl is not None:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def update_file(mutate: Callable[[Dict[str, str]], None]) -> Dict[str, str]:
+    """Apply ``mutate`` to the stored values under the file lock and write the result; returns it."""
+    with _file_lock():
+        data = _load_file()
+        mutate(data)
+        _save_file(data)
+    for name in list(_cache):
+        if data.get(name) != _cache[name]:
+            _cache.pop(name)
+    return data
+
+
+def read_file() -> Dict[str, str]:
+    """The stored values as they are on disk now (no cache, nothing generated)."""
+    return _load_file()
+
+
+def file_version() -> Optional[int]:
+    """A cheap token that changes whenever the secrets file is rewritten (its mtime in ns and inode)."""
+    try:
+        st = os.stat(_store_path())
+    except OSError:
+        return None
+    return hash((st.st_mtime_ns, st.st_ino, st.st_size))
+
+
 def get_secret(name: str, *, env_var: Optional[str] = None, length: int = 32) -> str:
     """Get a secret: env -> cache -> secrets file -> generate and persist."""
     env_name = env_var or name
@@ -194,19 +244,21 @@ def get_secret(name: str, *, env_var: Optional[str] = None, length: int = 32) ->
         _cache[name] = data[name]
         return data[name]
     generated = secrets.token_urlsafe(length)
-    data[name] = generated
-    _save_file(data)
-    _cache[name] = generated
-    return generated
+
+    def add(values):
+        if not values.get(name):  # another process may have generated it meanwhile: keep theirs
+            values[name] = generated
+
+    data = update_file(add)
+    _cache[name] = data[name]
+    return data[name]
 
 
 def discard_secret(name: str) -> None:
     """Forget a generated secret: drop it from the cache and from the secrets file (an env value is untouched)."""
     _cache.pop(name, None)
-    data = _load_file()
-    if name in data:
-        del data[name]
-        _save_file(data)
+    if name in _load_file():
+        update_file(lambda values: values.pop(name, None))
 
 
 def store_location() -> Path:

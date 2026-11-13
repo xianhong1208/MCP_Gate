@@ -37,6 +37,9 @@ class AuditAction(str, Enum):
     OAUTH_SCOPE_UPSERT = "oauth_scope_upsert"
     OAUTH_SCOPE_DELETE = "oauth_scope_delete"
     OAUTH_KEY_ROTATE = "oauth_key_rotate"
+    OAUTH_KEY_ACTIVATE = "oauth_key_activate"
+    OAUTH_KEY_REVOKE = "oauth_key_revoke"
+    OAUTH_KEY_DELETE = "oauth_key_delete"
     OAUTH_CONSENT_APPROVE = "oauth_consent_approve"
     OAUTH_CONSENT_DENY = "oauth_consent_deny"
     OAUTH_CODE_REPLAY = "oauth_code_replay"
@@ -294,6 +297,19 @@ def record_oauth_event(db: Session, action: str, *, status: str = AuditStatus.SU
     except Exception as e:  # pragma: no cover - defensive
         db.rollback()
         logger.error(f"Failed to audit {action}: {e}")
+
+
+def record_key_event(db: Session, action: "AuditAction", kid: str, details: Optional[Dict[str, Any]] = None) -> None:
+    """Audit what the scheduler's signing-key job did (system actor): an automatic rotation, a published key taking
+    over, a retired key deleted. Never raises, like record_scheduled_purge."""
+    try:
+        AuditService.log(
+            db=db, action=action, resource_type=ResourceType.SYSTEM, status=AuditStatus.SUCCESS, resource_id=kid,
+            actor_type=ActorType.SYSTEM, actor_name="scheduler", details=details or {},
+        )
+    except Exception as e:  # pragma: no cover - defensive
+        db.rollback()
+        logger.error(f"Failed to audit signing key event {action} for {kid}: {e}")
 
 
 def record_scheduled_purge(db: Session, target: str, deleted: int, details: Optional[Dict[str, Any]] = None) -> None:

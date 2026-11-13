@@ -231,7 +231,28 @@ class OAuthSigningKey(Base):
     private_pem_enc = Column(Text, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False, index=True)
     created_at = Column(DateTime, default=local_now, nullable=False)
+    # When it stopped signing (retired by a rotation, or revoked)
     rotated_at = Column(DateTime, nullable=True)
+    # #30: a key made by a rotation is published in the JWKS first and starts signing at activates_at (NULL: it
+    # signed from its creation)
+    activates_at = Column(DateTime, nullable=True)
+    # The latest expiry of any recorded token it signed; it is kept (verify-only) at least until then
+    signed_until = Column(DateTime, nullable=True)
+    # Emergency revocation: out of the JWKS at once, and nothing it signed verifies any more
+    revoked_at = Column(DateTime, nullable=True)
+
+    @property
+    def is_revoked(self) -> bool:
+        return self.revoked_at is not None
+
+    @property
+    def is_pending(self) -> bool:
+        """Published, not signing yet."""
+        return not self.is_active and self.rotated_at is None and self.revoked_at is None
+
+    @property
+    def activated_at(self):
+        return self.activates_at or self.created_at
 
     def to_dict(self) -> dict:
         return {
@@ -239,8 +260,13 @@ class OAuthSigningKey(Base):
             "alg": self.alg,
             "public_jwk": json.loads(self.public_jwk) if self.public_jwk else None,
             "is_active": self.is_active,
+            "is_pending": self.is_pending,
+            "is_revoked": self.is_revoked,
             "created_at": format_datetime(self.created_at),
+            "activates_at": format_datetime(self.activated_at),
             "rotated_at": format_datetime(self.rotated_at),
+            "revoked_at": format_datetime(self.revoked_at),
+            "signed_until": format_datetime(self.signed_until),
         }
 
 
@@ -430,6 +456,9 @@ class OAuthToken(Base):
     label = Column(String(128), nullable=True)
     # revoke_family filters on parent_jti (OR jti): replay detection must not scan the whole table
     parent_jti = Column(String(64), nullable=True, index=True)
+    # The signing key's kid (#30): what a key revocation revokes and what keeps a retired key. NULL for tokens issued
+    # before 1.4, which are attributed to the key that was active when they were issued.
+    kid = Column(String(64), nullable=True, index=True)
     issued_at = Column(DateTime, default=local_now, nullable=False, index=True)
     expires_at = Column(DateTime, nullable=False, index=True)
     revoked_at = Column(DateTime, nullable=True, index=True)
@@ -454,6 +483,7 @@ class OAuthToken(Base):
         return {
             "jti": self.jti,
             "kind": self.kind,
+            "kid": self.kid,
             "client_id": self.client_id,
             "client_name": self.client.client_name if self.client else self.client_name_snapshot,
             "client_deleted": self.client is None and self.client_name_snapshot is not None,
