@@ -62,9 +62,3 @@ MCP Gate will govern two kinds of server from one console:
 - **Several hosts** for the orchestrator: a host registry and a remote agent (#2).
 - **GitHub and Google sign-in verified against live OAuth apps** (#1).
 - **REST → MCP:** wrap an existing REST API as an MCP server (#51).
-
-## Verification still to do
-
-- GitHub and Google sign-in are implemented and unit-tested, but have never run against real OAuth apps (#1).
-- The Docker runtime of the orchestrator is covered by a fake runtime in tests and a build and smoke test of
-  the `mcp-runtime` image in CI; it has not run against a real Docker daemon in the test suite.

@@ -53,9 +53,3 @@ MCP Gate 會在同一個管理台管兩種 server:
 - orchestrator 支援**多台主機**:主機登錄與遠端 agent(#2)。
 - **GitHub 與 Google 登入在真實 OAuth app 上驗證**(#1)。
 - **REST → MCP:** 把現有的 REST API 包成 MCP server(#51)。
-
-## 尚待驗證
-
-- GitHub 與 Google 登入已實作並有單元測試,但從沒在真實的 OAuth app 上跑過(#1)。
-- orchestrator 的 Docker runtime 在測試裡用的是假的 runtime,CI 只建置 `mcp-runtime` image 並做 smoke test;測試套件
-  沒有在真的 Docker daemon 上跑過它。
