@@ -39,10 +39,6 @@ oauth:
   # real gate)
   dcr_auto_approve: ${OAUTH_DCR_AUTO_APPROVE:-true}
   pat_max_days: 365
-  # Signing keys rotate on their own every N days (0 = only by hand); a new key is published in the JWKS this many
-  # minutes before it starts signing, so resource servers have it cached first (#30)
-  signing_key_rotation_days: ${OAUTH_SIGNING_KEY_ROTATION_DAYS:-90}
-  signing_key_prepublish_minutes: ${OAUTH_SIGNING_KEY_PREPUBLISH_MINUTES:-1440}
   # Client ID Metadata Documents (MCP authorization 2026-07-28): a client may use an https URL as its client_id;
   # MCP Gate fetches the client's metadata from that URL instead of the client registering. DCR keeps working.
   cimd:

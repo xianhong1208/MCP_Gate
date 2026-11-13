@@ -3,7 +3,7 @@
     python -m src.cli encryption-key status     how many encrypted values each key holds
     python -m src.cli encryption-key rotate     add a new ENCRYPTION_KEY, re-encrypt everything, retire the old one
 
-Reads the same configuration as main.py (``--config``, ``.env``, the environment). Safe to run while MCP Gate is
+Reads the same configuration as main.py (``--config-dir``, ``.env``, the environment). Safe to run while MCP Gate is
 running; see src/encryption_rotation.py.
 """
 
@@ -20,7 +20,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(prog="python -m src.cli", description="MCP Gate maintenance commands")
-    parser.add_argument("--config", default="config/config.yaml")
+    parser.add_argument("--config-dir", default=None, help="configuration directory (default: MCP_GATE_CONFIG_DIR or config)")
     sub = parser.add_subparsers(dest="command", required=True)
     enc = sub.add_parser("encryption-key", help="ENCRYPTION_KEY keyring: status and rotation")
     enc.add_argument("action", choices=["status", "rotate"])
@@ -33,8 +33,9 @@ def main(argv=None) -> int:
     load_dotenv(PROJECT_ROOT / ".env")
     args = parse_args(argv)
     from src.config import Config
+    from src.config.manager import default_config_dir
 
-    Config.set_config(args.config)
+    Config.set_config_dir(args.config_dir or default_config_dir())
     from db.database import make_session
     from src import encryption_rotation as rotation
     from src.utils.secrets_store import migrate_legacy_store
