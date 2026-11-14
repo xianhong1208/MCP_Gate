@@ -34,6 +34,8 @@ claim the owner account first. A dependency audit in CI.
 **1.3.1 (2026-11-09).** Signing in from the consent screen returns to the authorization request; two
 services can no longer share one audience.
 
+**1.4.0 (2026-11-14), security and operations.** The generated secrets live in their own `secrets/` directory, apart from the database. Signing keys rotate on their own every 90 days (published a day before use; "Rotate now" and an emergency "Revoke" in the console), and the encryption key can be rotated without downtime. An official Docker image (`tonyhuang1101/mcp-gate`) and a compose file. The configuration is five files under `config/`. A lost secrets volume now stops startup instead of starting a server that cannot sign.
+
 See [CHANGELOG.md](CHANGELOG.md) for the details.
 
 ## How the next versions fit together
@@ -50,7 +52,6 @@ MCP Gate will govern two kinds of server from one console:
 
 | Version | What you get |
 |---|---|
-| **1.4: security and operations** | `ENCRYPTION_KEY` no longer sits next to the database in `data/`. Rotation for both signing keys and the encryption key: today signing keys are rotated by hand, and changing the encryption key makes the secrets it protects unreadable. An official Docker image and a compose file. |
 | **1.5: know your tools** | Each tool's description and input schema is pinned by a hash, and **a new or changed tool is hidden until an admin approves it**. Tool descriptions are scanned for prompt injection ("tool poisoning"). Support for MCP 2026-07-28: `server/discover`, stateless servers, a deprecation notice for dynamic client registration, `application_type`. Ready-made client configuration for Claude Code, Cursor, VS Code and Codex. |
 | **1.6: who may call what** | **Tool-level policy:** map tools to scopes and allow or deny tools per token or client. The rules reach your servers through the policy feed and are enforced by the same `MCPGateVerifier` / FastMCP middleware as in the README example, extended, so no request goes through MCP Gate. **Step-up:** a call that needs more answers with `WWW-Authenticate: … scope=`, and the client asks for it. **Tool bundles** to grant a set of tools at once. **"Inspect as"** shows which tools a token may and may not call. |
 | **1.7: see every call** | An audit of tool calls (tool, caller, result and time; arguments are not recorded by default). Latency and errors per tool. Quotas. OpenTelemetry export. Alerts. |

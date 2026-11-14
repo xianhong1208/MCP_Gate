@@ -1,6 +1,6 @@
 [project]
 name = "mcp-gate"
-version = "1.3.1"
+version = "1.4.0"
 description = "MCP Gate - OAuth 2.1 Authorization Server and control plane for your MCP servers"
 readme = "README.md"
 license = { text = "MIT" }
