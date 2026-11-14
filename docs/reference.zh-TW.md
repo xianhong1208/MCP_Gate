@@ -53,7 +53,7 @@ Access token 的 claim:`iss`、`sub`、`aud`、`scope`、`client_id`、`jti`、`
 |---|---|---|
 | `OAUTH_ISSUER` | `http://localhost:4568` | MCP Gate 的公開網址,同時決定 MCP Gate bind 的 port。**非本機部署一定要改。** |
 | `DATABASE_URL` | `sqlite:///data/mcp_gate.db` | 指向 `postgresql://…` 即改用 PostgreSQL(`uv sync --extra postgres`)。 |
-| `SESSION_SECRET_KEY`、`ENCRYPTION_KEY` | 自動產生 | 未設定時存在 `secrets/secrets.json`(見 `MCP_GATE_SECRETS_DIR`)。`ENCRYPTION_KEY` 保護私鑰與儲存的 secret;請用 `python -m src.cli encryption-key rotate` 輪替,不要直接改(會讓它們無法解密)。 |
+| `SESSION_SECRET_KEY`、`ENCRYPTION_KEY` | 自動產生 | 未設定時存在 `secrets/secrets.json`(見 `MCP_GATE_SECRETS_DIR`)。`ENCRYPTION_KEY` 保護私鑰與儲存的 secret;請用 `python -m src.cli encryption-key rotate` 輪替,不要直接改(會讓它們無法解密)。金鑰打不開資料庫裡的簽章金鑰,或既有資料庫找不到金鑰時,會拒絕啟動([疑難排解](troubleshooting.md#server))。 |
 | `ENCRYPTION_KEYS_PREVIOUS` | — | 舊的加密金鑰,以逗號分隔,仍可解密它們加密過的資料。只有輪替放在環境變數裡的金鑰時才需要;輪替指令會把自己的舊金鑰記在 secrets 檔裡。 |
 | `MCP_GATE_SECRETS_DIR` | `secrets` | 自動產生的 secret 所在目錄,與 `data/` 分開(目錄 `0700`、檔案 `0600`)。舊的 `data/secrets.json` 會在第一次啟動時搬過來。請和 `data/` 分開備份;Docker 請給它獨立的 volume。 |
 | `MCP_GATE_SECRETS_FILE` | — | 改用指定的檔案(不會搬任何東西進去)。 |

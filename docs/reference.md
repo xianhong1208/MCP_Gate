@@ -53,7 +53,7 @@ A key may be set in one file only: the same key in two files, or a missing file,
 |---|---|---|
 | `OAUTH_ISSUER` | `http://localhost:4568` | Public URL of MCP Gate. Also decides the port MCP Gate binds. **Change this for any non-local deployment.** |
 | `DATABASE_URL` | `sqlite:///data/mcp_gate.db` | Point at `postgresql://…` to use PostgreSQL (`uv sync --extra postgres`). |
-| `SESSION_SECRET_KEY`, `ENCRYPTION_KEY` | auto-generated | Stored in `secrets/secrets.json` when unset (see `MCP_GATE_SECRETS_DIR`). `ENCRYPTION_KEY` protects private keys and stored secrets; rotate it with `python -m src.cli encryption-key rotate`, never by editing it (that makes them unreadable). |
+| `SESSION_SECRET_KEY`, `ENCRYPTION_KEY` | auto-generated | Stored in `secrets/secrets.json` when unset (see `MCP_GATE_SECRETS_DIR`). `ENCRYPTION_KEY` protects private keys and stored secrets; rotate it with `python -m src.cli encryption-key rotate`, never by editing it (that makes them unreadable). A key that does not open the stored signing keys, or a missing one on an existing database, stops startup ([Troubleshooting](troubleshooting.md#server)). |
 | `ENCRYPTION_KEYS_PREVIOUS` | — | Older encryption keys, comma-separated, that still decrypt what they encrypted. Only needed while rotating a key kept in the environment; the rotation command keeps its own in the secrets file. |
 | `MCP_GATE_SECRETS_DIR` | `secrets` | Directory for the generated secrets, kept apart from `data/` (mode `0700`, the file `0600`). An existing `data/secrets.json` is moved here on the first start. Back it up separately from `data/`; in Docker give it its own volume. |
 | `MCP_GATE_SECRETS_FILE` | — | An exact file to use instead (nothing is moved into it). |
