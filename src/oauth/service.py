@@ -27,7 +27,7 @@ from db.models import (
     local_now,
 )
 from db.database import make_session
-from db.seed import CONSOLE_CLIENT_ID, SCANNER_CLIENT_ID
+from db.seed import CONSOLE_CLIENT_ID, LEGACY_CLIENT_IDS, SCANNER_CLIENT_ID
 from src.audit import AuditAction, AuditStatus, ResourceType, record_oauth_event
 from src.adapters import (
     OAuthAuthRequestAdapter, OAuthClientAdapter, OAuthCodeAdapter, OAuthConsentAdapter, OAuthScopeAdapter,
@@ -48,7 +48,7 @@ SERVER_AUTH_METHODS = ["client_secret_basic", "client_secret_post", "private_key
 ASSERTION_SIGNING_ALGS = ["RS256", "ES256"]
 CODE_CHALLENGE_METHOD = "S256"
 AUTH_REQUEST_TTL = timedelta(minutes=10)
-SCANNER_TOKEN_TTL_SECONDS = 120
+SCANNER_TOKEN_TTL_SECONDS = signing_keys.SCANNER_TOKEN_TTL_SECONDS
 DEFAULT_SCANNER_SCOPES = "mcp:tools:read mcp:tools:invoke mcp:resources:read mcp:prompts:read"
 
 
@@ -669,9 +669,16 @@ def error_redirect(redirect_uri: str, err: OAuthError, state: Optional[str]) -> 
 # ---------------------------------------------------------------------------
 # token issuance
 # ---------------------------------------------------------------------------
-def _sign(db: Session, payload: dict, typ: str) -> str:
-    key = signing_keys.ensure_active_signing_key(db)
-    return sign_rs256(payload, signing_keys.load_private_pem(key), key.kid, typ=typ)
+def _sign(db: Session, payload: dict, typ: str, *, may_commit: bool = True, record_expiry: bool = False) -> tuple:
+    """Sign with the active key; returns (jwt, kid). ``may_commit`` lets a published key that is due take over
+    first (that commits); inside a grant's transaction (``commit=False``) the grant already did so before it began,
+    and the current signer is used as it is. ``record_expiry`` raises the key's signed_until in the caller's
+    transaction -- for recorded tokens; unrecorded ones are short-lived (signing_keys.unrecorded_token_bound)."""
+    key = signing_keys.ensure_active_signing_key(db) if may_commit else signing_keys.current_signer(db)
+    token = sign_rs256(payload, signing_keys.load_private_pem(key), key.kid, typ=typ)
+    if record_expiry:
+        signing_keys.note_signed(db, key, datetime.fromtimestamp(payload["exp"]))
+    return token, key.kid
 
 
 def issue_access_token(
@@ -693,11 +700,11 @@ def issue_access_token(
     if user:
         payload["email"] = user.email
         payload["name"] = user.username
-    token = _sign(db, payload, typ="at+jwt")
+    token, kid = _sign(db, payload, typ="at+jwt", may_commit=commit, record_expiry=record)
     rec = None
     if record:
         rec = OAuthTokenAdapter.create(
-            db, jti=jti, kind=kind, client_id=client_id, user_id=user.id if user else None, sub=sub,
+            db, jti=jti, kind=kind, kid=kid, client_id=client_id, user_id=user.id if user else None, sub=sub,
             audience=audience, service_id=service.id if service else None, scope=scope, label=label,
             parent_jti=parent_jti, expires_at=datetime.fromtimestamp(now + expires_in), commit=commit,
         )
@@ -724,9 +731,9 @@ def issue_refresh_token(
         "iat": now, "exp": now + expires_in, "jti": jti, "token_use": "refresh",
         "aud": refresh_token_audience(),
     }
-    token = _sign(db, payload, typ="refresh+jwt")
+    token, kid = _sign(db, payload, typ="refresh+jwt", may_commit=commit, record_expiry=True)
     rec = OAuthTokenAdapter.create(
-        db, jti=jti, kind="refresh", client_id=client_id, user_id=user.id if user else None, sub=sub,
+        db, jti=jti, kind="refresh", kid=kid, client_id=client_id, user_id=user.id if user else None, sub=sub,
         audience=audience, service_id=service.id if service else None, scope=scope,
         parent_jti=parent_jti, expires_at=datetime.fromtimestamp(now + expires_in), commit=commit,
     )
@@ -743,7 +750,8 @@ def verify_jwt(db: Session, token: str, *, expect_use: Optional[str] = None, pub
         raise OAuthError("invalid_grant", str(e))
     kid = header.get("kid")
     key = signing_keys.get_key_by_kid(db, kid) if kid else None
-    if not key or (published_only and not signing_keys.is_published(db, key)):
+    # A revoked key verifies nothing, not even the refresh tokens only MCP Gate sees (#30)
+    if not key or key.revoked_at is not None or (published_only and not signing_keys.is_published(db, key)):
         raise OAuthError("invalid_grant", "unknown signing key")
     try:
         claims = decode_rs256(token, signing_keys.public_jwk_of(key), issuer=issuer())
@@ -885,10 +893,17 @@ def authorization_code_grant(
     return _token_response(access, expires_in, scope, refresh)
 
 
+def _issued_to(claims: dict, client: OAuthClient) -> bool:
+    """The token was issued to this client. A token signed before the built-in clients were renamed carries the old
+    id (personal access tokens live up to a year), which still counts as the renamed client."""
+    claimed = claims.get("client_id")
+    return LEGACY_CLIENT_IDS.get(claimed, claimed) == client.client_id
+
+
 def refresh_token_grant(db: Session, *, client: OAuthClient, refresh_token: str, requested_scope: Optional[str],
                         resource: Optional[str] = None, ip: Optional[str] = None) -> dict:
     claims = verify_jwt(db, refresh_token, expect_use="refresh")
-    if claims.get("client_id") != client.client_id:
+    if not _issued_to(claims, client):
         raise OAuthError("invalid_grant", "refresh token belongs to another client")
     rec = OAuthTokenAdapter.get(db, claims.get("jti", ""))
     if rec is None:
@@ -961,7 +976,7 @@ def revoke_token(db: Session, *, client: OAuthClient, token: str, ip: Optional[s
         claims = verify_jwt(db, token)
     except OAuthError:
         return
-    if claims.get("client_id") != client.client_id:
+    if not _issued_to(claims, client):
         return
     rec = OAuthTokenAdapter.get(db, claims.get("jti", ""))
     if rec is None:
@@ -989,7 +1004,7 @@ def introspect_token(db: Session, token: str, *, caller: OAuthClient, ip: Option
         return inactive
     if claims.get("token_use") != "refresh" and not _signed_by_published_key(db, token):
         return inactive  # a resource server would no longer accept it either
-    is_owner = claims.get("client_id") == caller.client_id
+    is_owner = _issued_to(claims, caller)
     if not is_owner:
         rs_audience = resource_server_audience(caller)
         if rs_audience is None or claims.get("token_use") != "access":
@@ -1198,7 +1213,7 @@ def mint_probe_token_like(db: Session, *, record: OAuthToken, service: Service) 
     if record.user:
         payload["email"] = record.user.email
         payload["name"] = record.user.username
-    return _sign(db, payload, typ="at+jwt")
+    return _sign(db, payload, typ="at+jwt")[0]
 
 
 def mint_scanner_token(db: Session, service: Service) -> Optional[str]:

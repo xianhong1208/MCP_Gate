@@ -1,0 +1,38 @@
+# MCP Gate configuration: server, logging and background jobs
+#
+# The configuration is five files in this directory (database, oauth, identity, security, system), merged at
+# startup; a key may be set in one file only. Environment variable syntax:
+#   ${VAR_NAME}           required
+#   ${VAR_NAME:-default}  optional, with a default value
+# Sensitive and per-machine values (keys, passwords, URLs) come only from environment variables (.env); never write
+# them here directly.
+
+# Usually no need to change: leaving port at 0 takes the port from OAUTH_ISSUER (4568 if none is given).
+# Only a reverse proxy setup (issuer is a domain while the app actually binds another port) needs an explicit
+# SERVER_PORT.
+server:
+  host: "${SERVER_HOST:-0.0.0.0}"
+  port: ${SERVER_PORT:-0}
+
+# LOG_FORMAT: colorized (readable) or json (one object per line, for log collectors).
+# LOG_DIR: where the daily category files go; set it to an empty value to log to the console only (the Docker
+# image does: `docker logs` has everything).
+logging:
+  level: "${LOG_LEVEL:-INFO}"
+  format: "${LOG_FORMAT:-colorized}"
+  log_dir: "${LOG_DIR:-logs}"
+  rotation: "00:00"
+  rotation_max_size: "50 MB"
+  retention: "30 days"
+  compression: "zip"
+
+# Background jobs (run inside the server process)
+scheduler:
+  oauth_cleanup_hours: 6              # purge expired OAuth codes / requests / tokens and console sessions
+  usage_retention_days: 30            # token events behind the dashboard statistics
+  audit_retention_days: ${AUDIT_RETENTION_DAYS:-90}
+  health_check_enabled: true
+  health_check_seconds: ${HEALTH_CHECK_SECONDS:-30}
+  health_check_concurrency: 8         # services checked at the same time
+  health_check_timeout_seconds: 10    # a check taking longer counts as failed
+  health_write_interval_minutes: 5    # an unchanged health status is rewritten at most this often

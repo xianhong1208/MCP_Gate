@@ -37,7 +37,7 @@ class SetupRequest(BaseModel):
     email: str
     password: str
     username: Optional[str] = None
-    # The one-time token from the startup log / data/secrets.json (src/identity/setup_token.py)
+    # The one-time token from the startup log / secrets/secrets.json (src/identity/setup_token.py)
     setup_token: Optional[str] = None
 
 

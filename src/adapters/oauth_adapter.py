@@ -31,6 +31,18 @@ class OAuthKeyAdapter(OAuthSigningKeyCRUD):
         public_cache.invalidate()
         return deleted
 
+    @classmethod
+    def revoke(cls, db, key, **kwargs):
+        count = super().revoke(db, key, **kwargs)
+        public_cache.invalidate()
+        return count
+
+    @classmethod
+    def activate(cls, db, kid):
+        key = super().activate(db, kid)
+        public_cache.invalidate()
+        return key
+
 
 class OAuthClientAdapter(OAuthClientCRUD):
 

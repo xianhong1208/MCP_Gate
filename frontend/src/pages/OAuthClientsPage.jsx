@@ -343,18 +343,29 @@ function ScopesSection() {
 }
 
 // ---------- Signing keys ----------
+function keyState(k) {
+  if (k.is_revoked) return 'revoked'
+  if (k.is_active) return 'active'
+  if (k.is_pending) return 'pending'
+  return k.published ? 'published' : 'retired'
+}
+const KEY_TONE = { active: 'success', pending: 'info', published: 'warning', retired: 'neutral', revoked: 'danger' }
+
 function KeysSection() {
   const { t } = useTranslation()
   const toast = useToast()
   const { confirm } = useConfirm()
   const [keys, setKeys] = useState([])
+  const [rotation, setRotation] = useState(null)
   const [isLoading, setIsLoading] = useState(true)
   const [rotating, setRotating] = useState(false)
+  const [revoking, setRevoking] = useState(null)
 
   const load = useCallback(async () => {
     try {
       const res = await oauthApi.keys.list()
       setKeys(res.keys || [])
+      setRotation(res.rotation || null)
     } catch (err) {
       toast.error(err.message || t('clients.loadFailed'))
     } finally {
@@ -364,18 +375,21 @@ function KeysSection() {
 
   useEffect(() => { load() }, [load])
 
+  const pending = keys.find((k) => keyState(k) === 'pending')
+  const hours = rotation ? Math.round((rotation.prepublish_minutes / 60) * 10) / 10 : 24
+
   const rotate = async () => {
     const ok = await confirm({
       title: t('clients.keys.rotateConfirmTitle'),
-      message: t('clients.keys.rotateConfirmBody'),
+      message: t('clients.keys.rotateConfirmBody', { hours }),
       confirmText: t('clients.keys.rotate'),
       type: 'warning',
     })
     if (!ok) return
     setRotating(true)
     try {
-      await oauthApi.keys.rotate()
-      toast.success(t('clients.keys.rotated'))
+      const key = await oauthApi.keys.rotate()
+      toast.success(key.is_active ? t('clients.keys.rotatedNow') : t('clients.keys.rotated', { date: formatDateTime(key.activates_at) }))
       await load()
     } catch (err) {
       toast.error(err.message || t('clients.keys.rotateFailed'))
@@ -384,37 +398,87 @@ function KeysSection() {
     }
   }
 
+  const revoke = async (k) => {
+    const state = keyState(k)
+    const ok = await confirm({
+      title: t('clients.keys.revokeConfirmTitle'),
+      message: [
+        t('clients.keys.revokeConfirmBody', { count: k.live_tokens }),
+        state === 'active' ? t('clients.keys.revokeActiveNote') : null,
+      ].filter(Boolean).join(' '),
+      confirmText: t('clients.keys.revoke'),
+      type: 'danger',
+    })
+    if (!ok) return
+    setRevoking(k.kid)
+    try {
+      const res = await oauthApi.keys.revoke(k.kid)
+      toast.success(t('clients.keys.revoked', { count: res.tokens_revoked }))
+      await load()
+    } catch (err) {
+      toast.error(err.message || t('clients.keys.revokeFailed'))
+    } finally {
+      setRevoking(null)
+    }
+  }
+
+  const describe = (k, state) => {
+    const parts = [k.alg, t('clients.keys.created', { date: k.created_at ? formatDateTime(k.created_at) : '—' })]
+    if (state === 'pending') parts.push(t('clients.keys.signsFrom', { date: formatDateTime(k.activates_at) }))
+    if (state === 'published' || state === 'retired') parts.push(t('clients.keys.retiredOn', { date: formatDateTime(k.rotated_at) }))
+    if (state === 'revoked') parts.push(t('clients.keys.revokedOn', { date: formatDateTime(k.revoked_at) }))
+    if (state !== 'revoked' && state !== 'pending') parts.push(t('clients.keys.liveTokens', { count: k.live_tokens || 0 }))
+    return parts.join(' · ')
+  }
+
   return (
     <Card>
       <CardHeader
         title={t('clients.keys.title')}
         description={t('clients.keys.subtitle')}
         action={
-          <Button variant="secondary" size="sm" icon={RefreshCw} onClick={rotate} loading={rotating}>
+          <Button variant="secondary" size="sm" icon={RefreshCw} onClick={rotate} loading={rotating} disabled={!!pending}
+            title={pending ? t('clients.keys.rotatePendingHint') : undefined}>
             {rotating ? t('clients.keys.rotating') : t('clients.keys.rotate')}
           </Button>
         }
       />
+      {rotation && (
+        <p className="mb-2 text-xs text-muted-foreground">
+          {rotation.every_days > 0
+            ? t('clients.keys.schedule', { days: rotation.every_days, hours })
+            : t('clients.keys.scheduleOff')}
+          {rotation.next_at ? ` ${t('clients.keys.nextRotation', { date: formatDateTime(rotation.next_at) })}` : ''}
+        </p>
+      )}
       {isLoading ? (
         <LoadingBlock className="py-6" size="sm" />
       ) : keys.length === 0 ? (
         <EmptyState compact icon={KeyRound} title={t('clients.keys.empty')} />
       ) : (
         <div className="divide-y divide-border">
-          {keys.map((k) => (
-            <div key={k.kid} className="flex items-center justify-between gap-3 py-2.5">
-              <div className="min-w-0">
-                <p className="truncate font-mono text-xs font-medium text-foreground">{k.kid}</p>
-                <p className="text-xs text-muted-foreground tabular-nums">{k.alg} · {t('clients.keys.created', { date: k.created_at ? formatDateTime(k.created_at) : '—' })}</p>
+          {keys.map((k) => {
+            const state = keyState(k)
+            return (
+              <div key={k.kid} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 py-2.5">
+                <div className="min-w-0 flex-1 basis-56">
+                  <p className="truncate font-mono text-xs font-medium text-foreground">{k.kid}</p>
+                  <p className="text-xs text-muted-foreground tabular-nums">{describe(k, state)}</p>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <StatusPill tone={KEY_TONE[state]} title={t(`clients.keys.hint.${state}`)}>
+                    {t(`clients.keys.state.${state}`)}
+                  </StatusPill>
+                  {state !== 'revoked' && (
+                    <Button variant="destructive" size="sm" icon={Ban} onClick={() => revoke(k)}
+                      loading={revoking === k.kid} aria-label={t('clients.keys.revokeAria', { kid: k.kid.slice(0, 12) })}>
+                      {t('clients.keys.revoke')}
+                    </Button>
+                  )}
+                </div>
               </div>
-              <StatusPill
-                tone={k.is_active ? 'success' : k.published ? 'warning' : 'neutral'}
-                title={k.is_active ? undefined : k.published ? t('clients.keys.publishedHint') : t('clients.keys.retiredHint')}
-              >
-                {k.is_active ? t('clients.keys.active') : k.published ? t('clients.keys.published') : t('clients.keys.inactive')}
-              </StatusPill>
-            </div>
-          ))}
+            )
+          })}
         </div>
       )}
     </Card>

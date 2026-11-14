@@ -5,7 +5,7 @@ OAuth 2.1 Authorization Server + MCP server admin console.
 
 Usage:
     python main.py
-    python main.py --config config/config.yaml --port 4568
+    python main.py --config-dir config --port 4568
     python main.py --migrate-only status
 """
 
@@ -31,6 +31,7 @@ from fastapi.staticfiles import StaticFiles  # noqa: E402
 
 from db import make_session, seed_database  # noqa: E402
 from src.config import Config  # noqa: E402
+from src.config.manager import default_config_dir  # noqa: E402
 from src.discovery.websocket_manager import get_ws_manager  # noqa: E402
 from src.exceptions.handlers import register_exception_handlers  # noqa: E402
 from src.logging import RequestLoggingMiddleware, get_logger, setup_logging  # noqa: E402
@@ -223,7 +224,8 @@ def warn_if_multiple_workers(env=None) -> bool:
 
 def parse_args():
     parser = argparse.ArgumentParser(description="MCP Gate")
-    parser.add_argument("--config", type=str, default="config/config.yaml")
+    parser.add_argument("--config-dir", type=str, default=None,
+                        help="Directory holding the five config files (default: $MCP_GATE_CONFIG_DIR or config)")
     parser.add_argument("--host", type=str)
     parser.add_argument("--port", type=int)
     parser.add_argument("--reload", action="store_true")
@@ -248,6 +250,10 @@ def init_database(*, run_migrations: bool = True) -> dict:
     identity = Config.get_identity_config()
     db = make_session()
     try:
+        # Before anything may generate ENCRYPTION_KEY: a lost or replaced secrets file must stop startup, not start a
+        # server whose signing key no longer decrypts (src/encryption_check.py)
+        from src.encryption_check import check_encryption_key
+        check_encryption_key(db)
         # Weak SESSION_SECRET_KEY / ENCRYPTION_KEY: warned always, refused only while the install is new (no
         # signing key yet, so nothing is encrypted with it); see src/utils/secret_policy.py
         from src.adapters import OAuthKeyAdapter
@@ -291,7 +297,8 @@ def _print_banner(summary: dict, host: str, port: int) -> None:
     logger.info(f"  JWKS:       {issuer}/.well-known/jwks.json  (kid={summary.get('signing_kid', '?')[:12]}…)")
     if summary.get("users", 0) == 0:
         from src.identity import setup_token
-        logger.warning(f"  No admin account yet → open http://localhost:{port}/setup to create the owner")
+        # The issuer, not the bind port: in a container or behind a proxy the browser uses the published address
+        logger.warning(f"  No admin account yet → open {issuer}/setup to create the owner")
         logger.warning(f"  Setup token: {setup_token.current()}  (also in {setup_token.location()} as "
                        f"{setup_token.NAME}; it stops working once the owner exists)")
     elif summary.get("owner_created"):
@@ -303,7 +310,7 @@ def _print_banner(summary: dict, host: str, port: int) -> None:
 def main():
     args = parse_args()
     try:
-        Config.set_config(args.config)
+        Config.set_config_dir(args.config_dir or default_config_dir())
         config = Config.get_config_model()
     except Exception as e:
         print(f"Error loading config: {e}")
@@ -313,7 +320,17 @@ def main():
     setup_logging(level=log_config.level, format_type=log_config.format, log_dir=log_config.log_dir,
                   rotation=log_config.rotation, rotation_max_size=log_config.rotation_max_size,
                   retention=log_config.retention, compression=log_config.compression)
+    # Logged only now so they reach the log file too, not only the terminal
+    for notice in Config.get_startup_notices():
+        logger.error(notice)
     warn_if_multiple_workers()
+    # Before anything reads a secret, and after logging is set up so the move lands in the log file (#29)
+    from src.utils.secrets_store import migrate_legacy_store
+    try:
+        migrate_legacy_store()
+    except OSError as e:
+        logger.error(f"Could not move data/secrets.json into the secrets directory: {e}")
+        sys.exit(1)
 
     if args.migrate_only:
         from db.migrate import run_migration_command
@@ -321,10 +338,11 @@ def main():
         ensure_database_ready(Config.get_database_config().url, logger)
         sys.exit(0 if run_migration_command(args.migrate_only, args.message, args.revision) else 1)
 
+    from src.encryption_check import EncryptionKeyMismatchError
     from src.utils.secret_policy import WeakSecretError
     try:
         summary = init_database(run_migrations=not args.no_migrate)
-    except WeakSecretError as e:
+    except (WeakSecretError, EncryptionKeyMismatchError) as e:
         logger.error(str(e))
         sys.exit(1)
     except Exception as e:

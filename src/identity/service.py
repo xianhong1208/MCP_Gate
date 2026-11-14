@@ -51,7 +51,7 @@ def setup_owner(db: Session, *, email: str, password: str, username: str = "owne
             "auth.setup_token_invalid",
             # No path here: the caller is not signed in, and the log already names the file
             "The setup token is missing or wrong. It is printed in the server log at startup and kept in the "
-            f"secrets file (data/secrets.json by default) as {setup_token_store.NAME}.", 403)
+            f"secrets file (secrets/secrets.json by default) as {setup_token_store.NAME}.", 403)
     email = _normalize_email(email)
     username = (username or "").strip()
     _check_length("username", username, AdminUser.username)

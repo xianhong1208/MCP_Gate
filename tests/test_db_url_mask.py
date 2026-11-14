@@ -10,7 +10,7 @@ from src.utils.db_url import mask_db_url
     ("postgresql+psycopg2://app:p%40ss@db/mcp", "postgresql+psycopg2://app:***@db/mcp"),
     ("postgresql://app:s3cr3t@db/mcp?sslmode=require&password=x2", "postgresql://app:***@db/mcp?sslmode=require&password=***"),
     ("postgresql://app@db/mcp", "postgresql://app@db/mcp"),
-    ("sqlite:///data/mcp_center.db", "sqlite:///data/mcp_center.db"),
+    ("sqlite:///data/mcp_gate.db", "sqlite:///data/mcp_gate.db"),
     ("not a url user:pw@host", "not a url user:pw@host"),
 ])
 def test_mask_db_url(url, expected):

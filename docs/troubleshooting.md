@@ -25,7 +25,7 @@ The server's `JWTVerifier` settings do not match MCP Gate: `issuer` must equal `
 ## Console
 
 **`/setup` says the setup token is missing or wrong (`403 setup_token_invalid`)**
-The token is printed in the server log at startup (`Setup token: …`) and kept in `data/secrets.json` (or `MCP_GATE_SECRETS_FILE`) as `SETUP_TOKEN`; `MCP_GATE_SETUP_TOKEN` overrides it. Copy it from either. Setting `ADMIN_EMAIL`/`ADMIN_PASSWORD` creates the owner at startup instead.
+The token is printed in the server log at startup (`Setup token: …`) and kept in `secrets/secrets.json` (or `MCP_GATE_SECRETS_FILE`) as `SETUP_TOKEN`; `MCP_GATE_SETUP_TOKEN` overrides it. Copy it from either. Setting `ADMIN_EMAIL`/`ADMIN_PASSWORD` creates the owner at startup instead.
 
 **`/setup` returns `409 setup_already_done`**
 An owner account exists. Sign in at `/login`. If you lost the password, set `ADMIN_EMAIL`/`ADMIN_PASSWORD` in `.env` and start with a fresh database, or reset the password directly:
@@ -72,7 +72,7 @@ MCP Gate writes `OAUTH_ISSUER` into every token's `iss` claim and into the disco
 Typical causes and fixes:
 
 - **Reached by IP or another hostname** (`http://192.168.1.20:4568` while the issuer is `http://localhost:4568`): pick the address clients will actually use and set `OAUTH_ISSUER` to it. Tokens issued under the old issuer stop verifying, so do this before clients are configured.
-- **Behind a reverse proxy** (`http://127.0.0.1:4568` while the issuer is `https://auth.example.com`): the proxy must send `X-Forwarded-Proto` and `X-Forwarded-Host`, and its IP must be listed in `security.trusted_proxies` in `config/config.yaml`; forwarded headers from any other peer are ignored on purpose. See [deploy.md](deploy.md).
+- **Behind a reverse proxy** (`http://127.0.0.1:4568` while the issuer is `https://auth.example.com`): the proxy must send `X-Forwarded-Proto` and `X-Forwarded-Host`, and its IP must be listed in `security.trusted_proxies` in `config/security.yaml`; forwarded headers from any other peer are ignored on purpose. See [deploy.md](deploy.md).
 - **`localhost` versus `127.0.0.1`**: browsers and MCP clients treat them as different origins. Use one consistently in the issuer, the client configuration and the service audiences.
 - **"OAuth request to … from <ip> named host X, which is not OAUTH_ISSUER"**: the request came straight from an internet address, so the `Host` header is whatever that client chose. Unless your clients really use X, ignore it. These hosts carry `plausible: false` in `issuer_mismatches`, get no "set OAUTH_ISSUER to …" advice, and their warnings are capped at 20 an hour.
 
@@ -82,8 +82,16 @@ The list keeps at most 20 hosts (internet-named ones are dropped first, then the
 **`Address already in use`**
 Another process is listening on the port derived from `OAUTH_ISSUER`. Stop it or set `SERVER_PORT`.
 
+**`The encryption key does not match the database`** (MCP Gate exits at startup)
+The database holds signing keys (and stored secrets) encrypted with an `ENCRYPTION_KEY` that MCP Gate no longer has: the secrets directory or volume (`secrets/secrets.json`) was lost or replaced, it is a file from another install, or `ENCRYPTION_KEY` was changed in the environment. MCP Gate refuses to start rather than generate a new key, which would start a server whose every token request fails. The message names the key id the database needs and the ones configured. Fix it with one of:
+
+- restore `secrets/` (in Docker, the secrets volume) from the backup made with this database; see [Deploy → Back up](deploy.md#back-up);
+- set `ENCRYPTION_KEY` to the key the database was encrypted with, or put it (and any older ones, comma-separated) in `ENCRYPTION_KEYS_PREVIOUS`: MCP Gate then makes a new key for new writes and still reads the old ones; `python -m src.cli encryption-key rotate` later re-encrypts everything under the new key.
+
+`python -m src.cli encryption-key status` shows which values open with the keys you set. If the key is gone for good, the only way forward is an empty database (every client, token and signing key is lost, and resource servers must fetch the new JWKS). A new install with an empty database never hits this: its key is generated on the first start.
+
 **Tokens stop verifying after a config change**
-Changing `OAUTH_ISSUER` or `ENCRYPTION_KEY` invalidates tokens: the first changes `iss`, the second makes the stored private keys unreadable. Restore the old value or re-issue tokens.
+Changing `OAUTH_ISSUER` or `ENCRYPTION_KEY` invalidates tokens: the first changes `iss`, the second makes the stored private keys unreadable. Restore the old value or re-issue tokens. To change `ENCRYPTION_KEY`, rotate it instead: `python -m src.cli encryption-key rotate` (see `SECURITY.md`); if you already changed it in the environment, put the old value in `ENCRYPTION_KEYS_PREVIOUS` and run the command. `python -m src.cli encryption-key status` shows how many values each key holds and whether any is unreadable.
 
 **Health shows `error` / `offline` for a server that works**
 The health check connects with a self-minted token for servers that require auth. If the server uses its own static bearer token instead, set it on the service (**Edit → Static bearer token**). For servers without auth, untick **Requires authentication**.
@@ -93,6 +101,6 @@ Build the runtime image once: `docker build -t mcp-runtime:1 deploy/mcp-runtime`
 
 ## Get more detail
 
-- Set `LOG_LEVEL=DEBUG` in `.env`; logs are written under `logs/`.
+- Set `LOG_LEVEL=DEBUG` in `.env`; logs are written under `logs/` (`LOG_DIR`). The Docker image logs to the console only: `docker logs mcp-gate`.
 - Set `ENABLE_API_DOCS=true` and open `/docs` to call any endpoint by hand.
 - `GET /api/oauth/activity` (signed in) lists recent token events with client, audience and outcome.

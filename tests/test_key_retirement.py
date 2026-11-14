@@ -5,6 +5,7 @@ from datetime import timedelta
 import jwt
 
 from tests.test_oauth_flow import _authorize_and_consent, _exchange, _register
+from tests.conftest import rotate_and_activate
 
 
 def _kids(client):
@@ -43,7 +44,7 @@ def _forget_cached_jwks():
 
 def test_retired_key_unpublished_after_access_lifetime(owner_client, service, db_session):
     old_kid = next(iter(_kids(owner_client)))
-    assert owner_client.post("/api/oauth/keys/rotate").status_code == 200
+    rotate_and_activate(owner_client)
     assert old_kid in _kids(owner_client)  # tokens it signed minutes ago still verify
     _age_retired_keys(db_session, 60)       # access lifetime in tests is 5 minutes
     kids = _kids(owner_client)
@@ -56,7 +57,7 @@ def test_live_pat_keeps_its_key_published_until_revoked(owner_client, service, d
     pat = owner_client.post("/api/oauth/tokens/personal", json={"service_id": service["id"], "expires_days": 30,
                                                                  "label": "long"}).json()
     old_kid = jwt.get_unverified_header(pat["access_token"])["kid"]
-    assert owner_client.post("/api/oauth/keys/rotate").status_code == 200
+    rotate_and_activate(owner_client)
     _age_tokens(db_session, 60)
     _age_retired_keys(db_session, 60)
     assert old_kid in _kids(owner_client)
@@ -68,7 +69,7 @@ def test_unpublished_key_still_serves_refresh_but_not_introspection(owner_client
     reg = _register(owner_client)
     code, verifier = _authorize_and_consent(owner_client, reg["client_id"])
     tokens = _exchange(owner_client, reg["client_id"], code, verifier).json()
-    assert owner_client.post("/api/oauth/keys/rotate").status_code == 200
+    rotate_and_activate(owner_client)
     _age_tokens(db_session, 60, expire_access=True)
     _age_retired_keys(db_session, 60)
     old_kid = jwt.get_unverified_header(tokens["access_token"])["kid"]
@@ -97,7 +98,7 @@ def test_grace_is_configurable(owner_client, service, db_session, monkeypatch):
     from src.config import Config
 
     old_kid = next(iter(_kids(owner_client)))
-    assert owner_client.post("/api/oauth/keys/rotate").status_code == 200
+    rotate_and_activate(owner_client)
     _age_retired_keys(db_session, 60)
     monkeypatch.setattr(Config.get_oauth_config(), "retired_key_publish_minutes", 24 * 60)
     assert old_kid in _kids(owner_client)

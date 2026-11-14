@@ -20,7 +20,7 @@ import pytest
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-# Tests do not read .env / data/secrets.json: fixed keys and a separate secrets file
+# Tests do not read .env / secrets/secrets.json: fixed keys and a separate secrets file
 os.environ.setdefault("ENCRYPTION_KEY", "test-encryption-key-not-for-production")
 os.environ.setdefault("SESSION_SECRET_KEY", "test-session-secret-key-not-for-production")
 os.environ["MCP_GATE_SECRETS_FILE"] = os.path.join(tempfile.gettempdir(), "mcp-gate-test-secrets.json")
@@ -213,3 +213,26 @@ def make_pkce():
     verifier = secrets.token_urlsafe(48)
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
     return verifier, challenge
+
+
+def rotate_and_activate(client):
+    """Rotate now in the console, then let the pre-publish window pass (#30): the published key takes over as it
+    would at its activates_at. Returns the new key's dict."""
+    from datetime import timedelta
+
+    from db.database import make_session
+    from db.models import local_now
+    from src.adapters import OAuthKeyAdapter
+    from src.oauth import signing_keys
+
+    r = client.post("/api/oauth/keys/rotate")
+    assert r.status_code == 200, r.text
+    db = make_session()
+    try:
+        pending = OAuthKeyAdapter.get_pending(db)
+        pending.activates_at = local_now() - timedelta(seconds=1)
+        db.commit()
+        assert signing_keys.ensure_active_signing_key(db).kid == r.json()["kid"]
+    finally:
+        db.close()
+    return r.json()

@@ -16,6 +16,8 @@ from datetime import timedelta
 import httpx
 import pytest
 
+from tests.conftest import rotate_and_activate
+
 
 def _free_port() -> int:
     with socket.socket() as s:
@@ -128,7 +130,7 @@ def test_cached_jwks_drops_a_retired_key_on_schedule(owner_client, monkeypatch):
     from src.oauth import signing_keys
     from src.utils import public_cache
 
-    assert owner_client.post("/api/oauth/keys/rotate").status_code == 200
+    rotate_and_activate(owner_client)
     assert len(owner_client.get("/.well-known/jwks.json").json()["keys"]) == 2
     expires_at = public_cache._entries["jwks"][1]
     assert expires_at - time.monotonic() <= signing_keys.JWKS_CACHE_MAX_SECONDS + 0.5
@@ -145,7 +147,7 @@ def test_jwks_cache_lifetime_ends_at_the_next_retirement(owner_client, monkeypat
     from src.oauth import signing_keys
     from src.utils import public_cache
 
-    assert owner_client.post("/api/oauth/keys/rotate").status_code == 200
+    rotate_and_activate(owner_client)
     # a retired key due to leave in ~3 s: the cached JWKS must not outlive that
     monkeypatch.setattr(signing_keys, "retired_key_grace", lambda: timedelta(seconds=3))
     public_cache.invalidate()

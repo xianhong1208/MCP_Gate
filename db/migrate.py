@@ -29,6 +29,7 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import inspect, text
 
 from src.config import Config
+from src.config.manager import default_config_dir
 from src.logging import get_logger
 from src.utils.runtime_paths import resolve_external_dir
 
@@ -354,7 +355,6 @@ def run_migration_command(action: str, message: Optional[str] = None,
 def main():
     """CLI entry point: python -m db.migrate [action]"""
     import argparse
-    import os
 
     # The CLI is a standalone entry point and must load .env + config itself (main.py handles this in server mode)
     from dotenv import load_dotenv
@@ -378,11 +378,13 @@ Examples:
     parser.add_argument("-m", "--message", help="Migration message (for generate)")
     parser.add_argument("-r", "--revision", default="-1",
                        help="Target revision for upgrade/downgrade/stamp")
-    parser.add_argument("--config", default=os.environ.get("MCP_GATE_CONFIG") or os.environ.get("MCP_CENTER_CONFIG", "config/config.yaml"),
-                       help="Path to config.yaml")
+    parser.add_argument("--config-dir", default=default_config_dir(),
+                       help="Directory holding the five config files (default: $MCP_GATE_CONFIG_DIR or config)")
     args = parser.parse_args()
 
-    Config.set_config(args.config)
+    Config.set_config_dir(args.config_dir)
+    for notice in Config.get_startup_notices():
+        print(f"ERROR: {notice}", file=sys.stderr)
 
     # Make sure the DB exists before connecting (generate is the exception: it needs no DB)
     if args.action != "generate":

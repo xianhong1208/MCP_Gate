@@ -1,0 +1,43 @@
+# MCP Gate configuration: OAuth 2.1 authorization server (issuer, token lifetimes, dynamic client
+# registration, Client ID Metadata Documents)
+#
+# The configuration is five files in this directory (database, oauth, identity, security, system), merged at
+# startup; a key may be set in one file only. Environment variable syntax:
+#   ${VAR_NAME}           required
+#   ${VAR_NAME:-default}  optional, with a default value
+# Sensitive and per-machine values (keys, passwords, URLs) come only from environment variables (.env); never write
+# them here directly.
+
+# OAuth 2.1 Authorization Server
+oauth:
+  # Written into the iss of every JWT and the /.well-known documents; for public deployments use the public URL
+  issuer: "${OAUTH_ISSUER:-http://localhost:4568}"
+  signing_key_bits: ${OAUTH_SIGNING_KEY_BITS:-2048}
+  # OAuth access tokens only (PATs choose their own lifetime, up to pat_max_days); clients renew with refresh tokens
+  access_expire_minutes: ${OAUTH_ACCESS_EXPIRE_MINUTES:-15}
+  refresh_expire_days: ${OAUTH_REFRESH_EXPIRE_DAYS:-30}
+  auth_code_ttl_seconds: 120
+  # Whether dynamically registered (RFC 7591) clients are usable without review (the human consent page is the
+  # real gate)
+  dcr_auto_approve: ${OAUTH_DCR_AUTO_APPROVE:-true}
+  pat_max_days: 365
+  # Signing keys rotate on their own every N days (0 = only by hand); a new key is published in the JWKS this many
+  # minutes before it starts signing, so resource servers have it cached first (#30)
+  signing_key_rotation_days: ${OAUTH_SIGNING_KEY_ROTATION_DAYS:-90}
+  signing_key_prepublish_minutes: ${OAUTH_SIGNING_KEY_PREPUBLISH_MINUTES:-1440}
+  # Client ID Metadata Documents (MCP authorization 2026-07-28): a client may use an https URL as its client_id;
+  # MCP Gate fetches the client's metadata from that URL instead of the client registering. DCR keeps working.
+  cimd:
+    enabled: ${OAUTH_CIMD_ENABLED:-true}
+    # Whether a client first seen through its metadata document is usable without review (consent still applies)
+    auto_approve: ${OAUTH_CIMD_AUTO_APPROVE:-true}
+    # Trust policy: only client_id URLs on these hosts ("example.com", "*.example.com"); empty = any public host
+    allowed_hosts: "${OAUTH_CIMD_ALLOWED_HOSTS:-}"
+    # Development / intranet only: hosts whose document may be fetched from a private address (loopback only
+    # while the issuer is on loopback). Every other host must resolve to public addresses.
+    private_network_hosts: "${OAUTH_CIMD_PRIVATE_NETWORK_HOSTS:-}"
+    fetch_timeout_seconds: 5
+    max_document_bytes: 5120          # the draft recommends 5 KB
+    cache_min_seconds: 60             # HTTP Cache-Control max-age is honoured within these bounds
+    cache_max_seconds: 86400
+    failure_backoff_seconds: 30       # a URL whose fetch failed is not fetched again for this long

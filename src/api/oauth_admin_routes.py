@@ -408,19 +408,53 @@ async def delete_consent(consent_id: str, request: Request, db: Session = Depend
 # ---------------------------------------------------------------------------
 @router.get("/keys")
 async def list_keys(db: Session = Depends(get_db), _: AdminUser = Depends(get_current_user)):
-    """Every signing key, with the active one marked and `published` telling whether it is still in the JWKS (a
-    retired key leaves it once nothing it signed can still be valid)."""
+    """Every signing key: the active one, a published one waiting to sign (``is_pending``, from ``activates_at``),
+    retired ones (``published`` tells whether still in the JWKS) and revoked ones; ``live_tokens`` = unexpired
+    tokens it signed (what revoking it would stop). ``rotation`` is the automatic schedule."""
     keys = OAuthKeyAdapter.list_all(db)
-    return {"keys": [{**k.to_dict(), "published": signing_keys.is_published(db, k)} for k in keys],
-            "total": len(keys)}
+    cfg = Config.get_oauth_config()
+    next_at = signing_keys.next_rotation_at(db)
+    return {"keys": [{**k.to_dict(), "published": signing_keys.is_published(db, k),
+                      "live_tokens": signing_keys.live_token_count(db, k)} for k in keys],
+            "total": len(keys),
+            "rotation": {"every_days": cfg.signing_key_rotation_days,
+                         "prepublish_minutes": cfg.signing_key_prepublish_minutes,
+                         "next_at": format_datetime(next_at)}}
 
 
 @router.post("/keys/rotate")
 async def rotate_key(request: Request, db: Session = Depends(get_db), user: AdminUser = Depends(get_current_user)):
-    """Create a new active signing key. The old key stays in JWKS while tokens it signed can still be valid."""
-    key = signing_keys.rotate_signing_key(db)
-    _audit(db, request, user, AuditAction.OAUTH_KEY_ROTATE, ResourceType.SYSTEM, key.kid)
+    """Rotate now: publish a new key in the JWKS at once; it starts signing after the pre-publish window
+    (``oauth.signing_key_prepublish_minutes``), like the automatic rotation. The old key then stays verify-only
+    while tokens it signed can still be valid. 409 when a published key is already waiting."""
+    try:
+        key = signing_keys.rotate_signing_key(db)
+    except signing_keys.KeyRotationPending as e:
+        raise HTTPException(status_code=409, detail={
+            "error": "oauth.key_rotation_pending",
+            "fallback": f"A new key is already published and starts signing at {format_datetime(e.key.activates_at)}",
+            "params": {"activates_at": format_datetime(e.key.activates_at)}})
+    _audit(db, request, user, AuditAction.OAUTH_KEY_ROTATE, ResourceType.SYSTEM, key.kid,
+           details={"activates_at": format_datetime(key.activated_at), "manual": True})
     return key.to_dict()
+
+
+@router.post("/keys/{kid}/revoke")
+async def revoke_key(kid: str, request: Request, db: Session = Depends(get_db),
+                     user: AdminUser = Depends(get_current_user)):
+    """Emergency: drop the key from the JWKS at once, wipe its private key and revoke every unexpired token it
+    signed (they reach resource servers through the revocation feed). A revoked active key is replaced at once.
+    Returns how many tokens stopped working."""
+    key = signing_keys.get_key_by_kid(db, kid)
+    if key is None:
+        raise HTTPException(status_code=404, detail={"error": "oauth.key_not_found", "fallback": "Signing key not found"})
+    if key.revoked_at is not None:
+        raise HTTPException(status_code=409, detail={"error": "oauth.key_already_revoked",
+                                                     "fallback": "This signing key is already revoked"})
+    count, replacement = signing_keys.revoke_signing_key(db, key)
+    _audit(db, request, user, AuditAction.OAUTH_KEY_REVOKE, ResourceType.SYSTEM, kid,
+           details={"tokens_revoked": count, "replaced_by": replacement.kid if replacement else None})
+    return {"kid": kid, "tokens_revoked": count, "active_kid": replacement.kid if replacement else None}
 
 
 # ---------------------------------------------------------------------------

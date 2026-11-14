@@ -10,7 +10,7 @@ class DatabaseConfig(BaseModel):
 
     Defaults to a single SQLite file (zero dependencies); set DATABASE_URL to postgresql://... to switch to PostgreSQL.
     """
-    url: str = "sqlite:///data/mcp_center.db"
+    url: str = "sqlite:///data/mcp_gate.db"
     echo: bool = False
     pool_size: int = 5
     max_overflow: int = 10
@@ -25,7 +25,7 @@ class ServerConfig(BaseModel):
 class SessionConfig(BaseModel):
     """Admin console login session (an HS256 JWT inside an httpOnly cookie).
 
-    When secret_key is empty, the secrets store generates one and persists it (data/secrets.json).
+    When secret_key is empty, the secrets store generates one and persists it (secrets/secrets.json).
     """
     secret_key: str = ""
     expire_hours: int = 12
@@ -97,6 +97,10 @@ class OAuthConfig(BaseModel):
     # token lifetime plus 5 minutes of clock skew. A retired key also stays published while any live access token
     # or PAT it signed is still recorded (PATs can outlive this by months).
     retired_key_publish_minutes: Optional[int] = None
+    # #30: a new signing key is made every this many days (0 = only by hand, "Rotate now" in the console) ...
+    signing_key_rotation_days: int = Field(90, ge=0)
+    # ... and published in the JWKS this long before it signs anything, so resource servers cache it first
+    signing_key_prepublish_minutes: int = Field(1440, ge=0)
     # Client ID Metadata Documents (an https URL as client_id, no registration)
     cimd: ClientMetadataConfig = ClientMetadataConfig()
 

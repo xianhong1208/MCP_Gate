@@ -42,7 +42,8 @@ SQLite ignores the length of `VARCHAR(n)` columns and PostgreSQL enforces it, so
 
 ```
 main.py              application entry point and app assembly
-config/              config.yaml with environment expansion
+config/              five YAML files (database, oauth, identity, security, system) with environment expansion
+scripts/             split_config.py: splits a pre-1.4 config.yaml into the five files
 db/                  models · crud (data layer) · seed · migrate
 alembic/             migration scripts (single init revision plus yours)
 src/oauth/           authorization server: signing keys, grants, consent policy

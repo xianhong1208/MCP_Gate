@@ -48,7 +48,7 @@ async def test_tools_fetched_with_self_minted_token():
     scanner = MCPScanner()
     scanner.scan_ports = AsyncMock(return_value=[5055])
     scanner.verify_mcp_service = AsyncMock(return_value=MCPVerifyResult(
-        success=True, reachable=True, requires_auth=True, auth_token="minted", server_name="anydoc"))
+        success=True, reachable=True, requires_auth=True, auth_token="minted", server_name="morphyard"))
     scanner.get_tools_list = AsyncMock(return_value=[])
     found = await scanner.discover_services(["127.0.0.1"], [5055], verify=True, get_tools=True)
     assert scanner.get_tools_list.await_args.args[4] == "minted"
@@ -71,7 +71,7 @@ def test_summarize_instructions_takes_first_paragraph():
     from src.discovery.scanner import summarize_instructions
 
     text = (
-        "# AnyDoc — document format conversion service\n\n"
+        "# Morphyard — document format conversion service\n\n"
         "Converts the user's uploaded files into the format they need,\nand provides PDF splitting.\n\n"
         "## When to use\n\n| a | b |\n|---|---|\n\n- bullet\n"
     )
@@ -91,7 +91,7 @@ def test_requires_auth_follows_the_verify_result():
     assert DiscoveredService("h", 1, verify_result=open_ok).requires_auth is False
     locked = MCPVerifyResult(success=True, reachable=True, requires_auth=True, server_name="(requires auth)")
     assert DiscoveredService("h", 1, verify_result=locked).requires_auth is True
-    minted = MCPVerifyResult(success=True, reachable=True, requires_auth=True, server_name="anydoc")
+    minted = MCPVerifyResult(success=True, reachable=True, requires_auth=True, server_name="morphyard")
     assert DiscoveredService("h", 1, verify_result=minted).requires_auth is True
     # nothing verified: the safe default
     assert DiscoveredService("h", 1).requires_auth is True

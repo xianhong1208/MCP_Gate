@@ -69,7 +69,7 @@
       "title": "Welcome — create your account",
       "subtitle": "This is a fresh install. The first account becomes the owner of this MCP Gate.",
       "token": "Setup token",
-      "tokenHint": "Printed in the server log when MCP Gate starts, and kept in data/secrets.json as SETUP_TOKEN. It proves you run this server.",
+      "tokenHint": "Printed in the server log when MCP Gate starts, and kept in secrets/secrets.json as SETUP_TOKEN. It proves you run this server.",
       "email": "Email",
       "username": "Display name",
       "usernamePlaceholder": "Optional — defaults to your email",
@@ -789,19 +789,47 @@
     "keys": {
       "title": "Signing keys",
       "subtitle": "RS256 keys used to sign tokens; published at /.well-known/jwks.json.",
-      "rotate": "Rotate key",
+      "rotate": "Rotate now",
       "rotating": "Rotating...",
       "rotateConfirmTitle": "Rotate signing key",
-      "rotateConfirmBody": "A new key becomes active for newly issued tokens. Existing tokens stay valid until they expire; servers that cache JWKS may need a few minutes to pick up the new key.",
-      "rotated": "Signing key rotated",
+      "rotateConfirmBody": "A new key is published in the JWKS now and starts signing tokens in {{hours}} h, so servers that cache the JWKS already have it. Tokens signed by the current key stay valid until they expire.",
+      "rotated": "New key published; it starts signing on {{date}}",
+      "rotatedNow": "New key published and signing now",
       "rotateFailed": "Failed to rotate key",
+      "rotatePendingHint": "A new key is already published and waiting to sign",
+      "schedule": "Keys rotate automatically every {{days}} days; each new key is published {{hours}} h before it signs.",
+      "scheduleOff": "Automatic rotation is off (oauth.signing_key_rotation_days = 0).",
+      "nextRotation": "Next rotation: {{date}}.",
       "created": "created {{date}}",
-      "active": "active",
-      "inactive": "retired",
+      "signsFrom": "signs from {{date}}",
+      "retiredOn": "retired {{date}}",
+      "revokedOn": "revoked {{date}}",
+      "liveTokens_one": "{{count}} unexpired token",
+      "liveTokens_other": "{{count}} unexpired tokens",
       "empty": "No signing keys",
-      "published": "retired, still published",
-      "publishedHint": "No longer signs new tokens, but stays in the JWKS until the last token it signed has expired.",
-      "retiredHint": "No longer in the JWKS: tokens it signed are no longer accepted."
+      "state": {
+        "active": "active",
+        "pending": "published, not signing yet",
+        "published": "retired, still published",
+        "retired": "retired",
+        "revoked": "revoked"
+      },
+      "hint": {
+        "active": "Signs every new token.",
+        "pending": "In the JWKS already, so resource servers cache it before it signs anything.",
+        "published": "No longer signs new tokens, but stays in the JWKS until the last token it signed has expired.",
+        "retired": "No longer in the JWKS: tokens it signed are no longer accepted. Deleted once everything it signed has expired.",
+        "revoked": "Revoked: out of the JWKS, and nothing it signed is accepted."
+      },
+      "revoke": "Revoke",
+      "revokeAria": "Revoke key {{kid}}",
+      "revokeConfirmTitle": "Revoke this signing key?",
+      "revokeConfirmBody_one": "For emergencies, such as a leaked key. It leaves the JWKS at once, and the {{count}} unexpired token it signed stops working (it is revoked too). This cannot be undone.",
+      "revokeConfirmBody_other": "For emergencies, such as a leaked key. It leaves the JWKS at once, and the {{count}} unexpired tokens it signed stop working (they are revoked too). This cannot be undone.",
+      "revokeActiveNote": "It is the active key: a new key takes over at once, without the usual one-day head start, so resource servers fetch the JWKS again on its first token.",
+      "revoked_one": "Key revoked; {{count}} token stopped working",
+      "revoked_other": "Key revoked; {{count}} tokens stopped working",
+      "revokeFailed": "Failed to revoke the key"
     },
     "resourceServer": {
       "label": "Resource server for",
@@ -1002,7 +1030,7 @@
       "oauth_consent_delete": "Consent Forgotten",
       "oauth_scope_upsert": "Scope Saved",
       "oauth_scope_delete": "Scope Deleted",
-      "oauth_key_rotate": "Signing Key Rotated",
+      "oauth_key_rotate": "Signing Key Rotation Scheduled",
       "oauth_client_auth_failed": "Client Authentication Failed",
       "oauth_consent_approve": "Consent Approved",
       "oauth_consent_deny": "Consent Denied",
@@ -1019,7 +1047,10 @@
       "admin_update": "Admin Update",
       "cleanup_expired": "Cleanup Expired",
       "rate_limit_exceeded": "Rate Limit",
-      "oauth_client_bind": "Client Resource Server Set"
+      "oauth_client_bind": "Client Resource Server Set",
+      "oauth_key_activate": "Signing Key Activated",
+      "oauth_key_revoke": "Signing Key Revoked",
+      "oauth_key_delete": "Signing Key Deleted"
     },
     "detail": {
       "title": "Audit Log Details",
@@ -1062,7 +1093,7 @@
       "external_email_unverified": "Your email address is not verified with this provider, so it cannot be used to sign in to an existing account. Verify it with the provider, or sign in with your password.",
       "provider_not_enabled": "This sign-in provider is not enabled.",
       "setup_already_done": "Setup has already been completed. Please sign in.",
-      "setup_token_invalid": "The setup token is missing or wrong. Copy it from the server log or from SETUP_TOKEN in data/secrets.json.",
+      "setup_token_invalid": "The setup token is missing or wrong. Copy it from the server log or from SETUP_TOKEN in secrets/secrets.json.",
       "invalid_current_password": "Current password is incorrect",
       "validation_email_invalid": "A valid email address is required",
       "validation_username_required": "Display name is required",
@@ -1086,7 +1117,10 @@
       "invalid_scope": "Invalid scope",
       "unauthorized_client": "This client is not allowed to use that grant",
       "unsupported_grant_type": "Unsupported grant type",
-      "server_error": "Authorization server error"
+      "server_error": "Authorization server error",
+      "key_rotation_pending": "A new key is already published and starts signing on {{activates_at}}",
+      "key_not_found": "Signing key not found",
+      "key_already_revoked": "This signing key is already revoked"
     },
     "validation": {
       "too_long": "\"{{field}}\" is too long (maximum {{max}} characters)."
