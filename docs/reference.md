@@ -121,12 +121,24 @@ MCP servers verify tokens offline, so on its own a server keeps accepting a revo
 
 For your own FastMCP server, `MCPGateVerifier` in [`examples/mcp_gate_hooks.py`](../examples/mcp_gate_hooks.py) does the polling. [Folio](https://github.com/xianhong1208/folio-rag) and [Morphyard](https://github.com/xianhong1208/morphyard) have it built in; see their READMEs.
 
+### Tool pinning and approval
+
+Every tool a server lists is pinned by a SHA-256 of its definition, and a new or changed definition waits for an admin before it counts as approved.
+
+- **What is hashed.** The tool object as `tools/list` returns it, reduced to `name`, `title`, `description`, `inputSchema`, `outputSchema` and `annotations` (other fields such as `_meta` and `icons` are ignored). A field that is absent or `null` is left out, so the two hash the same; an empty string or object is a value. The rest is serialised as JSON with keys sorted at every depth, no whitespace, non-ASCII characters written as UTF-8 (not `\uXXXX`), then hashed as UTF-8. The definition is `src/tool_pinning/hashing.py`; `tests/fixtures/tool_hash_vectors.json` holds golden vectors that any other implementation must reproduce.
+- **States.** Each definition a tool has had is kept as a version with its hash and a state: *approved*, *pending* or *rejected*. A refresh (*Refresh from server*, a scan) adds a pending version for a new tool or a changed definition and keeps every earlier version, so the console compares the change with the approved one. A tool the server stops listing is marked *no longer listed*, not deleted; if it comes back it keeps its history. Refreshing with *Inspect as* another identity behaves the same: tools that identity does not see are marked, never lose their approval.
+- **First approval.** On the upgrade to 1.5 every tool already stored is approved as the baseline (`decided_by: upgrade`). Those were stored without `title`, `outputSchema` and `annotations`, so the first refresh that lists a tool again completes its baseline with the full definition when `name`, `description` and `inputSchema` are unchanged; a change there is pending like any other. A server registered later starts with every tool pending, and the console offers **Approve all** on that first list only. After that each new or changed tool is approved or rejected on its own card, which shows a line diff of each changed field (or the whole definition of a new tool).
+- **Decisions.** Approve and reject name the version by its hash, so the admin decides on exactly the definition shown. Rejected versions can be approved later, and an approval can be withdrawn by rejecting. Every approval, rejection and *Approve all* is in the audit log (`tool_approve`, `tool_reject`, `tool_approve_all`). The dashboard and the services list show how many tools wait.
+- **API.** `GET /api/services/{id}/tools` lists tools with `state`, `hash`, `removed_at`, `versions` and `approved_version` (the version a pending change is compared with), plus `pending_count` and `first_review`. `POST /api/services/{id}/tools/{tool_id}/approve` and `…/reject` take `{"hash": "<64 hex>"}`; `POST /api/services/{id}/tools/approve-all` takes `{"hashes": [...]}` and answers `409 tools.approve_all_not_first` once anything of that service was approved.
+
+MCP Gate records the decisions; it does not sit between clients and servers, so on its own it cannot hide an unapproved tool. Enforcing them on the server (a policy feed next to the revocation feed, and FastMCP hooks that hide unapproved tools) comes next, in [#33](https://github.com/xianhong1208/MCP_Gate/issues/33).
+
 ## Use the console
 
 | Page | What you do there |
 |---|---|
 | **Dashboard** | Service health, token activity, recent events, system status. |
-| **Services** | Register or scan MCP servers, set audience and allowed scopes, declare server-specific scopes, refresh tools, run health checks, copy integration snippets. |
+| **Services** | Register or scan MCP servers, set audience and allowed scopes, declare server-specific scopes, refresh tools and approve new or changed ones ([tool pinning](#tool-pinning-and-approval)), run health checks, copy integration snippets. |
 | **Tokens · Issue Token** | Every token issued by MCP Gate — OAuth grants and PATs — with revoke, expiry and last-use information. |
 | **OAuth Clients** | Dynamically registered, metadata-document and trusted clients: approve, revoke, delete; scope registry; signing-key rotation. |
 | **Marketplace** | Deploy MCP servers from the catalog or bring your own `{command, args, env}`. |

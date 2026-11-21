@@ -351,6 +351,27 @@ export default function DashboardPage() {
         </Alert>
       )}
 
+      {/* Tools waiting for approval (#32): new or changed tool definitions an admin has not reviewed yet */}
+      {!isLoading && servicesList.some((s) => s.tools_pending > 0) && (
+        <Alert
+          tone="warning"
+          icon={ShieldAlert}
+          title={t('dashboard.pendingTools.title', { count: servicesList.reduce((n, s) => n + (s.tools_pending || 0), 0) })}
+        >
+          <p>{t('dashboard.pendingTools.hint')}</p>
+          <ul className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1">
+            {servicesList.filter((s) => s.tools_pending > 0).map((s) => (
+              <li key={s.id} className="min-w-0">
+                <Link to={`/services/${encodeURIComponent(s.id)}`} className="break-all text-link transition-colors duration-200 hover:text-link-hover">
+                  {s.name}
+                </Link>
+                <span className="ml-1 text-xs tabular-nums text-muted-foreground">{t('dashboard.pendingTools.count', { count: s.tools_pending })}</span>
+              </li>
+            ))}
+          </ul>
+        </Alert>
+      )}
+
       {/* Issuer mismatch notice: OAuth requests arrived through a host that is not OAUTH_ISSUER (see #8) */}
       {!isLoading && oauthOverview?.issuer_mismatches?.length > 0 && (
         <Alert

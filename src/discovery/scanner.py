@@ -23,10 +23,19 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class MCPToolInfo:
-    """MCP tool information"""
+    """MCP tool information: the fields of a tools/list entry that are stored and pinned (#32)."""
     name: str
     description: Optional[str] = None
     input_schema: Optional[Dict[str, Any]] = None
+    title: Optional[str] = None
+    output_schema: Optional[Dict[str, Any]] = None
+    annotations: Optional[Dict[str, Any]] = None
+
+    def to_mcp(self) -> Dict[str, Any]:
+        """Back to the tools/list spelling, the form src/tool_pinning/hashing.py hashes."""
+        return {"name": self.name, "title": self.title, "description": self.description,
+                "inputSchema": self.input_schema, "outputSchema": self.output_schema,
+                "annotations": self.annotations}
 
 
 @dataclass
@@ -621,7 +630,10 @@ class MCPScanner:
                         MCPToolInfo(
                             name=t.get("name", ""),
                             description=t.get("description"),
-                            input_schema=t.get("inputSchema")
+                            input_schema=t.get("inputSchema"),
+                            title=t.get("title"),
+                            output_schema=t.get("outputSchema"),
+                            annotations=t.get("annotations"),
                         )
                         for t in tools
                     ]

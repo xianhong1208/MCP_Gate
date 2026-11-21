@@ -4,7 +4,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import {
   Copy, Check, Trash2, Clock, RefreshCw, ChevronDown,
-  Activity, Key, Edit3, Wrench, Terminal, FileJson, Code2,
+  Activity, Key, Edit3, Wrench, Terminal, FileJson, Code2, ShieldCheck, ShieldX, ShieldAlert, CheckCheck,
 } from 'lucide-react'
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { servicesApi, statsApi, oauthApi } from '../services/api'
@@ -16,6 +16,7 @@ import ScopeEditor from '../components/ScopeEditor'
 import MarkdownLite from '../components/MarkdownLite'
 import { copyToClipboard } from '../utils/clipboard'
 import { feedTone, revocationReachesServer } from '../utils/revocation'
+import { toolChanges } from '../utils/toolDiff'
 import { useConfirm } from '../contexts/ConfirmContext'
 import { useToast } from '../contexts/ToastContext'
 import { KindBadge, StatusBadge, ScopeChips } from './TokensPage'
@@ -132,7 +133,16 @@ function ToolSchema({ schema }) {
   )
 }
 
-function ToolItem({ tool }) {
+/** The approval state of a tool as a badge (#32); approved tools show none unless asked. */
+function ToolStateBadge({ tool, showApproved = false }) {
+  const { t } = useTranslation()
+  if (tool.removed_at) return <Badge tone="neutral">{t('services.toolPin.state.removed')}</Badge>
+  if (tool.state === 'pending') return <Badge tone="warning">{t('services.toolPin.state.pending')}</Badge>
+  if (tool.state === 'rejected') return <Badge tone="danger">{t('services.toolPin.state.rejected')}</Badge>
+  return showApproved ? <Badge tone="success">{t('services.toolPin.state.approved')}</Badge> : null
+}
+
+function ToolItem({ tool, onDecide, deciding }) {
   const { t } = useTranslation()
   const [isExpanded, setIsExpanded] = useState(false)
   const toast = useToast()
@@ -146,8 +156,9 @@ function ToolItem({ tool }) {
       toast.error(t('services.common.schemaCopyFailed'))
     }
   }
+  const busy = deciding === tool.hash
   return (
-    <div className={clsx('group -mx-2 rounded-lg transition-colors duration-150', isExpanded ? 'bg-muted/40' : 'hover:bg-muted/40')}>
+    <div className={clsx('group -mx-2 rounded-lg transition-colors duration-150', isExpanded ? 'bg-muted/40' : 'hover:bg-muted/40', tool.removed_at && 'opacity-70')}>
       <div className="flex items-center gap-3 px-2 py-2">
         <button
           type="button"
@@ -162,7 +173,10 @@ function ToolItem({ tool }) {
             <Wrench className="h-3.5 w-3.5" aria-hidden="true" />
           </span>
           <span className="min-w-0 flex-1">
-            <span className="block truncate font-mono text-xs font-medium text-foreground">{tool.name}</span>
+            <span className="flex min-w-0 items-center gap-2">
+              <span className="truncate font-mono text-xs font-medium text-foreground">{tool.name}</span>
+              <ToolStateBadge tool={tool} />
+            </span>
             {/* Collapsed: one line only. Long agent-facing descriptions (headings, mode tables, rules) open on click. */}
             {summary && <span className="mt-0.5 block truncate text-xs text-muted-foreground" title={summary}>{summary}</span>}
           </span>
@@ -180,13 +194,98 @@ function ToolItem({ tool }) {
             </div>
           )}
           {tool.input_schema && <ToolSchema schema={tool.input_schema} />}
-          {tool.input_schema && (
-            <div className="flex justify-end">
-              <Button variant="ghost" size="xs" icon={Copy} onClick={handleCopySchema}>{t('services.common.copyInputSchema')}</Button>
-            </div>
-          )}
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="min-w-0 truncate font-mono text-[11px] text-subtle-foreground" title={tool.hash || ''}>
+              {t('services.toolPin.hashLabel')} {tool.hash ? tool.hash.slice(0, 12) : '—'} · {t('services.toolPin.versionCount', { count: tool.versions?.length || 0 })}
+            </span>
+            <span className="flex flex-wrap items-center gap-1">
+              {tool.hash && tool.state === 'rejected' && (
+                <Button variant="ghost" size="xs" icon={ShieldCheck} loading={busy} onClick={() => onDecide(tool, 'approve')}>{t('services.toolPin.approve')}</Button>
+              )}
+              {tool.hash && tool.state === 'approved' && (
+                <Button variant="ghost" size="xs" icon={ShieldX} loading={busy} onClick={() => onDecide(tool, 'reject')}>{t('services.toolPin.withdraw')}</Button>
+              )}
+              {tool.input_schema && (
+                <Button variant="ghost" size="xs" icon={Copy} onClick={handleCopySchema}>{t('services.common.copyInputSchema')}</Button>
+              )}
+            </span>
+          </div>
         </div>
       )}
+    </div>
+  )
+}
+
+const DIFF_LINE = {
+  add: 'bg-success/10 text-foreground',
+  del: 'bg-danger/10 text-muted-foreground line-through decoration-danger/40',
+  same: 'text-muted-foreground',
+}
+const DIFF_MARK = { add: '+', del: '−', same: ' ' }
+
+/** One changed field: its line diff, wrapped (never a horizontal scroll on a phone). */
+function FieldDiff({ field, lines, folded = false }) {
+  const { t } = useTranslation()
+  const [open, setOpen] = useState(!folded)
+  return (
+    <div className="overflow-hidden rounded-lg border border-border bg-background/60">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        className={clsx('flex w-full items-center justify-between gap-2 px-3 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wide text-subtle-foreground', open && 'border-b border-border')}
+      >
+        {t(`services.toolPin.field.${field}`)}
+        <ChevronDown className={clsx('h-3.5 w-3.5 shrink-0 transition-transform duration-200', open && 'rotate-180')} aria-hidden="true" />
+      </button>
+      {open && <div className="max-h-72 overflow-y-auto py-1 font-mono text-[11px] leading-relaxed">
+        {lines.map((l, i) => (
+          <div key={i} className={clsx('flex gap-2 px-3', DIFF_LINE[l.op])}>
+            <span className={clsx('w-3 shrink-0 select-none', l.op === 'add' ? 'text-success' : l.op === 'del' ? 'text-danger' : 'text-subtle-foreground')} aria-hidden="true">{DIFF_MARK[l.op]}</span>
+            <span className="min-w-0 flex-1 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{l.text || ' '}</span>
+          </div>
+        ))}
+      </div>}
+    </div>
+  )
+}
+
+// On a new tool every field is an addition: the text fields are open, the schemas folded so the card stays short
+const FOLDED_WHEN_NEW = new Set(['inputSchema', 'outputSchema', 'annotations'])
+
+/** A pending tool version to approve or reject, compared with the approved one (or shown whole when it is new). */
+function ToolApprovalCard({ tool, onDecide, deciding }) {
+  const { t } = useTranslation()
+  const current = (tool.versions || []).find((v) => v.hash === tool.hash)
+  const before = tool.approved_version?.definition || null
+  const changes = toolChanges(before, current?.definition || {})
+  const busy = deciding === tool.hash
+  return (
+    <div className="rounded-lg border border-warning/30 bg-warning/5 p-3" data-testid="tool-approval-card">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <ShieldAlert className="h-4 w-4 shrink-0 text-warning" aria-hidden="true" />
+            <span className="break-all font-mono text-xs font-semibold text-foreground">{tool.name}</span>
+            <Badge tone={before ? 'warning' : 'info'}>{before ? t('services.toolPin.changed') : t('services.toolPin.newTool')}</Badge>
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {before ? t('services.toolPin.changedHint', { date: formatDate(tool.approved_version.decided_at) }) : t('services.toolPin.newHint')}
+          </p>
+        </div>
+        <div className="flex shrink-0 gap-1.5">
+          <Button variant="secondary" size="xs" icon={ShieldX} loading={busy} onClick={() => onDecide(tool, 'reject')}>{t('services.toolPin.reject')}</Button>
+          <Button variant="primary" size="xs" icon={ShieldCheck} loading={busy} onClick={() => onDecide(tool, 'approve')}>{t('services.toolPin.approve')}</Button>
+        </div>
+      </div>
+      <div className="mt-3 space-y-2">
+        {changes.length === 0 ? (
+          <p className="text-xs text-muted-foreground">{t('services.toolPin.noFieldChanges')}</p>
+        ) : changes.map((c) => <FieldDiff key={c.field} field={c.field} lines={c.lines} folded={!before && FOLDED_WHEN_NEW.has(c.field)} />)}
+      </div>
+      <p className="mt-2 break-all font-mono text-[11px] text-subtle-foreground">
+        {before && <>{tool.approved_version.hash.slice(0, 12)} → </>}{tool.hash}
+      </p>
     </div>
   )
 }
@@ -233,6 +332,8 @@ export default function ServiceDetailPage() {
   const [copiedEndpoint, setCopiedEndpoint] = useState(false)
   const [isCheckingHealth, setIsCheckingHealth] = useState(false)
   const [isRefreshingTools, setIsRefreshingTools] = useState(false)
+  const [decidingHash, setDecidingHash] = useState(null)
+  const [isApprovingAll, setIsApprovingAll] = useState(false)
   const [showEditModal, setShowEditModal] = useState(false)
   const [revokingJti, setRevokingJti] = useState(null)
   const [feedStatus, setFeedStatus] = useState(null)
@@ -357,12 +458,43 @@ export default function ServiceDetailPage() {
         identity: refreshMode,
         jti: refreshMode === 'token' ? selectedInspectToken.jti : null,
       })
-      toast.success(t('services.detail.refreshToolsSuccess', { n: result.tools_count }))
+      toast.success(result.tools_pending > 0
+        ? t('services.toolPin.refreshedWithPending', { n: result.tools_count, count: result.tools_pending })
+        : t('services.detail.refreshToolsSuccess', { n: result.tools_count }))
       await reload()
     } catch (err) {
       toast.error(t('services.detail.refreshToolsFailed', { message: err.message }))
     } finally {
       setIsRefreshingTools(false)
+    }
+  }
+
+  const handleDecideTool = async (tool, decision) => {
+    setDecidingHash(tool.hash)
+    try {
+      if (decision === 'approve') await servicesApi.approveTool(decodedServiceId, tool.id, tool.hash)
+      else await servicesApi.rejectTool(decodedServiceId, tool.id, tool.hash)
+      toast.success(t(decision === 'approve' ? 'services.toolPin.approvedToast' : 'services.toolPin.rejectedToast', { name: tool.name }))
+      await reload()
+    } catch (err) {
+      toast.error(t('services.toolPin.decideFailed', { message: err.message }))
+      await reload().catch(() => {})
+    } finally {
+      setDecidingHash(null)
+    }
+  }
+
+  const handleApproveAll = async (pendingTools) => {
+    setIsApprovingAll(true)
+    try {
+      const res = await servicesApi.approveAllTools(decodedServiceId, pendingTools.map((tl) => tl.hash))
+      toast.success(t('services.toolPin.approvedAllToast', { count: res.approved }))
+      await reload()
+    } catch (err) {
+      toast.error(t('services.toolPin.decideFailed', { message: err.message }))
+      await reload().catch(() => {})
+    } finally {
+      setIsApprovingAll(false)
     }
   }
 
@@ -419,6 +551,12 @@ export default function ServiceDetailPage() {
     )
   }
 
+  const allTools = service.tools || []
+  const listedTools = allTools.filter((tl) => !tl.removed_at)
+  const removedTools = allTools.filter((tl) => tl.removed_at)
+  const pendingTools = listedTools.filter((tl) => tl.state === 'pending')
+  // Approve all is for a service's first tool list only: nothing of it was ever approved
+  const firstReview = !allTools.some((tl) => (tl.versions || []).some((v) => v.state === 'approved'))
   const totalSuccess = usageStats.reduce((s, x) => s + (x.success || 0), 0)
   const totalFailed = usageStats.reduce((s, x) => s + (x.failed || 0), 0)
   const totalUsage = totalSuccess + totalFailed
@@ -445,6 +583,7 @@ export default function ServiceDetailPage() {
             {service.health && <HealthIndicator status={service.health.status} />}
             {service.source === 'auto_discovered' && <Badge tone="warning">{t('services.detail.autoTag')}</Badge>}
             {service.source === 'managed' && <Badge tone="accent">{t('services.list.managedTag')}</Badge>}
+            {pendingTools.length > 0 && <Badge tone="warning">{t('services.toolPin.pendingBadge', { count: pendingTools.length })}</Badge>}
           </>
         }
         actions={
@@ -647,7 +786,12 @@ export default function ServiceDetailPage() {
           {/* Tools */}
           <Card>
             <CardHeader
-              title={<span className="flex items-center gap-2">{t('services.detail.mcpToolsLabel')}<Badge tone="neutral">{service.tools?.length || 0}</Badge></span>}
+              title={(
+                <span className="flex flex-wrap items-center gap-2">
+                  {t('services.detail.mcpToolsLabel')}<Badge tone="neutral">{listedTools.length}</Badge>
+                  {pendingTools.length > 0 && <Badge tone="warning">{t('services.toolPin.pendingBadge', { count: pendingTools.length })}</Badge>}
+                </span>
+              )}
               action={hasMcpConnection && (
                 <Button variant="ghost" size="xs" icon={RefreshCw} onClick={handleRefreshTools} loading={isRefreshingTools}>
                   {t('services.detail.refreshFromServer')}
@@ -686,7 +830,22 @@ export default function ServiceDetailPage() {
                 )}
               </div>
             )}
-            {(service.tools || []).length === 0 ? (
+            {pendingTools.length > 0 && (
+              <div className="mb-4 space-y-3" data-testid="tool-approvals">
+                <Alert tone="warning" icon={ShieldAlert} title={t('services.toolPin.reviewTitle', { count: pendingTools.length })}>
+                  <p>{firstReview ? t('services.toolPin.reviewFirstHint') : t('services.toolPin.reviewHint')}</p>
+                  {firstReview && pendingTools.length > 1 && (
+                    <Button className="mt-2" variant="primary" size="sm" icon={CheckCheck} loading={isApprovingAll} onClick={() => handleApproveAll(pendingTools)}>
+                      {t('services.toolPin.approveAll', { count: pendingTools.length })}
+                    </Button>
+                  )}
+                </Alert>
+                {pendingTools.map((tool) => (
+                  <ToolApprovalCard key={tool.id} tool={tool} onDecide={handleDecideTool} deciding={decidingHash} />
+                ))}
+              </div>
+            )}
+            {allTools.length === 0 ? (
               <EmptyState
                 compact
                 icon={Wrench}
@@ -695,7 +854,13 @@ export default function ServiceDetailPage() {
               />
             ) : (
               <div className="space-y-0.5">
-                {service.tools.map((tool) => <ToolItem key={tool.id || tool.name} tool={tool} />)}
+                {listedTools.map((tool) => <ToolItem key={tool.id || tool.name} tool={tool} onDecide={handleDecideTool} deciding={decidingHash} />)}
+                {removedTools.length > 0 && (
+                  <>
+                    <SectionLabel className="px-0 pb-1 pt-3">{t('services.toolPin.removedSection', { count: removedTools.length })}</SectionLabel>
+                    {removedTools.map((tool) => <ToolItem key={tool.id} tool={tool} onDecide={handleDecideTool} deciding={decidingHash} />)}
+                  </>
+                )}
               </div>
             )}
           </Card>

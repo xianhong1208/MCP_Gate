@@ -213,6 +213,26 @@ export const servicesApi = {
     })
   },
 
+  /** Tool pinning (#32): approve / reject the version of a tool with this hash (the one the admin was shown) */
+  async approveTool(id, toolId, hash) {
+    return request(`/api/services/${encodeURIComponent(id)}/tools/${encodeURIComponent(toolId)}/approve`, {
+      method: 'POST', body: JSON.stringify({ hash }),
+    })
+  },
+
+  async rejectTool(id, toolId, hash) {
+    return request(`/api/services/${encodeURIComponent(id)}/tools/${encodeURIComponent(toolId)}/reject`, {
+      method: 'POST', body: JSON.stringify({ hash }),
+    })
+  },
+
+  /** Approve all, for a service's first tool list only: the pending hashes shown */
+  async approveAllTools(id, hashes) {
+    return request(`/api/services/${encodeURIComponent(id)}/tools/approve-all`, {
+      method: 'POST', body: JSON.stringify({ hashes }),
+    })
+  },
+
   async checkHealth(id) {
     return request(`/api/services/${encodeURIComponent(id)}/health-check`, { method: 'POST' })
   },

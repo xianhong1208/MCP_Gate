@@ -282,6 +282,11 @@
       "clientsHint": "核准與管理 client",
       "services": "服務",
       "servicesHint": "註冊並監控 MCP server"
+    },
+    "pendingTools": {
+      "title_other": "{{count}} 個 tools 等待核准",
+      "hint": "有新的或變更過的 tool 定義尚未審核。開啟該 server 比對後核准或拒絕。",
+      "count_other": "{{count}} 個待核准"
     }
   },
   "tokens": {
@@ -668,6 +673,42 @@
       "unreachable": "無法連線到伺服器",
       "timeout": "健康檢查逾時",
       "failed": "健康檢查失敗"
+    },
+    "toolPin": {
+      "state": {
+        "approved": "已核准",
+        "pending": "待核准",
+        "rejected": "已拒絕",
+        "removed": "已不再列出"
+      },
+      "hashLabel": "SHA-256",
+      "versionCount_other": "{{count}} 個版本",
+      "approve": "核准",
+      "reject": "拒絕",
+      "withdraw": "撤回核准",
+      "field": {
+        "title": "標題",
+        "description": "說明",
+        "inputSchema": "輸入 schema",
+        "outputSchema": "輸出 schema",
+        "annotations": "Annotations"
+      },
+      "changed": "已變更",
+      "newTool": "新 tool",
+      "changedHint": "定義與 {{date}} 核准的版本不同，請檢查變更內容。",
+      "newHint": "Server 列出了一個從未核准過的 tool，請檢查完整定義。",
+      "noFieldChanges": "只有名稱或雜湊值不同。",
+      "approvedToast": "已核准 {{name}}",
+      "rejectedToast": "已拒絕 {{name}}",
+      "decideFailed": "無法儲存決定：{{message}}",
+      "approvedAllToast_other": "已核准 {{count}} 個 tools",
+      "pendingBadge_other": "{{count}} 個 tools 待核准",
+      "reviewTitle_other": "{{count}} 個 tools 等待核准",
+      "approveAll_other": "全部核准（{{count}}）",
+      "reviewFirstHint": "這是此 server 的第一份 tool 清單。請閱讀定義後逐一核准，或一次全部核准。之後的變更需逐一審核。",
+      "reviewHint": "新的或變更過的 tool 定義會以雜湊值釘選，在管理員核准前維持未核准。已核准的版本會保留以供比對。",
+      "removedSection_other": "已不再列出（{{count}}）",
+      "refreshedWithPending_other": "已重新整理 {{n}} 個 tools，其中 {{count}} 個等待核准"
     }
   },
   "clients": {
@@ -1034,6 +1075,9 @@
       "oauth_code_replay": "授權碼重複使用",
       "oauth_refresh_replay": "Refresh Token 重複使用",
       "refresh_tools": "重新整理 Tools",
+      "tool_approve": "核准 Tool",
+      "tool_reject": "拒絕 Tool",
+      "tool_approve_all": "全部核准 Tools",
       "scan_services": "網路掃描",
       "admin_setup": "初始設定",
       "create_service": "建立服務",

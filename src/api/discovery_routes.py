@@ -146,8 +146,7 @@ async def scan_services(request: ScanRequest, http_request: Request, db: Session
                             db, name=service_name, description=description, host=svc.host, port=svc.port,
                             protocol=svc.protocol, mcp_path=svc.mcp_path, source="auto_discovered",
                             requires_auth=svc.requires_auth,
-                            tools=[{"name": t.name, "description": t.description, "input_schema": t.input_schema}
-                                   for t in svc.tools],
+                            tools=[t.to_mcp() for t in svc.tools],
                             response_time_ms=vr.response_time_ms if vr else None,
                         )
                     except AdapterError as e:
