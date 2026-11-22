@@ -257,6 +257,17 @@ class MCPToolCRUD:
         ).first() is not None
 
     @staticmethod
+    def registry(db: Session) -> dict:
+        """Every tool name a service currently lists, with the services that list it: {name: {service_id: service
+        name}}. The poisoning scan (#34) looks for these names in other tools' definitions."""
+        rows = db.query(MCPTool.name, Service.id, Service.name).join(Service, Service.id == MCPTool.service_id).filter(
+            MCPTool.removed_at.is_(None)).all()
+        names: dict = {}
+        for tool_name, service_id, service_name in rows:
+            names.setdefault(tool_name, {})[str(service_id)] = service_name
+        return names
+
+    @staticmethod
     def sync_tools(db: Session, service_id: str, tools: List[dict]) -> List[MCPTool]:
         """Record a complete tools/list result from a refresh or scan (see record_tools). Returns the listed tools."""
         return MCPToolCRUD.record_tools(db, service_id, tools)[0]

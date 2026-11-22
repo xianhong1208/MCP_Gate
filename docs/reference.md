@@ -133,6 +133,33 @@ Every tool a server lists is pinned by a SHA-256 of its definition, and a new or
 
 MCP Gate records the decisions; it does not sit between clients and servers, so on its own it cannot hide an unapproved tool. A server that runs the pinning middleware does (next section); for any other server the console shows the state but clients still see every tool.
 
+### Poisoning scan
+
+A tool's description and schema are read by the model that calls it, so a server can hide instructions there. Every pinned definition is also checked by built-in rules (no model, no network; `src/tool_pinning/scan.py`), and what they find is shown on the approval card and next to an approved tool. **A finding never blocks anything**: an unapproved tool is hidden anyway (on a server that runs the middleware), and the decision stays the admin's.
+
+- **What is scanned.** Every string and object key of the hashed fields (`name`, `title`, `description`, `inputSchema`, `outputSchema`, `annotations`), recursively, so an instruction in a parameter description or a `default` is found too. The work is bounded: 2,000 strings, 200,000 characters, 32 levels and 200 findings per definition; beyond that a `scan-truncated` finding says so. Text is matched after NFKC normalisation (fullwidth letters become ASCII), with common Cyrillic and Greek look-alike letters mapped to Latin, case folded, and invisible characters removed, so `ig<U+200B>nore` still reads `ignore`. Offsets point into the original text.
+- **The rules** (severity `high`, `warning` or `info`):
+
+  | Rule | Flags | Severity |
+  |---|---|---|
+  | `invisible-characters` | Zero-width characters, bidirectional controls (U+202A–U+202E, U+2066–U+2069), Unicode tag characters (U+E0000–U+E007F, decoded and shown as *hidden text*), supplementary variation selectors, Hangul fillers. A single joiner between two non-ASCII characters (emoji sequences, Indic and Arabic scripts) is left alone. | high for bidi, tags, variation selectors, a run of 3+, or invisible characters between most letters (reported once); otherwise warning |
+  | `instruction-phrase` | "ignore / disregard previous instructions", "do not tell the user", "without telling the user", `<IMPORTANT>`, `<system>`, `[INST]`, chat-template tokens, and Chinese variants (忽略之前的指示, 不要告訴使用者, 对用户保密 …) | high |
+  | | "before using this tool", HTML comments, "do not mention that", "new instructions:", "system prompt:", "you are now a …", 使用這個工具之前 | warning |
+  | | "you must", "very important", 你必須 | info |
+  | `tool-mention` | A tool name registered in MCP Gate (any server) other than the tool's own. Only names with `_`, `-`, `.` or camelCase and at least 4 characters are looked for, so "search" or "fetch" alone never match. | warning when another server lists it (shadowing); info when only this server does |
+  | `sensitive-data` | `~/.ssh`, `id_rsa` and other key files, `.aws/credentials`, `/etc/passwd`, `.netrc`, `.npmrc`, `.git-credentials`, `.kube/config`, `.env`, `mcp.json`, `claude_desktop_config.json`, `.cursor/` | high when near "read / send / include / pass …"; otherwise warning |
+  | | "API key", "private key", "credentials", "password", 私鑰, 密碼 … near "read / send / include / pass …" | warning |
+  | `url` | Any URL | info; warning for a raw IP address, plain `http` / `ftp` / `ws` (not loopback) or a link shortener, and for a URL in a `default` / `const` / `enum` / `examples` of a parameter named like a destination (webhook, callback, report, upload, backup …); high for such a URL in a value slot, or after "send / upload / post … to" |
+  | `encoded-blob` | base64 of 60+ characters (mixed case and digits) or hex of 64+ | high when it decodes to readable text (shown); otherwise warning (base64) or info (hex, e.g. a SHA-256) |
+  | `long-text` | A description over 4,000 characters (info) or a schema string over 1,000 characters (warning) | info / warning |
+  | `scan-truncated` | The work bound was reached | info |
+
+- **Flagged** means at least one `warning` or `high` finding; `info` alone is a note. The dashboard and the services list count pending tools that are flagged ("2 pending, 1 flagged").
+- **On the card.** The findings are grouped by rule with a short explanation and the matched text (invisible characters shown as boxed `U+XXXX`), and the matched text is highlighted inside the diff. Approving a definition with a `high` finding asks for confirmation once, naming the findings; anything else is one click, and so is rejecting. The audit entry of every approval or rejection records the findings shown (`details.findings`: counts by severity and the rule ids, plus `scan_rules_version`); *Approve all* records them per tool.
+- **Stored nowhere.** Findings are computed when the tool list is read (cached in memory per definition: about 1 ms per definition the first time, microseconds after), so an improved rule re-checks every old version, and `scan_rules_version` in the API says which rule set produced them.
+- **API.** Every version in `GET /api/services/{id}/tools` carries `findings`: `[{rule, severity, path, start, end, match, excerpt, detail}]` (`path` into the canonical definition, e.g. `inputSchema.properties.url.default`; `start` / `end` are code-point offsets in that string; `excerpt` writes invisible characters as `<U+XXXX>`). Each tool also has `findings` and `flagged` for its current definition; the response adds `flagged_count` and `scan_rules_version`, and service responses add `tools_flagged`.
+- **What it does not catch.** Rules match wording and characters, not intent: a paraphrased instruction, another language, an instruction split across fields, or a tool that behaves differently from its description passes. See [SECURITY.md](../SECURITY.md#known-limitations). Read the definition; the scan only points at places to read first.
+
 ### Tool approvals on the server
 
 `MCPGateToolPinning` in [`examples/mcp_gate_hooks.py`](../examples/mcp_gate_hooks.py) is a FastMCP middleware that enforces the approvals on the server itself. It needs the same resource-server client as the revocation feed (see above) and sits next to `MCPGateVerifier`: `FastMCP(..., middleware=[MCPGateToolPinning(verifier)])`. [`examples/fastmcp_server_hooks.py`](../examples/fastmcp_server_hooks.py) is a complete server.

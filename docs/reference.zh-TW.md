@@ -133,6 +133,33 @@ server 列出的每個 tool 都以其定義的 SHA-256 釘選;新的或變更過
 
 MCP Gate 只記錄這些決定;它不在 client 與 server 之間,所以單靠它無法隱藏未核准的 tool。執行釘選 middleware 的 server 會隱藏(見下一節);其他 server 只會在管理台顯示狀態,client 仍看得到所有 tool。
 
+### Poisoning 掃描
+
+呼叫 tool 的模型會讀它的說明與 schema,所以 server 可以把指令藏在裡面。每一份釘選的定義也會經過內建規則檢查(不用模型、不連網;`src/tool_pinning/scan.py`),結果顯示在核准卡片上,以及已核准 tool 的旁邊。**發現永遠不會擋下任何東西**:未核准的 tool 本來就會被隱藏(在執行 middleware 的 server 上),決定仍由管理員做。
+
+- **掃描範圍。** 雜湊欄位(`name`、`title`、`description`、`inputSchema`、`outputSchema`、`annotations`)裡的每個字串與物件 key,遞迴進去,所以藏在參數說明或 `default` 裡的指令也找得到。工作量有上限:每份定義 2,000 個字串、200,000 字元、32 層、200 項發現;超過時會有一項 `scan-truncated`。比對前先做 NFKC 正規化(全形字母變成 ASCII)、把常見的西里爾與希臘相似字母換成拉丁字母、大小寫折疊,並去掉不可見字元,所以 `ig<U+200B>nore` 仍會讀成 `ignore`。位移量指向原始文字。
+- **規則**(嚴重度 `high`、`warning` 或 `info`):
+
+  | 規則 | 標示什麼 | 嚴重度 |
+  |---|---|---|
+  | `invisible-characters` | 零寬字元、雙向控制字元(U+202A–U+202E、U+2066–U+2069)、Unicode tag 字元(U+E0000–U+E007F,會解碼並顯示為 *hidden text*)、補充變體選擇符、韓文填充字元。兩個非 ASCII 字元之間的單一 joiner(emoji 序列、印度與阿拉伯文字)不算。 | 雙向控制、tag、變體選擇符、連續 3 個以上,或夾在大部分字母之間(合併為一項)為 high;其餘 warning |
+  | `instruction-phrase` | 「ignore / disregard previous instructions」、「do not tell the user」、「without telling the user」、`<IMPORTANT>`、`<system>`、`[INST]`、chat template 標記,以及中文變體(忽略之前的指示、不要告訴使用者、对用户保密 …) | high |
+  | | 「before using this tool」、HTML 註解、「do not mention that」、「new instructions:」、「system prompt:」、「you are now a …」、使用這個工具之前 | warning |
+  | | 「you must」、「very important」、你必須 | info |
+  | `tool-mention` | 提到 MCP Gate 裡登記的 tool 名稱(任何 server),但不是自己。只找含 `_`、`-`、`.` 或 camelCase 且至少 4 字元的名稱,所以單獨的「search」或「fetch」不會命中。 | 另一台 server 有這個 tool 時 warning(shadowing);只有自己這台有時 info |
+  | `sensitive-data` | `~/.ssh`、`id_rsa` 等金鑰檔、`.aws/credentials`、`/etc/passwd`、`.netrc`、`.npmrc`、`.git-credentials`、`.kube/config`、`.env`、`mcp.json`、`claude_desktop_config.json`、`.cursor/` | 附近有「read / send / include / pass …」時 high;否則 warning |
+  | | 「API key」、「private key」、「credentials」、「password」、私鑰、密碼 … 出現在「read / send / include / pass …」附近 | warning |
+  | `url` | 任何網址 | info;IP 位址、非 loopback 的 `http` / `ftp` / `ws`、短網址為 warning,參數名稱像目的地(webhook、callback、report、upload、backup …)的 `default` / `const` / `enum` / `examples` 裡的網址也是 warning;上述網址出現在這些值裡,或在「send / upload / post … to」之後為 high |
+  | `encoded-blob` | 60 字元以上的 base64(大小寫加數字混合)或 64 字元以上的 hex | 能解碼成可讀文字時 high(會顯示);否則 warning(base64)或 info(hex,例如 SHA-256) |
+  | `long-text` | 說明超過 4,000 字元(info),或 schema 字串超過 1,000 字元(warning) | info / warning |
+  | `scan-truncated` | 達到工作量上限 | info |
+
+- **被標示** 指至少有一項 `warning` 或 `high`;只有 `info` 算是提示。儀表板與服務列表會計算被標示的待核准 tool(「2 個待核准,1 個被標示」)。
+- **卡片上。** 發現依規則分組,附簡短說明與命中的文字(不可見字元以方框 `U+XXXX` 顯示),命中的文字在差異裡也會標亮。核准帶有 `high` 發現的定義時會跳出一次確認,列出發現;其他情況一鍵即可,拒絕也是。每次核准或拒絕的稽核紀錄都記下當時顯示的發現(`details.findings`:各嚴重度的數量與規則 id,另有 `scan_rules_version`);*全部核准* 則逐個 tool 記錄。
+- **不儲存。** 發現在讀取 tool 清單時才計算(每份定義在記憶體快取:第一次約 1 ms,之後幾微秒),所以規則改進後,舊版本也會重新檢查;API 的 `scan_rules_version` 標明是哪一版規則算的。
+- **API。** `GET /api/services/{id}/tools` 的每個版本都有 `findings`:`[{rule, severity, path, start, end, match, excerpt, detail}]`(`path` 指向正規化後的定義,例如 `inputSchema.properties.url.default`;`start` / `end` 是該字串中的 code point 位移;`excerpt` 把不可見字元寫成 `<U+XXXX>`)。每個 tool 另有目前定義的 `findings` 與 `flagged`;回應另加 `flagged_count` 與 `scan_rules_version`,服務的回應另加 `tools_flagged`。
+- **抓不到的。** 規則比對的是用字與字元,不是意圖:換句話說的指令、其他語言、拆在不同欄位的指令,或行為與說明不符的 tool 都會通過。見 [SECURITY.md](../SECURITY.md#known-limitations)。請閱讀定義;掃描只是指出該先看哪裡。
+
 ### Server 上的 tool 核准
 
 [`examples/mcp_gate_hooks.py`](../examples/mcp_gate_hooks.py) 裡的 `MCPGateToolPinning` 是一個 FastMCP middleware,在 server 本身執行核准。它需要和撤銷清單相同的 resource server client(見上文),與 `MCPGateVerifier` 並用:`FastMCP(..., middleware=[MCPGateToolPinning(verifier)])`。完整的 server 見 [`examples/fastmcp_server_hooks.py`](../examples/fastmcp_server_hooks.py)。

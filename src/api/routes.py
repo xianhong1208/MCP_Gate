@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import platform
 from typing import Optional
 
@@ -24,6 +25,7 @@ from src.audit import ActorType, AuditAction, AuditService, AuditStatus, Resourc
 from src.identity import get_current_user, get_optional_current_user
 from src.logging import get_logger
 from src.scheduler import get_scheduler
+from src.tool_pinning.scan import SCAN_RULES_VERSION, freeze_registry, is_flagged, scan_tool, summarize
 from src.utils.crypto import encrypt_token
 from src.utils.field_limits import FieldTooLongError, check_max_length
 from src.utils.mcp_target import InvalidTargetError
@@ -50,31 +52,54 @@ def _encrypt_static_token(token: str) -> str:
     return encrypt_token(token)
 
 
-def _version_info(v) -> MCPToolVersionInfo:
-    return MCPToolVersionInfo(**v.to_dict())
+def _findings(tool, version, registry):
+    """The poisoning scan of one version of a tool (#34): computed on read, never stored (see scan.py)."""
+    return scan_tool(json.loads(version.definition), registry, str(tool.service_id))
 
 
-def _tool_info(t) -> MCPToolInfo:
+def _version_info(tool, v, registry) -> MCPToolVersionInfo:
+    return MCPToolVersionInfo(**v.to_dict(), findings=[f.to_dict() for f in _findings(tool, v, registry)])
+
+
+def _tool_info(t, registry=None) -> MCPToolInfo:
+    """A tool with its versions and their scan findings. `registry` is freeze_registry(MCPToolAdapter.registry(db)) (the tool names
+    the mention rule looks for); read it once per request."""
     data = t.to_dict()
     approved = t.approved_version
+    current = t.current_version
+    current_findings = _findings(t, current, registry) if current is not None else []
     return MCPToolInfo(
         id=data["id"], name=t.name, title=t.title, description=t.description,
         input_schema=data["input_schema"], output_schema=data["output_schema"], annotations=data["annotations"],
         created_at=data["created_at"], hash=t.current_hash, state=t.state, removed_at=data["removed_at"],
         last_seen_at=format_datetime(t.last_seen_at),
-        approved_version=_version_info(approved) if approved is not None and approved.hash != t.current_hash else None,
-        versions=[_version_info(v) for v in t.versions],
+        approved_version=(_version_info(t, approved, registry)
+                          if approved is not None and approved.hash != t.current_hash else None),
+        versions=[_version_info(t, v, registry) for v in t.versions],
+        findings=[f.to_dict() for f in current_findings], flagged=is_flagged(current_findings),
     )
 
 
-def _service_info(service: Service, include_tools: bool = False) -> ServiceInfo:
+def _pending_flagged(tools, registry) -> int:
+    """How many listed tools wait for approval with a warning or high finding on their current definition (#34)."""
+    count = 0
+    for t in tools:
+        current = t.current_version
+        if t.removed_at is None and current is not None and t.state == "pending" \
+                and is_flagged(_findings(t, current, registry)):
+            count += 1
+    return count
+
+
+def _service_info(service: Service, include_tools: bool = False, registry=None) -> ServiceInfo:
     data = service.to_dict(include_tools=False, include_health=True)
     data["health"] = ServiceHealthInfo(**data["health"])
     listed = [t for t in service.tools if t.removed_at is None]
     data["tools_count"] = len(listed)
     data["tools_pending"] = sum(1 for t in listed if t.state == "pending")
+    data["tools_flagged"] = _pending_flagged(listed, registry) if data["tools_pending"] else 0
     if include_tools:
-        data["tools"] = [_tool_info(t) for t in sorted(service.tools, key=lambda t: t.name)]
+        data["tools"] = [_tool_info(t, registry) for t in sorted(service.tools, key=lambda t: t.name)]
     return ServiceInfo(**data)
 
 
@@ -117,7 +142,10 @@ async def list_services(
     """List registered MCP servers with health, audience and tool counts."""
     services = ServiceAdapter.get_all(db, include_inactive=include_inactive, health_status=health_status,
                                       source=source, tag=tag, requires_auth=requires_auth)
-    items = [_service_info(s) for s in services]
+    # One more query, only when some tool waits for approval (the flagged count needs the names of every tool)
+    pending = any(t.state == "pending" for s in services for t in s.tools if t.removed_at is None)
+    registry = freeze_registry(MCPToolAdapter.registry(db)) if pending else None
+    items = [_service_info(s, registry=registry) for s in services]
     return ServiceListResponse(services=items, total_count=len(items))
 
 
@@ -148,7 +176,7 @@ async def get_service(service_id: str, include_tools: bool = Query(False), db: S
         service = ServiceAdapter.get_existing(db, service_id)
     except AdapterError as e:
         raise _adapter_exc(e)
-    return _service_info(service, include_tools=include_tools)
+    return _service_info(service, include_tools=include_tools, registry=freeze_registry(MCPToolAdapter.registry(db)))
 
 
 @router.put("/api/services/{service_id}", response_model=ServiceInfo, tags=["Services"])
@@ -197,10 +225,13 @@ async def get_service_tools(service_id: str, db: Session = Depends(get_db), _: A
         service = ServiceAdapter.get_existing(db, service_id)
     except AdapterError as e:
         raise _adapter_exc(e)
-    tools = [_tool_info(t) for t in MCPToolAdapter.get_by_service(db, service_id)]
+    registry = freeze_registry(MCPToolAdapter.registry(db))
+    tools = [_tool_info(t, registry) for t in MCPToolAdapter.get_by_service(db, service_id)]
     listed = [t for t in tools if t.removed_at is None]
     return {"service_id": service_id, "service_name": service.name, "tools": tools, "count": len(listed),
             "pending_count": sum(1 for t in listed if t.state == "pending"),
+            "flagged_count": sum(1 for t in listed if t.state == "pending" and t.flagged),
+            "scan_rules_version": SCAN_RULES_VERSION,
             "first_review": not MCPToolAdapter.has_approved_version(db, service_id)}
 
 
@@ -215,10 +246,17 @@ async def approve_all_service_tools(service_id: str, body: ApproveAllToolsReques
         pairs = MCPToolAdapter.approve_first_list(db, service_id, body.hashes, user.audit_name)
     except AdapterError as e:
         raise _adapter_exc(e)
+    registry = freeze_registry(MCPToolAdapter.registry(db))
+    approved = []
+    for t, v in pairs:
+        approved.append({"name": t.name, "hash": v.hash, "findings": summarize(_findings(t, v, registry))})
     _audit(db, http_request, user, AuditAction.TOOL_APPROVE_ALL, ResourceType.SERVICE, service_id,
-           {"tools": [{"name": t.name, "hash": v.hash} for t, v in pairs], "count": len(pairs)})
+           {"tools": approved, "count": len(pairs),
+            "findings": sum(a["findings"]["count"] for a in approved),
+            "flagged": sum(1 for a in approved if a["findings"]["high"] or a["findings"]["warning"]),
+            "scan_rules_version": SCAN_RULES_VERSION})
     tools = MCPToolAdapter.get_by_service(db, service_id)
-    return ApproveAllToolsResponse(approved=len(pairs), tools=[_tool_info(t) for t in tools])
+    return ApproveAllToolsResponse(approved=len(pairs), tools=[_tool_info(t, registry) for t in tools])
 
 
 def _decide_tool(service_id, tool_id, body, http_request, db, user, state, action):
@@ -227,10 +265,13 @@ def _decide_tool(service_id, tool_id, body, http_request, db, user, state, actio
         tool, version, previous = MCPToolAdapter.decide(db, service_id, tool_id, body.hash, state, user.audit_name)
     except AdapterError as e:
         raise _adapter_exc(e)
+    registry = freeze_registry(MCPToolAdapter.registry(db))
+    # The decision is recorded with what the poisoning scan showed the admin (#34): "approved with N findings"
     _audit(db, http_request, user, action, ResourceType.SERVICE, service_id,
            {"tool": tool.name, "tool_id": str(tool.id), "hash": version.hash, "previous_state": previous,
-            "current": version.hash == tool.current_hash})
-    return ToolDecisionResponse(tool=_tool_info(tool), previous_state=previous)
+            "current": version.hash == tool.current_hash,
+            "findings": summarize(_findings(tool, version, registry)), "scan_rules_version": SCAN_RULES_VERSION})
+    return ToolDecisionResponse(tool=_tool_info(tool, registry), previous_state=previous)
 
 
 @router.post("/api/services/{service_id}/tools/{tool_id}/approve", response_model=ToolDecisionResponse,
@@ -297,14 +338,16 @@ async def refresh_service_tools(service_id: str, http_request: Request, body: Op
         raise HTTPException(status_code=502, detail={"error": "service.remote_unreachable",
                                                      "fallback": f"Could not reach MCP service: {e}"})
     listed = MCPToolAdapter.sync_tools(db, service_id, [t.to_mcp() for t in tools])
-    infos = [_tool_info(t) for t in listed]
+    registry = freeze_registry(MCPToolAdapter.registry(db))
+    infos = [_tool_info(t, registry) for t in listed]
     pending = sum(1 for t in infos if t.state == "pending")
+    flagged = sum(1 for t in infos if t.state == "pending" and t.flagged)
     _audit(db, http_request, user, "refresh_tools", ResourceType.SERVICE, service_id,
            {"service_name": service.name, "tools_count": len(infos), "tools_pending": pending,
             "identity": body.identity,
             **({"jti": body.jti} if body.identity == "token" else {})})
     return RefreshToolsResponse(success=True, message=f"Refreshed {len(infos)} tools", tools_count=len(infos),
-                                tools_pending=pending, tools=infos)
+                                tools_pending=pending, tools_flagged=flagged, tools=infos)
 
 
 @router.post("/api/services/health-check-all", response_model=BulkHealthCheckResponse, tags=["Services"])

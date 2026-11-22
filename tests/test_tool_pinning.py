@@ -237,7 +237,8 @@ def test_tpin_018_decisions_are_audited(owner_client, service, remote):
         by_action.setdefault(e["action"], []).append(e)
     approve_all = by_action["tool_approve_all"][0]
     assert approve_all["resource_id"] == service["id"] and approve_all["details"]["count"] == 1
-    assert approve_all["details"]["tools"] == [{"name": "alpha", "hash": tools["alpha"]["hash"]}]
+    assert [{k: t[k] for k in ("name", "hash")} for t in approve_all["details"]["tools"]] == \
+        [{"name": "alpha", "hash": tools["alpha"]["hash"]}]
     reject = by_action["tool_reject"][0]
     assert reject["details"]["tool"] == "beta" and reject["details"]["previous_state"] == "pending"
     assert reject["details"]["hash"] == tools["beta"]["hash"] and reject["actor_name"] == "owner <owner@example.com>"

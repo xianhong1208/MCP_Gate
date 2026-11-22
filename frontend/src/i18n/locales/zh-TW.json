@@ -286,7 +286,9 @@
     "pendingTools": {
       "title_other": "{{count}} 個 tools 等待核准",
       "hint": "有新的或變更過的 tool 定義尚未審核。開啟該 server 比對後核准或拒絕。",
-      "count_other": "{{count}} 個待核准"
+      "count_other": "{{count}} 個待核准",
+      "flaggedHint_other": "其中 {{count}} 個被 poisoning 掃描標示。",
+      "flagged_other": "{{count}} 個被標示"
     }
   },
   "tokens": {
@@ -722,6 +724,60 @@
       "sourceReportedHint": "Server 的釘選 middleware 在列出此定義時回報給 MCP Gate；核准前 clients 看不到這個 tool。",
       "enforcedHint": "此 server 會執行核准：待核准與已拒絕的 tools 不會列給 clients，也無法呼叫。",
       "notEnforcedHint": "此 server 尚未執行核准：clients 仍看得到並可呼叫待核准的 tools。加入 MCPGateToolPinning middleware 即可隱藏它們。"
+    },
+    "toolScan": {
+      "title": "Poisoning 掃描",
+      "notBlocking": "只做標示；是否核准仍由你決定。",
+      "severity": {
+        "high": "高",
+        "warning": "警告",
+        "info": "資訊"
+      },
+      "rule": {
+        "invisible-characters": {
+          "label": "不可見字元",
+          "explain": "零寬、方向控制或 Unicode tag 字元：你在這裡看不到，但模型讀得到。下方以方框標示。"
+        },
+        "instruction-phrase": {
+          "label": "對模型下指令",
+          "explain": "內容在對模型說話而不是描述 tool：要求忽略先前的指示、對使用者隱瞞、<IMPORTANT> 或 <system> 標記、隱藏註解。"
+        },
+        "tool-mention": {
+          "label": "提到其他 tool",
+          "explain": "提到這裡登記的其他 tool。點名另一個 server 的 tool，正是一個 server 改變模型使用另一個 server 的手法（shadowing）。"
+        },
+        "sensitive-data": {
+          "label": "機密或私人檔案",
+          "explain": "提到 SSH 金鑰、.env 檔、雲端憑證或其他機密；若要求讀取或傳送則更嚴重。"
+        },
+        "url": {
+          "label": "網址",
+          "explain": "定義中有連結；若是 IP 位址、未加密的 http、短網址、出現在預設值，或在「傳送…到」之後，則更嚴重。"
+        },
+        "encoded-blob": {
+          "label": "編碼資料",
+          "explain": "很長的 base64 或 hex 字串；若能解碼成可讀文字則更嚴重。"
+        },
+        "long-text": {
+          "label": "文字異常地長",
+          "explain": "說明超過 4,000 字元，或 schema 文字超過 1,000 字元：有空間藏指令。"
+        },
+        "scan-truncated": {
+          "label": "未完整掃描",
+          "explain": "定義太大，無法完整掃描；只檢查了前面一部分。"
+        }
+      },
+      "flagged_other": "{{count}} 項發現",
+      "notes_other": "{{count}} 項提示",
+      "countsHint": "Poisoning 掃描：高 {{high}}、警告 {{warning}}、資訊 {{info}}",
+      "more_other": "…還有 {{count}} 項",
+      "showInfo_other": "顯示 {{count}} 項資訊",
+      "hideInfo": "隱藏資訊項目",
+      "pendingFlagged_other": "其中 {{count}} 個被 poisoning 掃描標示：核准前請先看它的發現。",
+      "flaggedBadge_other": "{{count}} 個待核准 tools 被 poisoning 掃描標示",
+      "confirmTitle_other": "要核准掃描評為高風險的 {{count}} 個 tools 嗎？",
+      "confirmMessage": "Clients 會依此定義看到並呼叫它。Poisoning 掃描發現：",
+      "confirmApprove": "仍要核准"
     }
   },
   "clients": {
