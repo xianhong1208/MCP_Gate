@@ -685,7 +685,7 @@ def issue_access_token(
     db: Session, *, sub: str, client_id: str, scope: str, audience: Optional[str],
     service: Optional[Service] = None, user: Optional[AdminUser] = None, kind: str = "access",
     ttl_seconds: Optional[int] = None, label: Optional[str] = None, parent_jti: Optional[str] = None,
-    record: bool = True, commit: bool = True,
+    record: bool = True, commit: bool = True, extra_claims: Optional[dict] = None,
 ) -> tuple[str, int, Optional[OAuthToken]]:
     cfg = Config.get_oauth_config()
     now = _now_ts()
@@ -700,6 +700,8 @@ def issue_access_token(
     if user:
         payload["email"] = user.email
         payload["name"] = user.username
+    if extra_claims:
+        payload.update(extra_claims)
     token, kid = _sign(db, payload, typ="at+jwt", may_commit=commit, record_expiry=record)
     rec = None
     if record:
@@ -1085,9 +1087,15 @@ def revocation_feed_status(db: Session, audience: Optional[str]) -> dict:
     - ``not_wired``: nothing is bound; a server verifying offline accepts revoked tokens until they expire
       (a server that introspects every token is not affected, but MCP Gate cannot tell)
     """
+    return feed_status(db, audience, "revocation_polled_at")
+
+
+def feed_status(db: Session, audience: Optional[str], polled_attr: str) -> dict:
+    """How the resource servers bound to ``audience`` read one feed, from the poll time stored in ``polled_attr``
+    (revocation_feed_status describes the states)."""
     aud = normalize_audience(audience) if audience else None
     clients = OAuthClientAdapter.list_resource_servers(db, aud) if aud else []
-    polls = [c.revocation_polled_at for c in clients if c.revocation_polled_at]
+    polls = [getattr(c, polled_attr) for c in clients if getattr(c, polled_attr)]
     last = max(polls) if polls else None
     if last is not None:
         state = "active" if local_now() - last <= FEED_STALE_AFTER else "stale"
@@ -1099,7 +1107,7 @@ def revocation_feed_status(db: Session, audience: Optional[str]) -> dict:
         "last_poll": format_datetime(last) if last else None,
         "stale_after_minutes": int(FEED_STALE_AFTER.total_seconds() // 60),
         "resource_servers": [{"client_id": c.client_id, "client_name": c.client_name,
-                              "last_poll": format_datetime(c.revocation_polled_at)} for c in clients],
+                              "last_poll": format_datetime(getattr(c, polled_attr))} for c in clients],
     }
 
 
@@ -1192,6 +1200,12 @@ def mint_personal_token(db: Session, *, user: AdminUser, service: Service, scope
     return token, rec
 
 
+# Marks the short-lived tokens MCP Gate signs for its own tools/list requests (scanner, health checks, "Inspect
+# as"). A server's pinning middleware (#33) lists every tool to such a token, approved or not, so a refresh records
+# the server's real tool list (and never marks a hidden tool as removed); tools/call stays refused.
+PROBE_CLAIM = "mcp_gate_probe"
+
+
 def mint_probe_token_like(db: Session, *, record: OAuthToken, service: Service) -> str:
     """A short-lived copy of an issued token's claims (sub, client_id, scope, aud, email/name and the same jti),
     signed now, for inspecting a server that shows different tools per caller. The stored token itself cannot
@@ -1208,7 +1222,7 @@ def mint_probe_token_like(db: Session, *, record: OAuthToken, service: Service) 
     payload = {
         "iss": issuer(), "sub": record.sub, "client_id": record.client_id, "scope": record.scope or "",
         "iat": now, "exp": now + SCANNER_TOKEN_TTL_SECONDS, "jti": record.jti, "token_use": "access",
-        "aud": audience,
+        "aud": audience, PROBE_CLAIM: True,
     }
     if record.user:
         payload["email"] = record.user.email
@@ -1226,7 +1240,7 @@ def mint_scanner_token(db: Session, service: Service) -> Optional[str]:
         else resolve_scope(db, None, None, service)
     token, _, _ = issue_access_token(
         db, sub=SCANNER_CLIENT_ID, client_id=SCANNER_CLIENT_ID, scope=scope, audience=audience,
-        service=service, ttl_seconds=SCANNER_TOKEN_TTL_SECONDS, record=False,
+        service=service, ttl_seconds=SCANNER_TOKEN_TTL_SECONDS, record=False, extra_claims={PROBE_CLAIM: True},
     )
     return token
 
@@ -1291,5 +1305,7 @@ def build_metadata(db: Session) -> dict:
         # MCP Gate extensions for servers that verify tokens offline (see examples/mcp_gate_hooks.py)
         "revoked_tokens_endpoint": f"{base}/oauth/revoked",
         "usage_report_endpoint": f"{base}/oauth/usage",
+        "tool_policy_endpoint": f"{base}/oauth/policy",
+        "tool_report_endpoint": f"{base}/oauth/tool-report",
         "service_documentation": f"{base}/docs",
     }

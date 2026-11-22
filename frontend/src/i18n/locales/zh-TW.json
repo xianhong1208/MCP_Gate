@@ -576,6 +576,12 @@
       "feedNeverPolled": "已綁定 resource server,但從未輪詢",
       "feedNotWired": "未串接:已撤銷的 token 在到期前仍然有效",
       "feedHint": "離線驗證 token 的 server 只有輪詢 POST /oauth/revoked 才會知道撤銷;請在 OAuth Clients 綁定一個 resource server,並用 MCPGateVerifier 輪詢。",
+      "toolPolicy": "Tool 核准",
+      "policyActive": "由 server 執行,最後輪詢",
+      "policyStale": "已停止輪詢,最後一次",
+      "policyNeverPolled": "已綁定 resource server,但釘選 middleware 從未輪詢",
+      "policyNotWired": "未執行:server 會列出所有 tools,不論是否核准",
+      "policyHint": "Server 只有在執行 MCPGateToolPinning middleware 時才會隱藏未核准的 tools;它以 resource server client 讀取 POST /oauth/policy。",
       "yes": "是",
       "no": "否",
       "responseTime": "回應時間",
@@ -708,7 +714,14 @@
       "reviewFirstHint": "這是此 server 的第一份 tool 清單。請閱讀定義後逐一核准，或一次全部核准。之後的變更需逐一審核。",
       "reviewHint": "新的或變更過的 tool 定義會以雜湊值釘選，在管理員核准前維持未核准。已核准的版本會保留以供比對。",
       "removedSection_other": "已不再列出（{{count}}）",
-      "refreshedWithPending_other": "已重新整理 {{n}} 個 tools，其中 {{count}} 個等待核准"
+      "refreshedWithPending_other": "已重新整理 {{n}} 個 tools，其中 {{count}} 個等待核准",
+      "source": {
+        "reported": "由 server 回報",
+        "scan": "重新整理時發現"
+      },
+      "sourceReportedHint": "Server 的釘選 middleware 在列出此定義時回報給 MCP Gate；核准前 clients 看不到這個 tool。",
+      "enforcedHint": "此 server 會執行核准：待核准與已拒絕的 tools 不會列給 clients，也無法呼叫。",
+      "notEnforcedHint": "此 server 尚未執行核准：clients 仍看得到並可呼叫待核准的 tools。加入 MCPGateToolPinning middleware 即可隱藏它們。"
     }
   },
   "clients": {
@@ -1078,6 +1091,7 @@
       "tool_approve": "核准 Tool",
       "tool_reject": "拒絕 Tool",
       "tool_approve_all": "全部核准 Tools",
+      "tool_report": "Server 回報 Tools",
       "scan_services": "網路掃描",
       "admin_setup": "初始設定",
       "create_service": "建立服務",

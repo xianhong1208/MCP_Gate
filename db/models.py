@@ -203,6 +203,11 @@ TOOL_STATE_REJECTED = "rejected"
 TOOL_STATES = (TOOL_STATE_APPROVED, TOOL_STATE_PENDING, TOOL_STATE_REJECTED)
 # decided_by of the versions approved as the baseline when an existing deployment upgraded to pinning
 TOOL_BASELINE_ACTOR = "upgrade"
+# Where a tool version was first seen (#33): a refresh / scan by MCP Gate, or a report from the server itself
+# (POST /oauth/tool-report, sent by the pinning middleware when it lists a definition MCP Gate has not approved)
+TOOL_SOURCE_SCAN = "scan"
+TOOL_SOURCE_REPORTED = "reported"
+TOOL_SOURCES = (TOOL_SOURCE_SCAN, TOOL_SOURCE_REPORTED)
 
 
 def _json_or_none(raw: str | None):
@@ -291,6 +296,8 @@ class MCPToolVersion(Base):
     # Approved by the upgrade from a definition that only knew name, description and inputSchema (title,
     # outputSchema and annotations were never stored before pinning): see MCPToolCRUD.sync_tools
     legacy_baseline = Column(Boolean, nullable=False, default=False, server_default=sa_false())
+    # How MCP Gate first learned this definition: TOOL_SOURCE_SCAN or TOOL_SOURCE_REPORTED (#33)
+    source = Column(String(16), nullable=False, default=TOOL_SOURCE_SCAN, server_default=TOOL_SOURCE_SCAN)
 
     tool = relationship("MCPTool", back_populates="versions")
 
@@ -305,6 +312,7 @@ class MCPToolVersion(Base):
             "decided_at": format_datetime(self.decided_at),
             "decided_by": self.decided_by,
             "baseline": self.decided_by == TOOL_BASELINE_ACTOR,
+            "source": self.source or TOOL_SOURCE_SCAN,
         }
 
 
@@ -403,6 +411,9 @@ class OAuthClient(Base):
     # When this resource server last read the revocation feed (POST /oauth/revoked): tells the console whether a
     # revocation reaches the server before the token expires
     revocation_polled_at = Column(DateTime, nullable=True)
+    # When this resource server last read the tool policy feed (POST /oauth/policy, #33): tells the console whether
+    # the server enforces tool approvals (its pinning middleware hides unapproved tools)
+    policy_polled_at = Column(DateTime, nullable=True)
     # created_via = cimd: when the client's metadata document was last fetched and stored (the client_id is the
     # document's https URL; see src/oauth/client_metadata.py)
     metadata_fetched_at = Column(DateTime, nullable=True)
@@ -439,6 +450,7 @@ class OAuthClient(Base):
             "updated_at": format_datetime(self.updated_at),
             "last_used_at": format_datetime(self.last_used_at),
             "revocation_polled_at": format_datetime(self.revocation_polled_at),
+            "policy_polled_at": format_datetime(self.policy_polled_at),
             "metadata_fetched_at": format_datetime(self.metadata_fetched_at),
         }
 

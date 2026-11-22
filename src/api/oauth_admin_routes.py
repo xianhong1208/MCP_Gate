@@ -23,6 +23,7 @@ from src.config import Config
 from src.identity import get_current_user
 from src.middleware.issuer_check import observed_mismatches
 from src.utils.secret_policy import weak_secrets
+from src.oauth import policy_feed
 from src.oauth import service as oauth
 from src.oauth import signing_keys
 from src.oauth.errors import OAuthError
@@ -266,6 +267,18 @@ def service_revocation_feed(service_id: str, db: Session = Depends(get_db), _: A
     except AdapterError as e:
         raise _adapter_exc(e)
     return oauth.revocation_feed_status(db, service.effective_audience)
+
+
+@router.get("/services/{service_id}/policy-feed")
+def service_policy_feed(service_id: str, db: Session = Depends(get_db), _: AdminUser = Depends(get_current_user)):
+    """Whether this server enforces tool approvals (#33): the resource servers bound to it and when they last read
+    the tool policy feed (`state`: active | stale | never_polled | not_wired). A server whose pinning middleware
+    polls hides unapproved tools; any other server only has its tools' state shown here."""
+    try:
+        service = ServiceAdapter.get_existing(db, service_id)
+    except AdapterError as e:
+        raise _adapter_exc(e)
+    return policy_feed.policy_feed_status(db, service.effective_audience)
 
 
 @router.get("/revocation-feed")
@@ -540,7 +553,8 @@ def hello(name: str) -> str:
 if __name__ == "__main__":
     mcp.run(transport="http", host={q_host}, port={port})
 '''
-    fastmcp_hooks = f'''# Same server, but revocations take effect within seconds and usage shows up in the console.
+    fastmcp_hooks = f'''# Same server, but revocations take effect within seconds, usage shows up in the console, and only
+# tools approved in the console are listed and callable (MCPGateToolPinning hides new or changed ones).
 # Copy examples/mcp_gate_hooks.py from the MCP Gate repository next to this file, and register a
 # confidential client in the console (OAuth Clients -> Register trusted client, client secret or
 # private_key_jwt) bound to this server as its resource server
@@ -548,23 +562,26 @@ if __name__ == "__main__":
 # this server uses its credentials to talk back to MCP Gate.
 from fastmcp import FastMCP
 from fastmcp.server.auth import RemoteAuthProvider
-from mcp_gate_hooks import MCPGateVerifier
+from mcp_gate_hooks import MCPGateToolPinning, MCPGateVerifier
 
+verifier = MCPGateVerifier(
+    jwks_uri={py_str(base + "/.well-known/jwks.json")},
+    issuer={q_base},
+    audience={q_audience},
+    client_id="<CONFIDENTIAL_CLIENT_ID>",
+    client_secret="<CLIENT_SECRET>",              # or private_key_pem=open("client.pem").read(), kid="..."
+    poll_interval=15,                             # seconds between revocation-feed polls
+    flush_interval=30,                            # seconds between usage reports
+)
 auth = RemoteAuthProvider(
-    token_verifier=MCPGateVerifier(
-        jwks_uri={py_str(base + "/.well-known/jwks.json")},
-        issuer={q_base},
-        audience={q_audience},
-        client_id="<CONFIDENTIAL_CLIENT_ID>",
-        client_secret="<CLIENT_SECRET>",          # or private_key_pem=open("client.pem").read(), kid="..."
-        poll_interval=15,                         # seconds between revocation-feed polls
-        flush_interval=30,                        # seconds between usage reports
-    ),
+    token_verifier=verifier,
     authorization_servers=[{q_base}],
     base_url={q_audience},
 )
 
-mcp = FastMCP(name={q_name}, auth=auth)
+mcp = FastMCP(name={q_name}, auth=auth, middleware=[
+    MCPGateToolPinning(verifier, cache_file="mcp_gate_policy.json"),  # last approved list, kept across restarts
+])
 '''
     claude_code = shell_command("claude", "mcp", "add", "--transport", "http", cli_name, mcp_url)
     claude_code_pat = (shell_command("claude", "mcp", "add", "--transport", "http", cli_name, mcp_url)

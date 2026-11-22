@@ -49,6 +49,7 @@ const ACTION_KEYS = [
   'tool_approve',
   'tool_reject',
   'tool_approve_all',
+  'tool_report',
   'scan_services',
   'admin_setup',
   'admin_login',

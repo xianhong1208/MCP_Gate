@@ -416,6 +416,13 @@ export const oauthApi = {
     },
   },
 
+  /** Does the server enforce tool approvals (its pinning middleware's polls of the tool policy feed, #33) */
+  policyFeed: {
+    async forService(serviceId) {
+      return request(`/api/oauth/services/${encodeURIComponent(serviceId)}/policy-feed`)
+    },
+  },
+
   consents: {
     async list() {
       return request('/api/oauth/consents')

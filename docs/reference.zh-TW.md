@@ -131,7 +131,23 @@ server 列出的每個 tool 都以其定義的 SHA-256 釘選;新的或變更過
 - **決定。** 核准與拒絕都以雜湊指定版本,管理員決定的就是畫面上那一份定義。已拒絕的版本之後仍可核准,已核准的也可以用拒絕撤回。每次核准、拒絕與 *全部核准* 都記在稽核日誌(`tool_approve`、`tool_reject`、`tool_approve_all`)。儀表板與服務列表會顯示有幾個 tool 在等。
 - **API。** `GET /api/services/{id}/tools` 列出 tool,含 `state`、`hash`、`removed_at`、`versions` 與 `approved_version`(待核准變更要比對的版本),另有 `pending_count` 與 `first_review`。`POST /api/services/{id}/tools/{tool_id}/approve` 與 `…/reject` 接受 `{"hash": "<64 位十六進位>"}`;`POST /api/services/{id}/tools/approve-all` 接受 `{"hashes": [...]}`,一旦該服務有任何東西被核准過,就回 `409 tools.approve_all_not_first`。
 
-MCP Gate 只記錄這些決定;它不在 client 與 server 之間,所以單靠它無法隱藏未核准的 tool。由 server 端執行(撤銷清單旁的 policy feed,以及隱藏未核准 tool 的 FastMCP hooks)是下一步,見 [#33](https://github.com/xianhong1208/MCP_Gate/issues/33)。
+MCP Gate 只記錄這些決定;它不在 client 與 server 之間,所以單靠它無法隱藏未核准的 tool。執行釘選 middleware 的 server 會隱藏(見下一節);其他 server 只會在管理台顯示狀態,client 仍看得到所有 tool。
+
+### Server 上的 tool 核准
+
+[`examples/mcp_gate_hooks.py`](../examples/mcp_gate_hooks.py) 裡的 `MCPGateToolPinning` 是一個 FastMCP middleware,在 server 本身執行核准。它需要和撤銷清單相同的 resource server client(見上文),與 `MCPGateVerifier` 並用:`FastMCP(..., middleware=[MCPGateToolPinning(verifier)])`。完整的 server 見 [`examples/fastmcp_server_hooks.py`](../examples/fastmcp_server_hooks.py)。
+
+- **`tools/list`** 會為 server 的每個 tool 計算雜湊(定義同上;範例檔自帶一份實作,並能算出標準向量),只列出已核准的。**`tools/call`** 會為被呼叫的 tool 計算雜湊,未核准就拒絕,回覆 `Tool '<name>' is not available on this server.`,和不存在的 tool 一樣;原因只寫進 server 的 log。
+- **回報。** MCP Gate 還不認得的定義會立刻送到 `POST /oauth/tool-report`,不必等重新整理就會在管理台顯示為待核准(標示 *由 server 回報*)。所以說明一改,server 下一次 `tools/list` 就會隱藏它,幾秒後管理台就看得到待核准。
+- **Policy。** 每 `poll_interval` 秒(預設 15)讀一次 `POST /oauth/policy`。MCP Gate 自己的請求(重新整理、掃描、健康檢查、*Inspect as*)所用的短效 token 帶有 `mcp_gate_probe` claim;middleware 對它們列出所有 tool,不論是否核准,因此重新整理記錄的是真正的清單,不會把被隱藏的 tool 標成已不再列出。帶這種 token 的呼叫仍會被拒絕。
+- **連不到 MCP Gate 時**,繼續使用最後一次收到的清單。它也會寫進 `cache_file`(預設為工作目錄下的 `mcp_gate_policy.json`;以原子方式寫入、權限 600;設 `None` 則只放記憶體),所以 MCP Gate 停機時重啟 server 也還在。為其他 issuer、audience 或雜湊版本寫的快取會被忽略;有設 `max_cache_age` 時,超過該秒數的也一樣。MCP Gate 恢復回應後,它的清單會取代快取。
+- **從未收到清單**(第一次啟動時 MCP Gate 沒開、也沒有可用的快取):所有 tool 都隱藏且不能呼叫,並有一行 log 說明原因。設 `fail_open=True` 則在收到第一份清單前列出並執行所有 tool。
+- **管理台。** server 頁面有一列 *Tool approvals*,和撤銷清單那列一樣:由 server 執行(附最後一次輪詢時間)、已停止輪詢、從未輪詢,或未執行。待核准 tool 的審核卡片會說明這台 server 是否執行核准。
+
+給其他實作參考的 feed 與回報格式(form-encoded `POST`,驗證方式同 `/oauth/revoked`;只限呼叫者自己的 server):
+
+- `POST /oauth/policy`(可帶 `etag`)回應 `{"format": 1, "hash_version": 1, "audience", "service_id", "tools": {"approved": [...], "pending": [...], "rejected": [...]}, "rules": [], "unchanged": false, "etag", "now"}`,每個清單都是 64 位十六進位雜湊。其他雜湊都算未知:隱藏並回報。`rules` 保留給 1.6 的 tool 層級 policy,目前是空的;不認得的欄位請忽略。帶上手上的 `etag`,若沒有變化就只回 `{"unchanged": true, "etag", "now"}`。server 被停用或刪除時,所有清單都是空的。
+- `POST /oauth/tool-report`,`tools` 是 `tools/list` 回傳格式的 tool 物件 JSON 陣列(最多 200 個、body 最大 2 MiB、每個 client 每分鐘 30 次、每份定義最大 64 KiB)。MCP Gate 會自己為每份定義計算雜湊:一併送來的 `hash` 只拿來比對,不同的會列在 `hash_mismatch`。回應是 `{"recorded": [{"name", "hash", "state", "new"}], "invalid": [{"index", "name", "reason"}], "hash_mismatch": [...]}`。回報和重新整理走同一套規則,只是它沒提到的 tool 不受影響。新的定義會以 `tool_report` 記入稽核日誌,執行者是該 resource server。
 
 ## 使用管理台
 
@@ -153,7 +169,7 @@ MCP Gate 只記錄這些決定;它不在 client 與 server 之間,所以單靠�
 | 類別 | 端點 |
 |---|---|
 | OAuth(公開) | `GET /.well-known/oauth-authorization-server` · `GET /.well-known/openid-configuration` · `GET /.well-known/jwks.json` · `POST /oauth/register` · `GET /oauth/authorize` · `GET/POST /oauth/authorize/requests/{id}[/decision]`(同意頁)· `POST /oauth/token` · `POST /oauth/revoke` · `POST /oauth/introspect` |
-| Resource server | `POST /oauth/revoked`(撤銷清單)· `POST /oauth/usage`(使用回報);需綁定到該 server 的 confidential client,見[撤銷清單](#撤銷清單) |
+| Resource server | `POST /oauth/revoked`(撤銷清單)· `POST /oauth/usage`(使用回報)· `POST /oauth/policy`(tool policy feed)· `POST /oauth/tool-report`(tool 回報);需綁定到該 server 的 confidential client,見[撤銷清單](#撤銷清單)與 [Server 上的 tool 核准](#server-上的-tool-核准) |
 | 管理台 session | `GET /api/session/status` · `POST /api/session/setup` · `POST /api/session/login` · `POST /api/session/logout` · `GET /api/session/me` · `PUT /api/session/me/{profile,password}` · `GET /api/session/oauth/{github,google}/{start,callback}` |
 | 管理 API(需登入) | `/api/services*` · `/api/oauth/{clients,scopes,tokens,consents,keys,activity,overview,snippets}` · `/api/discovery/*` · `/api/marketplace*` · `/api/managed*` · `/api/byo-mcp*` · `/api/stats/*` · `/api/audit/*` · `/api/system/*` |
 | 維運 | `GET /health` · `WS /ws/services`(服務狀態即時推播) |

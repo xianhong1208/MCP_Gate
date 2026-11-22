@@ -578,6 +578,12 @@
       "feedNeverPolled": "Resource server bound, but it has never polled",
       "feedNotWired": "Not wired: revoked tokens stay valid until they expire",
       "feedHint": "A server that verifies tokens offline learns about revocations only by polling POST /oauth/revoked: bind a resource server under OAuth Clients and poll with MCPGateVerifier.",
+      "toolPolicy": "Tool approvals",
+      "policyActive": "Enforced by the server, last poll",
+      "policyStale": "Stopped polling, last poll",
+      "policyNeverPolled": "Resource server bound, but its pinning middleware has never polled",
+      "policyNotWired": "Not enforced: the server lists every tool, approved or not",
+      "policyHint": "A server hides unapproved tools only when it runs the MCPGateToolPinning middleware, which reads POST /oauth/policy with its resource-server client.",
       "yes": "Yes",
       "no": "No",
       "responseTime": "Response Time",
@@ -717,7 +723,14 @@
       "removedSection_one": "No longer listed ({{count}})",
       "removedSection_other": "No longer listed ({{count}})",
       "refreshedWithPending_one": "Refreshed {{n}} tools; {{count}} waits for approval",
-      "refreshedWithPending_other": "Refreshed {{n}} tools; {{count}} wait for approval"
+      "refreshedWithPending_other": "Refreshed {{n}} tools; {{count}} wait for approval",
+      "source": {
+        "reported": "Reported by the server",
+        "scan": "Found by a refresh"
+      },
+      "sourceReportedHint": "The server's pinning middleware sent this definition when it listed it; clients do not see the tool until it is approved.",
+      "enforcedHint": "This server enforces approvals: pending and rejected tools are hidden from clients and cannot be called.",
+      "notEnforcedHint": "This server does not enforce approvals yet: clients still see and can call pending tools. Add the MCPGateToolPinning middleware to hide them."
     }
   },
   "clients": {
@@ -1090,6 +1103,7 @@
       "tool_approve": "Tool Approved",
       "tool_reject": "Tool Rejected",
       "tool_approve_all": "Tools Approved (All)",
+      "tool_report": "Tools Reported by Server",
       "scan_services": "Network Scan",
       "admin_setup": "Initial Setup",
       "create_service": "Create Service",

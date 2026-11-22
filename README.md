@@ -24,7 +24,7 @@ MCP Gate puts standards-based authentication in front of every MCP server you ru
 - **A consent screen** for clients that register themselves, with decisions remembered per client and server.
 - **Personal access tokens** for scripts, CI and clients without OAuth, with ready-to-paste `claude mcp add` and `mcpServers` snippets.
 - **A server registry.** Register or scan MCP servers, sync their tools, watch their health, and see each tool list as a given token sees it ("Inspect as").
-- **Tool pinning.** Every tool definition is pinned by a SHA-256 hash; a new or changed tool waits for an admin, who sees a diff against the approved version before approving or rejecting it. See [Tool pinning and approval](docs/reference.md#tool-pinning-and-approval).
+- **Tool pinning.** Every tool definition is pinned by a SHA-256 hash; a new or changed tool waits for an admin, who sees a diff against the approved version before approving or rejecting it. A FastMCP middleware on your server hides every unapproved tool and reports new ones at once. See [Tool pinning and approval](docs/reference.md#tool-pinning-and-approval).
 - **Marketplace and orchestrator.** Deploy MCP servers from a catalog, or paste a `{command, args, env}` block and let MCP Gate run it in Docker or as a local process behind an HTTP bridge.
 - **Zero-config start.** SQLite by default, secrets generated on first run, an in-browser setup for the owner account; PostgreSQL is one environment variable away. The console speaks English and Traditional Chinese.
 
@@ -75,13 +75,13 @@ Or `docker compose up -d` with the repository's `docker-compose.yml` (settings i
 
 ## Quick start
 
-This walk-through protects a FastMCP server with MCP Gate, calls it with a personal access token, and turns on the revocation feed. It assumes MCP Gate at `http://localhost:4568` and the server at `http://127.0.0.1:8000/mcp`.
+This walk-through protects a FastMCP server with MCP Gate, calls it with a personal access token, and turns on the revocation feed and tool approvals. It assumes MCP Gate at `http://localhost:4568` and the server at `http://127.0.0.1:8000/mcp`.
 
 ### 1. Register the server
 
 In the console, open **Services → Register Service** and enter host `127.0.0.1`, port `8000` and path `/mcp`. The server's **audience**, the URL its tokens are valid for, defaults to its MCP URL: `http://127.0.0.1:8000/mcp`. Register first: MCP Gate only issues tokens for audiences it knows.
 
-### 2. (Optional) Register a client for the revocation feed
+### 2. (Optional) Register a client for the revocation feed and tool approvals
 
 On its own, a server that verifies offline keeps accepting a revoked token until it expires. To have it refuse revoked tokens within seconds, open **OAuth Clients → Register trusted client** and choose:
 
@@ -89,28 +89,33 @@ On its own, a server that verifies offline keeps accepting a revoked token until
 - authentication *Client secret*;
 - **Resource server for**: the server you registered in step 1.
 
-Copy the client id and secret; the secret is shown once. Skip this step and the example below runs without the feed.
+Copy the client id and secret; the secret is shown once. The same client also reads the server's tool approvals: with it, the server lists and runs only the tools you approved in the console. Skip this step and the example below runs without either.
 
 ### 3. Write the server
 
-Copy [`examples/mcp_gate_hooks.py`](examples/mcp_gate_hooks.py) next to your server. It holds `MCPGateVerifier`, FastMCP's `JWTVerifier` plus the revocation feed and usage reports, and needs only `fastmcp` and `httpx`. Then save this as `server.py` (it is [`examples/fastmcp_server_hooks.py`](examples/fastmcp_server_hooks.py)):
+Copy [`examples/mcp_gate_hooks.py`](examples/mcp_gate_hooks.py) next to your server. It holds `MCPGateVerifier`, FastMCP's `JWTVerifier` plus the revocation feed and usage reports, and `MCPGateToolPinning`, a FastMCP middleware that hides every tool an admin has not approved. It needs only `fastmcp` and `httpx`. Then save this as `server.py` (it is [`examples/fastmcp_server_hooks.py`](examples/fastmcp_server_hooks.py)):
 
 ```python
-"""A FastMCP server protected by MCP Gate, with the revocation feed.
+"""A FastMCP server protected by MCP Gate, with the revocation feed and tool approvals.
 
 Every request must carry an access token issued by MCP Gate for this server's audience. Tokens are verified
 offline against MCP Gate's JWKS; MCP Gate is never on the request path. When a resource-server client is
-configured (MCP_GATE_CLIENT_ID / MCP_GATE_CLIENT_SECRET), MCPGateVerifier also polls MCP Gate's revocation
-feed, so a revoked token is refused within `poll_interval` seconds, and reports token usage to the console.
+configured (MCP_GATE_CLIENT_ID / MCP_GATE_CLIENT_SECRET):
+
+- MCPGateVerifier polls MCP Gate's revocation feed, so a revoked token is refused within `poll_interval`
+  seconds, and reports token usage to the console;
+- MCPGateToolPinning lists and runs only the tools an admin approved in the console. A new or changed tool is
+  hidden at once and shows up in the console as pending. The approved list is cached in MCP_GATE_POLICY_CACHE,
+  so a restart while MCP Gate is down keeps it; with no list at all every tool stays hidden.
 
     pip install fastmcp httpx          # or: uv add fastmcp httpx
-    cp examples/mcp_gate_hooks.py .    # MCPGateVerifier lives in that single file
+    cp examples/mcp_gate_hooks.py .    # MCPGateVerifier and MCPGateToolPinning live in that single file
     MCP_GATE_URL=http://localhost:4568 python server.py
 
 Before starting it, register the server in the MCP Gate console (Services -> Register Service: host
-127.0.0.1, port 8000, path /mcp), so its audience is http://127.0.0.1:8000/mcp. For the revocation feed,
-also register a confidential client with grant type client_credentials and "Resource server for" set to
-this server, and export its id and secret. See the README's Quick start.
+127.0.0.1, port 8000, path /mcp), so its audience is http://127.0.0.1:8000/mcp. For the feeds, also register
+a confidential client with grant type client_credentials and "Resource server for" set to this server, and
+export its id and secret. See the README's Quick start.
 """
 
 import os
@@ -120,7 +125,7 @@ from fastmcp.server.auth import RemoteAuthProvider
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 from fastmcp.server.dependencies import get_access_token
 
-from mcp_gate_hooks import MCPGateVerifier
+from mcp_gate_hooks import MCPGateToolPinning, MCPGateVerifier
 
 MCP_GATE = os.environ.get("MCP_GATE_URL", "http://localhost:4568").rstrip("/")  # MCP Gate's OAUTH_ISSUER
 HOST = os.environ.get("MCP_HOST", "127.0.0.1")
@@ -135,6 +140,7 @@ verifier_settings = dict(
     required_scopes=["mcp:tools:invoke"],
 )
 
+middleware = []
 if os.environ.get("MCP_GATE_CLIENT_ID"):
     # Offline verification plus the revocation feed and usage reports.
     verifier = MCPGateVerifier(
@@ -144,8 +150,15 @@ if os.environ.get("MCP_GATE_CLIENT_ID"):
         poll_interval=15,   # seconds between revocation-feed polls
         flush_interval=30,  # seconds between usage reports
     )
+    # Only tools approved in the console are listed and callable.
+    middleware.append(MCPGateToolPinning(
+        verifier,
+        cache_file=os.environ.get("MCP_GATE_POLICY_CACHE", "mcp_gate_policy.json"),  # last approved list
+        poll_interval=15,   # seconds between tool-policy polls
+        fail_open=False,    # True: list every tool until the first list arrives (default: hide them all)
+    ))
 else:
-    # Offline verification only: a revoked token keeps working until it expires.
+    # Offline verification only: a revoked token keeps working until it expires, and every tool is listed.
     verifier = JWTVerifier(**verifier_settings)
 
 auth = RemoteAuthProvider(
@@ -154,7 +167,7 @@ auth = RemoteAuthProvider(
     base_url=BASE_URL,
 )
 
-mcp = FastMCP(name="demo", instructions="A demo server protected by MCP Gate", auth=auth)
+mcp = FastMCP(name="demo", instructions="A demo server protected by MCP Gate", auth=auth, middleware=middleware)
 
 
 @mcp.tool
@@ -175,8 +188,8 @@ def whoami() -> dict:
 
 
 if __name__ == "__main__":
-    revocation = "on" if isinstance(verifier, MCPGateVerifier) else "off"
-    print(f"MCP Gate: {MCP_GATE}   audience: {AUDIENCE}   revocation feed: {revocation}")
+    feeds = "on" if isinstance(verifier, MCPGateVerifier) else "off"
+    print(f"MCP Gate: {MCP_GATE}   audience: {AUDIENCE}   revocation feed: {feeds}   tool approvals: {feeds}")
     mcp.run(transport="http", host=HOST, port=PORT)
 ```
 
@@ -190,7 +203,9 @@ export MCP_GATE_CLIENT_SECRET=…
 python server.py
 ```
 
-It prints `MCP Gate: http://localhost:4568   audience: http://127.0.0.1:8000/mcp   revocation feed: on`. Within a few seconds the server's page in the console shows **Revocation feed: Wired**.
+It prints `MCP Gate: http://localhost:4568   audience: http://127.0.0.1:8000/mcp   revocation feed: on   tool approvals: on`. Within a few seconds the server's page in the console shows **Revocation feed: Wired** and **Tool approvals: Enforced by the server**.
+
+With tool approvals on, a new server lists no tools until you approve them. The first time a client lists them, the server reports `hello` and `whoami` to MCP Gate, and the server's page shows them as pending, reported by the server. Read the definitions and press **Approve all**; within one poll (15 seconds in the example) both are listed. From then on, a tool whose name, description or schema changes is hidden at once and waits for your approval again, with a diff against the approved version. See [Tool approvals on the server](docs/reference.md#tool-approvals-on-the-server).
 
 ### 5. Call it with a personal access token
 

@@ -10,6 +10,8 @@
   POST /oauth/token                              authorization_code / refresh_token / client_credentials
   POST /oauth/revoke                             RFC 7009
   POST /oauth/introspect                         RFC 7662
+  POST /oauth/revoked, /oauth/usage              revocation feed and usage reports (offline verifiers)
+  POST /oauth/policy, /oauth/tool-report         tool policy feed and tool reports (pinning middleware, #33)
 """
 
 from __future__ import annotations
@@ -31,6 +33,7 @@ from db.models import AdminUser
 from src.audit import ActorType, AuditAction, AuditService, AuditStatus, ResourceType, record_oauth_event
 from src.identity import get_current_user
 from src.logging import get_logger
+from src.oauth import policy_feed
 from src.oauth import service as oauth
 from src.oauth.errors import OAuthError
 from src.oauth.signing_keys import cached_jwks
@@ -58,6 +61,7 @@ def _client_ip(request: Request) -> Optional[str]:
 REGISTRATION_BODY_LIMIT = 64 * 1024     # RFC 7591 metadata, including an inline jwks with a few keys
 FORM_BODY_LIMIT = 64 * 1024             # token / revoke / introspect / revocation feed
 USAGE_BODY_LIMIT = 512 * 1024           # up to MAX_USAGE_EVENTS usage events
+TOOL_REPORT_BODY_LIMIT = 2 * 1024 * 1024  # up to MAX_REPORTED_TOOLS definitions, form-encoded
 
 
 async def _read_body(request: Request, limit: int, error: str = "invalid_request") -> bytes:
@@ -357,6 +361,48 @@ def _usage_report(request: Request, db: Session, form: dict) -> JSONResponse:
         except ValueError:
             raise OAuthError("invalid_request", "events must be JSON")
         return JSONResponse(content=oauth.report_usage(db, caller=caller, events=events, ip=_client_ip(request)),
+                            headers=NO_STORE)
+    except OAuthError as e:
+        db.rollback()
+        return _error_json(e)
+
+
+@router.post("/oauth/policy")
+async def tool_policy(request: Request, db: Session = Depends(get_db)):
+    """Tool policy feed (#33) for an MCP server that enforces tool approvals itself: the hashes of its tool
+    definitions by state (approved / pending / rejected) and the hash version. Send back the `etag` you hold to get
+    `{"unchanged": true}` when nothing changed. Requires a resource server (a console-registered confidential
+    client bound to an MCP server); only that server's tools are listed."""
+    return await _off_loop(request, _form, _tool_policy, db)
+
+
+def _tool_policy(request: Request, db: Session, form: dict) -> JSONResponse:
+    try:
+        caller = _authenticate_client(request, db, form)
+        return JSONResponse(content=policy_feed.policy_feed(db, caller=caller, etag=form.get("etag")),
+                            headers=NO_STORE)
+    except OAuthError as e:
+        db.rollback()
+        return _error_json(e)
+
+
+@router.post("/oauth/tool-report")
+async def tool_report(request: Request, db: Session = Depends(get_db)):
+    """Tool report (#33): `tools` is a JSON array of tool definitions (as tools/list returns them) the server lists
+    but has not seen approved. MCP Gate hashes each one itself and records new definitions as pending, so they show
+    up in the console at once. Requires a resource server; at most 200 tools and 30 reports a minute per client."""
+    return await _off_loop(request, lambda r: _form(r, TOOL_REPORT_BODY_LIMIT), _tool_report, db)
+
+
+def _tool_report(request: Request, db: Session, form: dict) -> JSONResponse:
+    try:
+        caller = _authenticate_client(request, db, form)
+        try:
+            tools = json.loads(form.get("tools") or "[]")
+        except ValueError:
+            raise OAuthError("invalid_request", "tools must be JSON")
+        return JSONResponse(content=policy_feed.report_tools(db, caller=caller, tools=tools, ip=_client_ip(request),
+                                                             request_path=request.url.path),
                             headers=NO_STORE)
     except OAuthError as e:
         db.rollback()
