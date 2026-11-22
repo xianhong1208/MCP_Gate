@@ -54,6 +54,7 @@ class AuditAction(str, Enum):
     TOOL_APPROVE = "tool_approve"
     TOOL_REJECT = "tool_reject"
     TOOL_APPROVE_ALL = "tool_approve_all"
+    TOOL_REPORT = "tool_report"
 
     # Admin-console accounts
     ADMIN_SETUP = "admin_setup"

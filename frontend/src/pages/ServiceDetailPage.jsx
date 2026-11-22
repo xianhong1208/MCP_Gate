@@ -69,6 +69,30 @@ function RevocationFeedStatus({ status }) {
   )
 }
 
+/** Whether this server enforces tool approvals: its pinning middleware's polls of the tool policy feed (#33) */
+function PolicyFeedStatus({ status }) {
+  const { t } = useTranslation()
+  const polled = status.state === 'active' || status.state === 'stale'
+  return (
+    <span className="block break-normal font-sans" data-testid="policy-feed-status">
+      <span className="flex flex-wrap items-center justify-end gap-1.5">
+        <StatusDot tone={status.state === 'not_wired' ? 'neutral' : feedTone(status.state)} />
+        {polled ? (
+          <>
+            <span>{status.state === 'active' ? t('services.detail.policyActive') : t('services.detail.policyStale')}</span>
+            <LastChecked value={status.last_poll} withIcon={false} className="text-foreground" />
+          </>
+        ) : (
+          <span>{status.state === 'never_polled' ? t('services.detail.policyNeverPolled') : t('services.detail.policyNotWired')}</span>
+        )}
+      </span>
+      {status.state !== 'active' && (
+        <span className="mt-1 block text-xs text-muted-foreground">{t('services.detail.policyHint')}</span>
+      )}
+    </span>
+  )
+}
+
 /** First meaningful line of a tool description, with markdown emphasis / headings stripped, for the collapsed row. */
 function toolSummary(description) {
   const line = (description || '').split(/\r?\n/).map((l) => l.trim()).find((l) => l.length > 0) || ''
@@ -268,6 +292,11 @@ function ToolApprovalCard({ tool, onDecide, deciding }) {
             <ShieldAlert className="h-4 w-4 shrink-0 text-warning" aria-hidden="true" />
             <span className="break-all font-mono text-xs font-semibold text-foreground">{tool.name}</span>
             <Badge tone={before ? 'warning' : 'info'}>{before ? t('services.toolPin.changed') : t('services.toolPin.newTool')}</Badge>
+            {current?.source && (
+              <Badge tone="neutral" title={current.source === 'reported' ? t('services.toolPin.sourceReportedHint') : undefined}>
+                {t(`services.toolPin.source.${current.source === 'reported' ? 'reported' : 'scan'}`)}
+              </Badge>
+            )}
           </div>
           <p className="mt-1 text-xs text-muted-foreground">
             {before ? t('services.toolPin.changedHint', { date: formatDate(tool.approved_version.decided_at) }) : t('services.toolPin.newHint')}
@@ -337,6 +366,7 @@ export default function ServiceDetailPage() {
   const [showEditModal, setShowEditModal] = useState(false)
   const [revokingJti, setRevokingJti] = useState(null)
   const [feedStatus, setFeedStatus] = useState(null)
+  const [policyStatus, setPolicyStatus] = useState(null)
 
   const reloadOwnScopes = useCallback(async () => {
     const res = await oauthApi.serviceScopes.list(decodedServiceId)
@@ -384,10 +414,12 @@ export default function ServiceDetailPage() {
       oauthApi.tokens.list({ serviceId: decodedServiceId }).catch(() => ({ tokens: [] })),
       oauthApi.serviceScopes.list(decodedServiceId).catch(() => ({ own: [] })),
       oauthApi.revocationFeed.forService(decodedServiceId).catch(() => null),
-    ]).then(([svc, sc, sn, tk, own, feed]) => {
+      oauthApi.policyFeed.forService(decodedServiceId).catch(() => null),
+    ]).then(([svc, sc, sn, tk, own, feed, policy]) => {
       if (cancelled) return
       setService(svc)
       setFeedStatus(feed)
+      setPolicyStatus(policy)
       setScopes(sc.scopes || [])
       setSnippets(sn)
       setTokens(tk.tokens || [])
@@ -650,6 +682,10 @@ export default function ServiceDetailPage() {
                   label: t('services.detail.revocationFeed'),
                   value: <RevocationFeedStatus status={feedStatus} />,
                 }] : []),
+                ...(policyStatus && service.effective_audience ? [{
+                  label: t('services.detail.toolPolicy'),
+                  value: <PolicyFeedStatus status={policyStatus} />,
+                }] : []),
               ]}
             />
             {(service.has_static_token || service.health?.response_time_ms != null || service.health?.last_checked || service.created_at || service.health?.error_message) && (
@@ -834,6 +870,9 @@ export default function ServiceDetailPage() {
               <div className="mb-4 space-y-3" data-testid="tool-approvals">
                 <Alert tone="warning" icon={ShieldAlert} title={t('services.toolPin.reviewTitle', { count: pendingTools.length })}>
                   <p>{firstReview ? t('services.toolPin.reviewFirstHint') : t('services.toolPin.reviewHint')}</p>
+                  {policyStatus && (
+                    <p className="mt-1">{policyStatus.state === 'active' ? t('services.toolPin.enforcedHint') : t('services.toolPin.notEnforcedHint')}</p>
+                  )}
                   {firstReview && pendingTools.length > 1 && (
                     <Button className="mt-2" variant="primary" size="sm" icon={CheckCheck} loading={isApprovingAll} onClick={() => handleApproveAll(pendingTools)}>
                       {t('services.toolPin.approveAll', { count: pendingTools.length })}

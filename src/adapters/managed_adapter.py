@@ -5,11 +5,15 @@ responsible for "calling db.crud + business logic". Covers Managed MCP processes
 discovered MCP Tools.
 """
 
+from sqlalchemy.exc import IntegrityError
+
 from db.crud import ManagedMcpProcessCRUD, MCPToolCRUD, UserMcpDefinitionCRUD
-from db.models import TOOL_STATE_APPROVED, TOOL_STATE_PENDING, TOOL_STATE_REJECTED, MCPTool, UserMcpDefinition
+from db.models import (
+    TOOL_SOURCE_REPORTED, TOOL_STATE_APPROVED, TOOL_STATE_PENDING, TOOL_STATE_REJECTED, MCPTool, UserMcpDefinition,
+)
 from src.adapters.exceptions import ConflictError, NotFoundError, ValidationFailedError
 from src.logging import get_logger
-from src.tool_pinning.hashing import tool_hash
+from src.tool_pinning.hashing import canonical_json, tool_hash
 from src.utils.field_limits import FieldTooLongError, check_max_length, column_limit
 
 logger = get_logger("adapters.managed")
@@ -54,6 +58,32 @@ def sanitize_tools(tools: list[dict]) -> list[dict]:
     return kept
 
 
+# A reported definition larger than this (its canonical JSON, UTF-8) is refused: nothing legitimate comes close, and
+# every version is stored and shown in the console
+MAX_TOOL_DEFINITION_BYTES = 64 * 1024
+
+
+def check_reported_tool(tool) -> tuple[str | None, str | None]:
+    """Validate one tool definition a server reported (#33). Returns (its hash, None) or (None, the reason it is
+    refused). Unlike sanitize_tools nothing is repaired (a name is not stripped): the hash must be the one the server
+    computed over exactly what it lists, so a definition that cannot be stored as sent is refused as a whole."""
+    if not isinstance(tool, dict):
+        return None, "not_an_object"
+    name = tool.get("name")
+    if not isinstance(name, str) or not name or name != name.strip() or len(name) > column_limit(MCPTool.name):
+        return None, "invalid_name"
+    bad = [k for k, kind in _TOOL_FIELD_TYPES.items() if tool.get(k) is not None and not isinstance(tool[k], kind)]
+    if bad:
+        return None, "wrong_type:" + ",".join(bad)
+    try:
+        text = canonical_json(tool)
+    except (TypeError, ValueError):
+        return None, "not_hashable"
+    if len(text.encode("utf-8")) > MAX_TOOL_DEFINITION_BYTES:
+        return None, "too_large"
+    return tool_hash(tool), None
+
+
 # Which approval state each decision may move a version out of (#32). Rejected can be approved later, and an
 # approval can be withdrawn by rejecting.
 _ALLOWED_FROM = {
@@ -70,6 +100,23 @@ class MCPToolAdapter(MCPToolCRUD):
         """Record the remote list (MCP field names), minus tools that cannot be stored. New and changed tools
         become pending versions; nothing is deleted (see MCPToolCRUD.sync_tools)."""
         return super().sync_tools(db, service_id, sanitize_tools(tools))
+
+    @classmethod
+    def record_reported(cls, db, service_id, tools):
+        """Record definitions a server's pinning middleware reported (#33), already checked with
+        check_reported_tool: the same path as a refresh (record_tools), but partial (tools not mentioned are left
+        alone) and with source "reported". Returns the (tool, version, created) triples.
+
+        Two reports of the same new tool can race (unique tool name / hash per service): the loser is retried once,
+        and then finds the winner's rows."""
+        for attempt in (1, 2):
+            try:
+                return cls.record_tools(db, service_id, tools, complete=False, source=TOOL_SOURCE_REPORTED)[1]
+            except IntegrityError:
+                db.rollback()
+                if attempt == 2:
+                    raise
+        return []  # pragma: no cover - the loop returns or raises
 
     @classmethod
     def get_existing(cls, db, service_id, tool_id):

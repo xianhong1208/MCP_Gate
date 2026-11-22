@@ -1,18 +1,23 @@
-"""A FastMCP server protected by MCP Gate, with the revocation feed.
+"""A FastMCP server protected by MCP Gate, with the revocation feed and tool approvals.
 
 Every request must carry an access token issued by MCP Gate for this server's audience. Tokens are verified
 offline against MCP Gate's JWKS; MCP Gate is never on the request path. When a resource-server client is
-configured (MCP_GATE_CLIENT_ID / MCP_GATE_CLIENT_SECRET), MCPGateVerifier also polls MCP Gate's revocation
-feed, so a revoked token is refused within `poll_interval` seconds, and reports token usage to the console.
+configured (MCP_GATE_CLIENT_ID / MCP_GATE_CLIENT_SECRET):
+
+- MCPGateVerifier polls MCP Gate's revocation feed, so a revoked token is refused within `poll_interval`
+  seconds, and reports token usage to the console;
+- MCPGateToolPinning lists and runs only the tools an admin approved in the console. A new or changed tool is
+  hidden at once and shows up in the console as pending. The approved list is cached in MCP_GATE_POLICY_CACHE,
+  so a restart while MCP Gate is down keeps it; with no list at all every tool stays hidden.
 
     pip install fastmcp httpx          # or: uv add fastmcp httpx
-    cp examples/mcp_gate_hooks.py .    # MCPGateVerifier lives in that single file
+    cp examples/mcp_gate_hooks.py .    # MCPGateVerifier and MCPGateToolPinning live in that single file
     MCP_GATE_URL=http://localhost:4568 python server.py
 
 Before starting it, register the server in the MCP Gate console (Services -> Register Service: host
-127.0.0.1, port 8000, path /mcp), so its audience is http://127.0.0.1:8000/mcp. For the revocation feed,
-also register a confidential client with grant type client_credentials and "Resource server for" set to
-this server, and export its id and secret. See the README's Quick start.
+127.0.0.1, port 8000, path /mcp), so its audience is http://127.0.0.1:8000/mcp. For the feeds, also register
+a confidential client with grant type client_credentials and "Resource server for" set to this server, and
+export its id and secret. See the README's Quick start.
 """
 
 import os
@@ -22,7 +27,7 @@ from fastmcp.server.auth import RemoteAuthProvider
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 from fastmcp.server.dependencies import get_access_token
 
-from mcp_gate_hooks import MCPGateVerifier
+from mcp_gate_hooks import MCPGateToolPinning, MCPGateVerifier
 
 MCP_GATE = os.environ.get("MCP_GATE_URL", "http://localhost:4568").rstrip("/")  # MCP Gate's OAUTH_ISSUER
 HOST = os.environ.get("MCP_HOST", "127.0.0.1")
@@ -37,6 +42,7 @@ verifier_settings = dict(
     required_scopes=["mcp:tools:invoke"],
 )
 
+middleware = []
 if os.environ.get("MCP_GATE_CLIENT_ID"):
     # Offline verification plus the revocation feed and usage reports.
     verifier = MCPGateVerifier(
@@ -46,8 +52,15 @@ if os.environ.get("MCP_GATE_CLIENT_ID"):
         poll_interval=15,   # seconds between revocation-feed polls
         flush_interval=30,  # seconds between usage reports
     )
+    # Only tools approved in the console are listed and callable.
+    middleware.append(MCPGateToolPinning(
+        verifier,
+        cache_file=os.environ.get("MCP_GATE_POLICY_CACHE", "mcp_gate_policy.json"),  # last approved list
+        poll_interval=15,   # seconds between tool-policy polls
+        fail_open=False,    # True: list every tool until the first list arrives (default: hide them all)
+    ))
 else:
-    # Offline verification only: a revoked token keeps working until it expires.
+    # Offline verification only: a revoked token keeps working until it expires, and every tool is listed.
     verifier = JWTVerifier(**verifier_settings)
 
 auth = RemoteAuthProvider(
@@ -56,7 +69,7 @@ auth = RemoteAuthProvider(
     base_url=BASE_URL,
 )
 
-mcp = FastMCP(name="demo", instructions="A demo server protected by MCP Gate", auth=auth)
+mcp = FastMCP(name="demo", instructions="A demo server protected by MCP Gate", auth=auth, middleware=middleware)
 
 
 @mcp.tool
@@ -77,6 +90,6 @@ def whoami() -> dict:
 
 
 if __name__ == "__main__":
-    revocation = "on" if isinstance(verifier, MCPGateVerifier) else "off"
-    print(f"MCP Gate: {MCP_GATE}   audience: {AUDIENCE}   revocation feed: {revocation}")
+    feeds = "on" if isinstance(verifier, MCPGateVerifier) else "off"
+    print(f"MCP Gate: {MCP_GATE}   audience: {AUDIENCE}   revocation feed: {feeds}   tool approvals: {feeds}")
     mcp.run(transport="http", host=HOST, port=PORT)

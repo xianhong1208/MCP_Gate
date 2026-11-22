@@ -12,7 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from db.models import (
-    TOOL_BASELINE_ACTOR, TOOL_STATE_APPROVED, TOOL_STATE_PENDING, AdminSession, AdminUser, AuditLog,
+    TOOL_BASELINE_ACTOR, TOOL_SOURCE_SCAN, TOOL_STATE_APPROVED, TOOL_STATE_PENDING, AdminSession, AdminUser, AuditLog,
     ManagedMcpProcess, MCPTool, MCPToolVersion, OAuthAuthorizationCode, OAuthAuthorizationRequest, OAuthClient,
     OAuthConsent, OAuthScope, OAuthSigningKey, OAuthToken, Service, ServiceScope, TokenUsage, UserMcpDefinition,
     local_now, utc_now,
@@ -258,13 +258,29 @@ class MCPToolCRUD:
 
     @staticmethod
     def sync_tools(db: Session, service_id: str, tools: List[dict]) -> List[MCPTool]:
-        """Record a tools/list result (MCP field names, already sanitised) without losing any approval.
+        """Record a complete tools/list result from a refresh or scan (see record_tools). Returns the listed tools."""
+        return MCPToolCRUD.record_tools(db, service_id, tools)[0]
+
+    @staticmethod
+    def record_tools(db: Session, service_id: str, tools: List[dict], *, complete: bool = True,
+                     source: str = TOOL_SOURCE_SCAN) -> tuple:
+        """Record tool definitions (MCP field names, already sanitised) without losing any approval.
+
+        The one code path for every way MCP Gate learns a definition: a refresh or scan lists every tool
+        (``complete``); a server's pinning middleware reports only the definitions it has not seen approved
+        (``complete=False``, ``source`` "reported", #33), so tools it did not mention are left alone.
 
         - a tool listed for the first time gets a row and a pending version;
         - a known tool whose definition hash is new gets a new pending version; earlier versions (and their
           approvals) are kept, so the console can compare the change with what was approved;
         - a known hash is only marked as seen again;
-        - a tool no longer listed is marked removed (removed_at), never deleted; listing it again clears that.
+        - a tool no longer listed is marked removed (removed_at), never deleted; listing it again clears that
+          (complete lists only).
+
+        A new version records ``source``; a known one keeps how it was first seen.
+
+        Returns (the service's listed tools, the (tool, version) pair of every definition in ``tools``, with a flag
+        telling whether the version was created now).
 
         Upgrade baseline: before pinning, only name, description and inputSchema were stored, so the baseline the
         migration approved cannot cover title, outputSchema or annotations. The first refresh that lists such a tool
@@ -276,6 +292,7 @@ class MCPToolCRUD:
         existing = {t.name: t for t in db.query(MCPTool).options(selectinload(MCPTool.versions)).filter(
             MCPTool.service_id == sid).all()}
         listed = set()
+        recorded = []
         for data in tools:
             name = data["name"]
             listed.add(name)
@@ -286,9 +303,10 @@ class MCPToolCRUD:
                 db.add(tool)
                 existing[name] = tool
             version = next((v for v in tool.versions if v.hash == digest), None)
+            created = version is None
             if version is None:
                 version = MCPToolVersion(hash=digest, definition=canonical_json(data), state=TOOL_STATE_PENDING,
-                                         first_seen_at=now, last_seen_at=now)
+                                         first_seen_at=now, last_seen_at=now, source=source)
                 baseline = next((v for v in tool.versions if v.legacy_baseline
                                  and v.state == TOOL_STATE_APPROVED), None)
                 if baseline is not None and _legacy_view(json.loads(baseline.definition)) == _legacy_view(data):
@@ -308,11 +326,13 @@ class MCPToolCRUD:
             tool.current_hash = digest
             tool.last_seen_at = now
             tool.removed_at = None
-        for name, tool in existing.items():
-            if name not in listed and tool.removed_at is None:
-                tool.removed_at = now
+            recorded.append((tool, version, created))
+        if complete:
+            for name, tool in existing.items():
+                if name not in listed and tool.removed_at is None:
+                    tool.removed_at = now
         db.commit()
-        return MCPToolCRUD.get_by_service(db, service_id, include_removed=False)
+        return MCPToolCRUD.get_by_service(db, service_id, include_removed=False), recorded
 
     @staticmethod
     def set_version_state(db: Session, version: MCPToolVersion, state: str, actor: str) -> MCPToolVersion:
@@ -784,6 +804,14 @@ class OAuthClientCRUD:
         now = local_now()
         if client.revocation_polled_at is None or now - client.revocation_polled_at >= min_interval:
             client.revocation_polled_at = now
+            db.commit()
+
+    @staticmethod
+    def mark_policy_polled(db: Session, client: OAuthClient, min_interval: timedelta = timedelta(seconds=30)) -> None:
+        """Record a tool-policy-feed poll (#33), at most once per ``min_interval`` like mark_feed_polled."""
+        now = local_now()
+        if client.policy_polled_at is None or now - client.policy_polled_at >= min_interval:
+            client.policy_polled_at = now
             db.commit()
 
     @staticmethod

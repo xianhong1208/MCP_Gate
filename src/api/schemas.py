@@ -60,6 +60,7 @@ class MCPToolVersionInfo(BaseModel):
     decided_at: Optional[str] = None
     decided_by: Optional[str] = None
     baseline: bool = False                  # approved as the baseline when upgrading to pinning
+    source: Literal["scan", "reported"] = "scan"  # first seen by a refresh / scan, or reported by the server (#33)
 
 
 class MCPToolInfo(BaseModel):
