@@ -47,7 +47,7 @@ export default function ConfirmDialog({
           </div>
           <div className="min-w-0 pt-0.5">
             <h2 className="text-base font-semibold text-foreground">{resolvedTitle}</h2>
-            <p className="mt-1.5 whitespace-pre-line text-sm leading-relaxed text-muted-foreground">{message}</p>
+            <p className="mt-1.5 whitespace-pre-line break-words text-sm leading-relaxed text-muted-foreground [overflow-wrap:anywhere]">{message}</p>
           </div>
         </div>
       </div>

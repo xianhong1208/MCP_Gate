@@ -4,7 +4,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import {
   Copy, Check, Trash2, Clock, RefreshCw, ChevronDown,
-  Activity, Key, Edit3, Wrench, Terminal, FileJson, Code2, ShieldCheck, ShieldX, ShieldAlert, CheckCheck,
+  Activity, Key, Edit3, Wrench, Terminal, FileJson, Code2, ShieldCheck, ShieldX, ShieldAlert, CheckCheck, ScanSearch,
 } from 'lucide-react'
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { servicesApi, statsApi, oauthApi } from '../services/api'
@@ -17,6 +17,7 @@ import MarkdownLite from '../components/MarkdownLite'
 import { copyToClipboard } from '../utils/clipboard'
 import { feedTone, revocationReachesServer } from '../utils/revocation'
 import { toolChanges } from '../utils/toolDiff'
+import { countBySeverity, excerptSegments, groupByRule, highlightSegments, needlesFor, plainText, sortFindings, toolsNeedingConfirm } from '../utils/toolFindings'
 import { useConfirm } from '../contexts/ConfirmContext'
 import { useToast } from '../contexts/ToastContext'
 import { KindBadge, StatusBadge, ScopeChips } from './TokensPage'
@@ -200,6 +201,7 @@ function ToolItem({ tool, onDecide, deciding }) {
             <span className="flex min-w-0 items-center gap-2">
               <span className="truncate font-mono text-xs font-medium text-foreground">{tool.name}</span>
               <ToolStateBadge tool={tool} />
+              {tool.flagged && <FlaggedBadge findings={tool.findings} />}
             </span>
             {/* Collapsed: one line only. Long agent-facing descriptions (headings, mode tables, rules) open on click. */}
             {summary && <span className="mt-0.5 block truncate text-xs text-muted-foreground" title={summary}>{summary}</span>}
@@ -218,6 +220,7 @@ function ToolItem({ tool, onDecide, deciding }) {
             </div>
           )}
           {tool.input_schema && <ToolSchema schema={tool.input_schema} />}
+          {tool.findings?.length > 0 && <ToolFindings findings={tool.findings} />}
           <div className="flex flex-wrap items-center justify-between gap-2">
             <span className="min-w-0 truncate font-mono text-[11px] text-subtle-foreground" title={tool.hash || ''}>
               {t('services.toolPin.hashLabel')} {tool.hash ? tool.hash.slice(0, 12) : '—'} · {t('services.toolPin.versionCount', { count: tool.versions?.length || 0 })}
@@ -248,7 +251,7 @@ const DIFF_LINE = {
 const DIFF_MARK = { add: '+', del: '−', same: ' ' }
 
 /** One changed field: its line diff, wrapped (never a horizontal scroll on a phone). */
-function FieldDiff({ field, lines, folded = false }) {
+function FieldDiff({ field, lines, folded = false, needles = [] }) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(!folded)
   return (
@@ -266,7 +269,7 @@ function FieldDiff({ field, lines, folded = false }) {
         {lines.map((l, i) => (
           <div key={i} className={clsx('flex gap-2 px-3', DIFF_LINE[l.op])}>
             <span className={clsx('w-3 shrink-0 select-none', l.op === 'add' ? 'text-success' : l.op === 'del' ? 'text-danger' : 'text-subtle-foreground')} aria-hidden="true">{DIFF_MARK[l.op]}</span>
-            <span className="min-w-0 flex-1 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{l.text || ' '}</span>
+            <span className="min-w-0 flex-1 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{l.text ? <Highlighted text={l.text} needles={l.op === 'del' ? [] : needles} /> : ' '}</span>
           </div>
         ))}
       </div>}
@@ -283,6 +286,7 @@ function ToolApprovalCard({ tool, onDecide, deciding }) {
   const current = (tool.versions || []).find((v) => v.hash === tool.hash)
   const before = tool.approved_version?.definition || null
   const changes = toolChanges(before, current?.definition || {})
+  const findings = current?.findings || tool.findings || []
   const busy = deciding === tool.hash
   return (
     <div className="rounded-lg border border-warning/30 bg-warning/5 p-3" data-testid="tool-approval-card">
@@ -297,6 +301,7 @@ function ToolApprovalCard({ tool, onDecide, deciding }) {
                 {t(`services.toolPin.source.${current.source === 'reported' ? 'reported' : 'scan'}`)}
               </Badge>
             )}
+            {findings.length > 0 && <FlaggedBadge findings={findings} showInfo />}
           </div>
           <p className="mt-1 text-xs text-muted-foreground">
             {before ? t('services.toolPin.changedHint', { date: formatDate(tool.approved_version.decided_at) }) : t('services.toolPin.newHint')}
@@ -307,16 +312,120 @@ function ToolApprovalCard({ tool, onDecide, deciding }) {
           <Button variant="primary" size="xs" icon={ShieldCheck} loading={busy} onClick={() => onDecide(tool, 'approve')}>{t('services.toolPin.approve')}</Button>
         </div>
       </div>
+      {findings.length > 0 && <ToolFindings findings={findings} className="mt-3" />}
       <div className="mt-3 space-y-2">
         {changes.length === 0 ? (
           <p className="text-xs text-muted-foreground">{t('services.toolPin.noFieldChanges')}</p>
-        ) : changes.map((c) => <FieldDiff key={c.field} field={c.field} lines={c.lines} folded={!before && FOLDED_WHEN_NEW.has(c.field)} />)}
+        ) : changes.map((c) => {
+          const needles = needlesFor(findings, c.field)
+          // a schema with a finding opens even on a new tool, so the highlighted text is in view
+          return <FieldDiff key={c.field} field={c.field} lines={c.lines} needles={needles} folded={!before && FOLDED_WHEN_NEW.has(c.field) && needles.length === 0} />
+        })}
       </div>
       <p className="mt-2 break-all font-mono text-[11px] text-subtle-foreground">
         {before && <>{tool.approved_version.hash.slice(0, 12)} → </>}{tool.hash}
       </p>
     </div>
   )
+}
+
+const SEVERITY_TONE = { high: 'danger', warning: 'warning', info: 'neutral' }
+
+/** An invisible character made visible: a small boxed code point label. */
+function InvisibleChar({ label, mark = false }) {
+  return (
+    <span className={clsx('mx-px inline-block rounded-sm border px-0.5 align-baseline font-mono text-[10px] leading-none',
+      mark ? 'border-danger/50 bg-danger/15 text-danger' : 'border-warning/50 bg-warning/15 text-warning')}
+    title={label} data-testid="invisible-char">{label}</span>
+  )
+}
+
+/** Text with the scan's matches highlighted and every invisible character shown as its code point. */
+function Highlighted({ text, needles = [] }) {
+  return highlightSegments(text, needles).map((seg, i) => {
+    if (seg.invisible) return <InvisibleChar key={i} label={seg.invisible} mark={seg.mark} />
+    return seg.mark
+      ? <mark key={i} className="rounded-sm bg-danger/20 px-px text-foreground ring-1 ring-inset ring-danger/40" data-testid="finding-mark">{seg.text}</mark>
+      : <span key={i}>{seg.text}</span>
+  })
+}
+
+/** "Flagged" chip on a tool: the most severe finding's tone and the counts in its tooltip. */
+function FlaggedBadge({ findings, showInfo = false }) {
+  const { t } = useTranslation()
+  const counts = countBySeverity(findings)
+  const severity = counts.high ? 'high' : counts.warning ? 'warning' : 'info'
+  if (severity === 'info' && !showInfo) return null
+  const total = counts.high + counts.warning + counts.info
+  return (
+    <Badge tone={SEVERITY_TONE[severity]} title={t('services.toolScan.countsHint', counts)} data-testid="tool-flagged-badge">
+      <ScanSearch className="h-3 w-3" aria-hidden="true" />
+      {severity === 'info' ? t('services.toolScan.notes', { count: total }) : t('services.toolScan.flagged', { count: counts.high + counts.warning })}
+    </Badge>
+  )
+}
+
+/** What the poisoning scan found in one definition, grouped by rule, with the matched text (#34). */
+function ToolFindings({ findings, className }) {
+  const { t } = useTranslation()
+  const groups = groupByRule(findings)
+  const [showInfo, setShowInfo] = useState(false)
+  const visible = groups.filter((g) => showInfo || g.severity !== 'info')
+  const hiddenInfo = groups.filter((g) => g.severity === 'info').reduce((n, g) => n + g.findings.length, 0)
+  return (
+    <div className={clsx('rounded-lg border border-border bg-background/60 p-3', className)} data-testid="tool-findings">
+      <div className="flex flex-wrap items-center gap-2 text-xs font-semibold text-foreground">
+        <ScanSearch className="h-3.5 w-3.5 shrink-0 text-subtle-foreground" aria-hidden="true" />
+        {t('services.toolScan.title')}
+        <span className="font-normal text-muted-foreground">{t('services.toolScan.notBlocking')}</span>
+      </div>
+      <ul className="mt-2 space-y-2.5">
+        {visible.map((g) => (
+          <li key={g.rule} className="min-w-0" data-testid={`finding-${g.rule}`}>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <Badge tone={SEVERITY_TONE[g.severity]}>{t(`services.toolScan.severity.${g.severity}`)}</Badge>
+              <span className="text-xs font-medium text-foreground">{t(`services.toolScan.rule.${g.rule}.label`)}</span>
+              {g.findings.length > 1 && <span className="text-[11px] tabular-nums text-subtle-foreground">×{g.findings.length}</span>}
+            </div>
+            <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">{t(`services.toolScan.rule.${g.rule}.explain`)}</p>
+            <ul className="mt-1 space-y-1">
+              {sortFindings(g.findings).slice(0, 6).map((f, i) => (
+                <li key={i} className="min-w-0 rounded-md bg-muted/50 px-2 py-1 font-mono text-[11px] leading-relaxed">
+                  {f.path && <span className="mr-1.5 break-all text-subtle-foreground">{f.path}</span>}
+                  {g.findings.length > 1 && f.severity !== g.severity && <Badge tone={SEVERITY_TONE[f.severity]} className="mr-1">{t(`services.toolScan.severity.${f.severity}`)}</Badge>}
+                  <span className="whitespace-pre-wrap break-words text-foreground [overflow-wrap:anywhere]">
+                    {excerptSegments(f.excerpt).map((seg, j) => (seg.invisible
+                      ? <InvisibleChar key={j} label={seg.invisible} mark />
+                      : <span key={j}>{seg.text}</span>))}
+                  </span>
+                  {f.detail && <span className="mt-0.5 block whitespace-pre-wrap break-words text-warning [overflow-wrap:anywhere]">{f.detail}</span>}
+                </li>
+              ))}
+              {g.findings.length > 6 && <li className="text-[11px] text-subtle-foreground">{t('services.toolScan.more', { count: g.findings.length - 6 })}</li>}
+            </ul>
+          </li>
+        ))}
+      </ul>
+      {hiddenInfo > 0 && (
+        <button type="button" className="mt-2 text-[11px] text-link transition-colors duration-200 hover:text-link-hover" onClick={() => setShowInfo(!showInfo)}>
+          {showInfo ? t('services.toolScan.hideInfo') : t('services.toolScan.showInfo', { count: hiddenInfo })}
+        </button>
+      )}
+    </div>
+  )
+}
+
+/** The confirm text for approving definitions with high-severity findings: one line per finding, a few at most. */
+function highFindingLines(t, tools) {
+  const lines = []
+  for (const tool of tools) {
+    for (const f of sortFindings(tool.findings).filter((x) => x.severity === 'high')) {
+      // the matched text without its invisible characters (they are listed by the rule name), kept short
+      const text = plainText(f.match)
+      lines.push(`• ${tool.name}: ${t(`services.toolScan.rule.${f.rule}.label`)}${text ? ` — “${text.length > 60 ? `${text.slice(0, 60)}…` : text}”` : ''}`)
+    }
+  }
+  return lines.length > 6 ? [...lines.slice(0, 6), t('services.toolScan.more', { count: lines.length - 6 })] : lines
 }
 
 /** Turn a raw health-check exception into a short, translated label; the raw text stays in the tooltip. */
@@ -338,7 +447,7 @@ export default function ServiceDetailPage() {
   const { t } = useTranslation()
   const { serviceId } = useParams()
   const navigate = useNavigate()
-  const { confirmDelete, confirmTokenRevoke } = useConfirm()
+  const { confirm, confirmDelete, confirmTokenRevoke } = useConfirm()
   const toast = useToast()
   const decodedServiceId = decodeURIComponent(serviceId)
 
@@ -501,7 +610,20 @@ export default function ServiceDetailPage() {
     }
   }
 
+  // Approving a definition the scan rated high asks once, naming what it found (#34); anything else is one click
+  const confirmHighFindings = async (tools) => {
+    const flagged = toolsNeedingConfirm(tools)
+    if (flagged.length === 0) return true
+    return confirm({
+      title: t('services.toolScan.confirmTitle', { count: flagged.length }),
+      message: `${t('services.toolScan.confirmMessage')}\n\n${highFindingLines(t, flagged).join('\n')}`,
+      confirmText: t('services.toolScan.confirmApprove'),
+      type: 'warning',
+    })
+  }
+
   const handleDecideTool = async (tool, decision) => {
+    if (decision === 'approve' && !(await confirmHighFindings([tool]))) return
     setDecidingHash(tool.hash)
     try {
       if (decision === 'approve') await servicesApi.approveTool(decodedServiceId, tool.id, tool.hash)
@@ -517,6 +639,7 @@ export default function ServiceDetailPage() {
   }
 
   const handleApproveAll = async (pendingTools) => {
+    if (!(await confirmHighFindings(pendingTools))) return
     setIsApprovingAll(true)
     try {
       const res = await servicesApi.approveAllTools(decodedServiceId, pendingTools.map((tl) => tl.hash))
@@ -870,6 +993,9 @@ export default function ServiceDetailPage() {
               <div className="mb-4 space-y-3" data-testid="tool-approvals">
                 <Alert tone="warning" icon={ShieldAlert} title={t('services.toolPin.reviewTitle', { count: pendingTools.length })}>
                   <p>{firstReview ? t('services.toolPin.reviewFirstHint') : t('services.toolPin.reviewHint')}</p>
+                  {pendingTools.some((tl) => tl.flagged) && (
+                    <p className="mt-1 font-medium text-danger">{t('services.toolScan.pendingFlagged', { count: pendingTools.filter((tl) => tl.flagged).length })}</p>
+                  )}
                   {policyStatus && (
                     <p className="mt-1">{policyStatus.state === 'active' ? t('services.toolPin.enforcedHint') : t('services.toolPin.notEnforcedHint')}</p>
                   )}

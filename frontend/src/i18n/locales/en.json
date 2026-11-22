@@ -288,7 +288,11 @@
       "title_other": "{{count}} tools wait for approval",
       "hint": "New or changed tool definitions have not been reviewed yet. Open the server to compare and approve or reject them.",
       "count_one": "{{count}} pending",
-      "count_other": "{{count}} pending"
+      "count_other": "{{count}} pending",
+      "flaggedHint_one": "{{count}} of them is flagged by the poisoning scan.",
+      "flaggedHint_other": "{{count}} of them are flagged by the poisoning scan.",
+      "flagged_one": "{{count}} flagged",
+      "flagged_other": "{{count}} flagged"
     }
   },
   "tokens": {
@@ -731,6 +735,67 @@
       "sourceReportedHint": "The server's pinning middleware sent this definition when it listed it; clients do not see the tool until it is approved.",
       "enforcedHint": "This server enforces approvals: pending and rejected tools are hidden from clients and cannot be called.",
       "notEnforcedHint": "This server does not enforce approvals yet: clients still see and can call pending tools. Add the MCPGateToolPinning middleware to hide them."
+    },
+    "toolScan": {
+      "title": "Poisoning scan",
+      "notBlocking": "Flags only; approving is still your call.",
+      "severity": {
+        "high": "High",
+        "warning": "Warning",
+        "info": "Info"
+      },
+      "rule": {
+        "invisible-characters": {
+          "label": "Invisible characters",
+          "explain": "Zero-width, direction-control or Unicode tag characters: text you cannot see here but the model reads. They are shown boxed below."
+        },
+        "instruction-phrase": {
+          "label": "Instructions to the model",
+          "explain": "Wording that talks to the model instead of describing the tool: overriding earlier instructions, hiding things from the user, <IMPORTANT> or <system> markers, hidden comments."
+        },
+        "tool-mention": {
+          "label": "Names another tool",
+          "explain": "Mentions a tool registered here other than this one. Naming another server's tool is how one server changes how the model uses another (shadowing)."
+        },
+        "sensitive-data": {
+          "label": "Secrets or private files",
+          "explain": "Mentions SSH keys, .env files, cloud credentials or other secrets; worse when it asks for them to be read or sent."
+        },
+        "url": {
+          "label": "URL",
+          "explain": "A link in the definition; worse with a raw IP address, plain http, a link shortener, in a default value, or after \"send … to\"."
+        },
+        "encoded-blob": {
+          "label": "Encoded data",
+          "explain": "A long base64 or hex string; worse when it decodes to readable text."
+        },
+        "long-text": {
+          "label": "Unusually long text",
+          "explain": "A description over 4,000 characters or schema text over 1,000 characters: room to hide instructions."
+        },
+        "scan-truncated": {
+          "label": "Not fully scanned",
+          "explain": "The definition is too large to scan completely; only the first part was checked."
+        }
+      },
+      "flagged_one": "{{count}} finding",
+      "flagged_other": "{{count}} findings",
+      "notes_one": "{{count}} note",
+      "notes_other": "{{count}} notes",
+      "countsHint": "Poisoning scan: {{high}} high, {{warning}} warning, {{info}} info",
+      "more_one": "…and {{count}} more",
+      "more_other": "…and {{count}} more",
+      "showInfo_one": "Show {{count}} info finding",
+      "showInfo_other": "Show {{count}} info findings",
+      "hideInfo": "Hide info findings",
+      "pendingFlagged_one": "{{count}} of them is flagged by the poisoning scan: read its findings before approving.",
+      "pendingFlagged_other": "{{count}} of them are flagged by the poisoning scan: read their findings before approving.",
+      "flaggedBadge_one": "{{count}} pending tool flagged by the poisoning scan",
+      "flaggedBadge_other": "{{count}} pending tools flagged by the poisoning scan",
+      "confirmTitle_one": "Approve a tool the scan rated high?",
+      "confirmTitle_other": "Approve {{count}} tools the scan rated high?",
+      "confirmMessage": "Clients will see and call it as defined. The poisoning scan found:",
+      "confirmApprove": "Approve anyway"
     }
   },
   "clients": {

@@ -49,6 +49,20 @@ class ServiceHealthInfo(BaseModel):
 ToolHash = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 
 
+class ToolFindingInfo(BaseModel):
+    """Something the poisoning scan flagged in a tool definition (#34). `path` points into the canonical definition
+    (e.g. `inputSchema.properties.url.default`); `start`/`end` are code-point offsets in that string; `excerpt` has
+    invisible characters written as <U+XXXX>."""
+    rule: str
+    severity: Literal["info", "warning", "high"]
+    path: str
+    start: int
+    end: int
+    match: str
+    excerpt: str
+    detail: Optional[str] = None
+
+
 class MCPToolVersionInfo(BaseModel):
     """One pinned definition of a tool (#32). `definition` is the canonical object the hash covers (MCP names)."""
     id: str
@@ -61,6 +75,7 @@ class MCPToolVersionInfo(BaseModel):
     decided_by: Optional[str] = None
     baseline: bool = False                  # approved as the baseline when upgrading to pinning
     source: Literal["scan", "reported"] = "scan"  # first seen by a refresh / scan, or reported by the server (#33)
+    findings: List[ToolFindingInfo] = []    # the poisoning scan of this definition (#34), computed when read
 
 
 class MCPToolInfo(BaseModel):
@@ -80,6 +95,9 @@ class MCPToolInfo(BaseModel):
     # The most recently approved version, when the current one is not it (what a pending change is compared with)
     approved_version: Optional[MCPToolVersionInfo] = None
     versions: List[MCPToolVersionInfo] = []
+    # The poisoning scan of the current definition (#34); flagged = any warning or high finding
+    findings: List[ToolFindingInfo] = []
+    flagged: bool = False
 
 
 class ToolDecisionRequest(BaseModel):
@@ -127,6 +145,7 @@ class ServiceInfo(BaseModel):
     tools: Optional[List[MCPToolInfo]] = None
     tools_count: int = 0                    # tools the server still lists
     tools_pending: int = 0                  # of those, how many wait for an admin's approval (#32)
+    tools_flagged: int = 0                  # of the pending ones, how many the poisoning scan flagged (#34)
 
 
 class ServiceListResponse(BaseModel):
@@ -273,6 +292,7 @@ class RefreshToolsResponse(BaseModel):
     message: str
     tools_count: int
     tools_pending: int = 0
+    tools_flagged: int = 0
     tools: List[MCPToolInfo] = []
 
 

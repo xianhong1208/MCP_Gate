@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import {
   Server, Plus, Trash2, Key, RefreshCw, Check, Download,
-  Radio, Search, Activity, Wrench, Copy, Edit3, Lock, ShieldAlert,
+  Radio, Search, Activity, Wrench, Copy, Edit3, Lock, ShieldAlert, ScanSearch,
 } from 'lucide-react'
 import { servicesApi, discoveryApi, oauthApi } from '../services/api'
 import { exportServicesToCSV } from '../utils/export'
@@ -533,6 +533,9 @@ export default function ServicesPage() {
                       {service.source === 'managed' && <Badge tone="accent">{t('services.list.managedTag')}</Badge>}
                       {service.tools_pending > 0 && (
                         <Badge tone="warning" title={t('services.toolPin.pendingBadge', { count: service.tools_pending })}><ShieldAlert className="h-3 w-3" />{service.tools_pending}</Badge>
+                      )}
+                      {service.tools_flagged > 0 && (
+                        <Badge tone="danger" title={t('services.toolScan.flaggedBadge', { count: service.tools_flagged })}><ScanSearch className="h-3 w-3" />{service.tools_flagged}</Badge>
                       )}
                       {service.requires_auth ? (
                         <Badge tone="neutral" title={t('services.list.oauthBadge')}><Key className="h-3 w-3" />{t('services.list.oauthBadge')}</Badge>
