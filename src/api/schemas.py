@@ -2,7 +2,7 @@
 
 from typing import Annotated, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 
 # ==================== Service ====================
@@ -46,12 +46,59 @@ class ServiceHealthInfo(BaseModel):
     fail_count: int = 0
 
 
+ToolHash = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
+
+
+class MCPToolVersionInfo(BaseModel):
+    """One pinned definition of a tool (#32). `definition` is the canonical object the hash covers (MCP names)."""
+    id: str
+    hash: str
+    state: Literal["approved", "pending", "rejected"]
+    definition: dict
+    first_seen_at: Optional[str] = None
+    last_seen_at: Optional[str] = None
+    decided_at: Optional[str] = None
+    decided_by: Optional[str] = None
+    baseline: bool = False                  # approved as the baseline when upgrading to pinning
+
+
 class MCPToolInfo(BaseModel):
     id: str
     name: str
+    title: Optional[str] = None
     description: Optional[str] = None
     input_schema: Optional[dict] = None
+    output_schema: Optional[dict] = None
+    annotations: Optional[dict] = None
     created_at: Optional[str] = None
+    # Pinning (#32): the current definition's hash and approval state; removed = no longer listed by the server
+    hash: Optional[str] = None
+    state: Literal["approved", "pending", "rejected"] = "pending"
+    removed_at: Optional[str] = None
+    last_seen_at: Optional[str] = None
+    # The most recently approved version, when the current one is not it (what a pending change is compared with)
+    approved_version: Optional[MCPToolVersionInfo] = None
+    versions: List[MCPToolVersionInfo] = []
+
+
+class ToolDecisionRequest(BaseModel):
+    """Approve or reject the version of a tool with this hash: the one the admin was shown."""
+    hash: ToolHash
+
+
+class ApproveAllToolsRequest(BaseModel):
+    """Approve all, for a service's first tool list: the hashes of the pending versions the admin was shown."""
+    hashes: List[ToolHash] = Field(min_length=1, max_length=1000)
+
+
+class ToolDecisionResponse(BaseModel):
+    tool: MCPToolInfo
+    previous_state: str
+
+
+class ApproveAllToolsResponse(BaseModel):
+    approved: int
+    tools: List[MCPToolInfo] = []
 
 
 class ServiceInfo(BaseModel):
@@ -77,7 +124,8 @@ class ServiceInfo(BaseModel):
     oauth_scopes: List[str] = []
     health: Optional[ServiceHealthInfo] = None
     tools: Optional[List[MCPToolInfo]] = None
-    tools_count: int = 0
+    tools_count: int = 0                    # tools the server still lists
+    tools_pending: int = 0                  # of those, how many wait for an admin's approval (#32)
 
 
 class ServiceListResponse(BaseModel):
@@ -223,6 +271,7 @@ class RefreshToolsResponse(BaseModel):
     success: bool
     message: str
     tools_count: int
+    tools_pending: int = 0
     tools: List[MCPToolInfo] = []
 
 

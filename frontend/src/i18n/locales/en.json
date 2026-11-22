@@ -282,6 +282,13 @@
       "clientsHint": "Approve and manage clients",
       "services": "Services",
       "servicesHint": "Register and monitor MCP servers"
+    },
+    "pendingTools": {
+      "title_one": "{{count}} tool waits for approval",
+      "title_other": "{{count}} tools wait for approval",
+      "hint": "New or changed tool definitions have not been reviewed yet. Open the server to compare and approve or reject them.",
+      "count_one": "{{count}} pending",
+      "count_other": "{{count}} pending"
     }
   },
   "tokens": {
@@ -668,6 +675,49 @@
       "unreachable": "Server unreachable",
       "timeout": "Health check timed out",
       "failed": "Health check failed"
+    },
+    "toolPin": {
+      "state": {
+        "approved": "Approved",
+        "pending": "Pending approval",
+        "rejected": "Rejected",
+        "removed": "No longer listed"
+      },
+      "hashLabel": "SHA-256",
+      "versionCount_one": "{{count}} version",
+      "versionCount_other": "{{count}} versions",
+      "approve": "Approve",
+      "reject": "Reject",
+      "withdraw": "Withdraw approval",
+      "field": {
+        "title": "Title",
+        "description": "Description",
+        "inputSchema": "Input schema",
+        "outputSchema": "Output schema",
+        "annotations": "Annotations"
+      },
+      "changed": "Changed",
+      "newTool": "New tool",
+      "changedHint": "Its definition differs from the version approved {{date}}. Review what changed.",
+      "newHint": "The server lists a tool that has never been approved. Review its full definition.",
+      "noFieldChanges": "Only the name or the hash changed.",
+      "approvedToast": "Approved {{name}}",
+      "rejectedToast": "Rejected {{name}}",
+      "decideFailed": "Could not save the decision: {{message}}",
+      "approvedAllToast_one": "Approved {{count}} tool",
+      "approvedAllToast_other": "Approved {{count}} tools",
+      "pendingBadge_one": "{{count}} tool pending",
+      "pendingBadge_other": "{{count}} tools pending",
+      "reviewTitle_one": "{{count}} tool waits for approval",
+      "reviewTitle_other": "{{count}} tools wait for approval",
+      "approveAll_one": "Approve all ({{count}})",
+      "approveAll_other": "Approve all ({{count}})",
+      "reviewFirstHint": "This is the first tool list of this server. Read the definitions, then approve them one by one or all at once. Later changes are reviewed one by one.",
+      "reviewHint": "A new or changed tool definition is pinned by its hash and stays unapproved until an admin approves it. The approved version is kept for comparison.",
+      "removedSection_one": "No longer listed ({{count}})",
+      "removedSection_other": "No longer listed ({{count}})",
+      "refreshedWithPending_one": "Refreshed {{n}} tools; {{count}} waits for approval",
+      "refreshedWithPending_other": "Refreshed {{n}} tools; {{count}} wait for approval"
     }
   },
   "clients": {
@@ -1037,6 +1087,9 @@
       "oauth_code_replay": "Authorization Code Replayed",
       "oauth_refresh_replay": "Refresh Token Reused",
       "refresh_tools": "Tools Refreshed",
+      "tool_approve": "Tool Approved",
+      "tool_reject": "Tool Rejected",
+      "tool_approve_all": "Tools Approved (All)",
       "scan_services": "Network Scan",
       "admin_setup": "Initial Setup",
       "create_service": "Create Service",

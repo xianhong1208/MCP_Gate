@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import {
   Server, Plus, Trash2, Key, RefreshCw, Check, Download,
-  Radio, Search, Activity, Wrench, Copy, Edit3, Lock,
+  Radio, Search, Activity, Wrench, Copy, Edit3, Lock, ShieldAlert,
 } from 'lucide-react'
 import { servicesApi, discoveryApi, oauthApi } from '../services/api'
 import { exportServicesToCSV } from '../utils/export'
@@ -37,7 +37,7 @@ function ToolsModal({ service, onClose }) {
     setIsLoading(true)
     setError('')
     servicesApi.getTools(service.id)
-      .then((result) => { if (!cancelled) setTools(result.tools || []) })
+      .then((result) => { if (!cancelled) setTools((result.tools || []).filter((tl) => !tl.removed_at)) })
       .catch((err) => { if (!cancelled) setError(err.message || t('services.tools.loadFailed')) })
       .finally(() => { if (!cancelled) setIsLoading(false) })
     return () => { cancelled = true }
@@ -49,7 +49,9 @@ function ToolsModal({ service, onClose }) {
     try {
       const result = await servicesApi.refreshTools(service.id)
       setTools(result.tools || [])
-      toast.success(t('services.tools.refreshSuccess', { n: result.tools_count }))
+      toast.success(result.tools_pending > 0
+        ? t('services.toolPin.refreshedWithPending', { n: result.tools_count, count: result.tools_pending })
+        : t('services.tools.refreshSuccess', { n: result.tools_count }))
     } catch (err) {
       setRefreshError(err.message || t('services.tools.refreshFailed'))
     } finally {
@@ -85,7 +87,11 @@ function ToolsModal({ service, onClose }) {
               <div key={tool.id || tool.name} className="px-4 py-3">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0 flex-1">
-                    <h4 className="font-mono text-xs font-medium text-foreground">{tool.name}</h4>
+                    <h4 className="flex flex-wrap items-center gap-2 font-mono text-xs font-medium text-foreground">
+                      {tool.name}
+                      {tool.state === 'pending' && <Badge tone="warning">{t('services.toolPin.state.pending')}</Badge>}
+                      {tool.state === 'rejected' && <Badge tone="danger">{t('services.toolPin.state.rejected')}</Badge>}
+                    </h4>
                     {tool.description && <p className="mt-1 text-sm text-muted-foreground">{tool.description}</p>}
                   </div>
                   {tool.input_schema && (
@@ -525,6 +531,9 @@ export default function ServicesPage() {
                       </Link>
                       {service.source === 'auto_discovered' && <Badge tone="warning">{t('services.list.autoTag')}</Badge>}
                       {service.source === 'managed' && <Badge tone="accent">{t('services.list.managedTag')}</Badge>}
+                      {service.tools_pending > 0 && (
+                        <Badge tone="warning" title={t('services.toolPin.pendingBadge', { count: service.tools_pending })}><ShieldAlert className="h-3 w-3" />{service.tools_pending}</Badge>
+                      )}
                       {service.requires_auth ? (
                         <Badge tone="neutral" title={t('services.list.oauthBadge')}><Key className="h-3 w-3" />{t('services.list.oauthBadge')}</Badge>
                       ) : (

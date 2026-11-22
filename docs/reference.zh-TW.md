@@ -121,12 +121,24 @@ MCP server 是離線驗證 token,單靠自己的話,被撤銷的 token 會一直
 
 自己的 FastMCP server 可以用 [`examples/mcp_gate_hooks.py`](../examples/mcp_gate_hooks.py) 裡的 `MCPGateVerifier` 來拉。[Folio](https://github.com/xianhong1208/folio-rag) 與 [Morphyard](https://github.com/xianhong1208/morphyard) 已內建,設定方式見各自的 README。
 
+### Tool 釘選與核准
+
+server 列出的每個 tool 都以其定義的 SHA-256 釘選;新的或變更過的定義要等管理員核准,才算已核准。
+
+- **雜湊的範圍。** 取 `tools/list` 回傳的 tool 物件,只留 `name`、`title`、`description`、`inputSchema`、`outputSchema` 與 `annotations`(`_meta`、`icons` 等其他欄位不算)。缺少或為 `null` 的欄位直接略過,所以兩者雜湊相同;空字串或空物件則算是值。其餘部分序列化為 JSON:每一層的 key 排序、不含空白、非 ASCII 字元以 UTF-8 原樣寫出(不轉成 `\uXXXX`),再以 UTF-8 編碼取雜湊。定義在 `src/tool_pinning/hashing.py`;`tests/fixtures/tool_hash_vectors.json` 有一組標準向量,其他實作都必須算出相同結果。
+- **狀態。** tool 的每一份定義都保留為一個版本,帶有雜湊與狀態:*已核准*、*待核准* 或 *已拒絕*。重新整理(*從 Server 重新整理*、掃描)時,新 tool 或定義變更會新增一個待核准版本,舊版本全部保留,管理台因此能拿變更與已核准的版本比對。server 不再列出的 tool 會標為 *已不再列出*,不會刪除;之後再出現時歷史仍在。用 *Inspect as* 以其他身分重新整理也一樣:該身分看不到的 tool 只會被標記,不會失去核准。
+- **第一次核准。** 升級到 1.5 時,所有已存的 tool 都會被核准為基準(`decided_by: upgrade`)。這些資料當初沒有存 `title`、`outputSchema` 與 `annotations`,所以升級後第一次重新整理列出該 tool 時,只要 `name`、`description` 與 `inputSchema` 沒變,就以完整定義補齊基準;這三者有變則和其他變更一樣待核准。之後才登記的 server,所有 tool 一開始都是待核准,管理台只在這第一份清單上提供 **全部核准**。之後每個新的或變更的 tool 都在自己的卡片上核准或拒絕,卡片會列出每個變更欄位的逐行差異(新 tool 則列出完整定義)。
+- **決定。** 核准與拒絕都以雜湊指定版本,管理員決定的就是畫面上那一份定義。已拒絕的版本之後仍可核准,已核准的也可以用拒絕撤回。每次核准、拒絕與 *全部核准* 都記在稽核日誌(`tool_approve`、`tool_reject`、`tool_approve_all`)。儀表板與服務列表會顯示有幾個 tool 在等。
+- **API。** `GET /api/services/{id}/tools` 列出 tool,含 `state`、`hash`、`removed_at`、`versions` 與 `approved_version`(待核准變更要比對的版本),另有 `pending_count` 與 `first_review`。`POST /api/services/{id}/tools/{tool_id}/approve` 與 `…/reject` 接受 `{"hash": "<64 位十六進位>"}`;`POST /api/services/{id}/tools/approve-all` 接受 `{"hashes": [...]}`,一旦該服務有任何東西被核准過,就回 `409 tools.approve_all_not_first`。
+
+MCP Gate 只記錄這些決定;它不在 client 與 server 之間,所以單靠它無法隱藏未核准的 tool。由 server 端執行(撤銷清單旁的 policy feed,以及隱藏未核准 tool 的 FastMCP hooks)是下一步,見 [#33](https://github.com/xianhong1208/MCP_Gate/issues/33)。
+
 ## 使用管理台
 
 | 頁面 | 在這裡做什麼 |
 |---|---|
 | **Dashboard** | 服務健康、token 活動、最近事件、系統狀態。 |
-| **Services** | 登記或掃描 MCP server、設定 audience 與允許的 scope、宣告 server 專屬 scope、更新 tools、執行健康檢查、複製接入片段。 |
+| **Services** | 登記或掃描 MCP server、設定 audience 與允許的 scope、宣告 server 專屬 scope、更新 tools 並核准新的或變更的 tool([Tool 釘選與核准](#tool-釘選與核准))、執行健康檢查、複製接入片段。 |
 | **Tokens · Issue Token** | MCP Gate 簽發過的所有 token——OAuth 授權與 PAT——含撤銷、到期與最後使用資訊。 |
 | **OAuth Clients** | 動態註冊、中繼資料文件與受信任的 client:核准、撤銷、刪除;scope 註冊表;簽章金鑰輪替。 |
 | **Marketplace** | 從 catalog 部署 MCP server,或自帶 `{command, args, env}`。 |

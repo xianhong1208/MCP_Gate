@@ -24,6 +24,7 @@ MCP Gate puts standards-based authentication in front of every MCP server you ru
 - **A consent screen** for clients that register themselves, with decisions remembered per client and server.
 - **Personal access tokens** for scripts, CI and clients without OAuth, with ready-to-paste `claude mcp add` and `mcpServers` snippets.
 - **A server registry.** Register or scan MCP servers, sync their tools, watch their health, and see each tool list as a given token sees it ("Inspect as").
+- **Tool pinning.** Every tool definition is pinned by a SHA-256 hash; a new or changed tool waits for an admin, who sees a diff against the approved version before approving or rejecting it. See [Tool pinning and approval](docs/reference.md#tool-pinning-and-approval).
 - **Marketplace and orchestrator.** Deploy MCP servers from a catalog, or paste a `{command, args, env}` block and let MCP Gate run it in Docker or as a local process behind an HTTP bridge.
 - **Zero-config start.** SQLite by default, secrets generated on first run, an in-browser setup for the owner account; PostgreSQL is one environment variable away. The console speaks English and Traditional Chinese.
 

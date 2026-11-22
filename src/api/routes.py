@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import platform
 from typing import Optional
 
@@ -17,8 +16,9 @@ from src.adapters import (
 from src.adapters.exceptions import AdapterError
 from src.api.schemas import (
     AuditLogInfo, AuditLogListResponse, AuditLogStatsResponse, BulkHealthCheckResponse, HealthResponse,
-    MCPToolInfo, RefreshToolsRequest, RefreshToolsResponse, ServiceCreateRequest, ServiceHealthCheckResponse, ServiceHealthInfo,
-    ServiceInfo, ServiceListResponse, ServiceUpdateRequest,
+    ApproveAllToolsRequest, ApproveAllToolsResponse, MCPToolInfo, MCPToolVersionInfo, RefreshToolsRequest,
+    RefreshToolsResponse, ServiceCreateRequest, ServiceHealthCheckResponse, ServiceHealthInfo, ServiceInfo,
+    ServiceListResponse, ServiceUpdateRequest, ToolDecisionRequest, ToolDecisionResponse,
 )
 from src.audit import ActorType, AuditAction, AuditService, AuditStatus, ResourceType
 from src.identity import get_current_user, get_optional_current_user
@@ -50,20 +50,31 @@ def _encrypt_static_token(token: str) -> str:
     return encrypt_token(token)
 
 
+def _version_info(v) -> MCPToolVersionInfo:
+    return MCPToolVersionInfo(**v.to_dict())
+
+
 def _tool_info(t) -> MCPToolInfo:
+    data = t.to_dict()
+    approved = t.approved_version
     return MCPToolInfo(
-        id=str(t.id), name=t.name, description=t.description,
-        input_schema=json.loads(t.input_schema) if t.input_schema else None,
-        created_at=format_datetime(t.created_at),
+        id=data["id"], name=t.name, title=t.title, description=t.description,
+        input_schema=data["input_schema"], output_schema=data["output_schema"], annotations=data["annotations"],
+        created_at=data["created_at"], hash=t.current_hash, state=t.state, removed_at=data["removed_at"],
+        last_seen_at=format_datetime(t.last_seen_at),
+        approved_version=_version_info(approved) if approved is not None and approved.hash != t.current_hash else None,
+        versions=[_version_info(v) for v in t.versions],
     )
 
 
 def _service_info(service: Service, include_tools: bool = False) -> ServiceInfo:
     data = service.to_dict(include_tools=False, include_health=True)
     data["health"] = ServiceHealthInfo(**data["health"])
-    data["tools_count"] = len(service.tools)
+    listed = [t for t in service.tools if t.removed_at is None]
+    data["tools_count"] = len(listed)
+    data["tools_pending"] = sum(1 for t in listed if t.state == "pending")
     if include_tools:
-        data["tools"] = [_tool_info(t) for t in service.tools]
+        data["tools"] = [_tool_info(t) for t in sorted(service.tools, key=lambda t: t.name)]
     return ServiceInfo(**data)
 
 
@@ -178,13 +189,65 @@ async def delete_service(service_id: str, http_request: Request, db: Session = D
 
 @router.get("/api/services/{service_id}/tools", tags=["Services"])
 async def get_service_tools(service_id: str, db: Session = Depends(get_db), _: AdminUser = Depends(get_current_user)):
-    """Tools last synced from the MCP server."""
+    """Tools last synced from the MCP server, with every pinned version and its approval state (#32).
+
+    Tools the server no longer lists are included with `removed_at` set. `first_review` is true while no tool of
+    the service has ever been approved: then "Approve all" is offered."""
     try:
         service = ServiceAdapter.get_existing(db, service_id)
     except AdapterError as e:
         raise _adapter_exc(e)
     tools = [_tool_info(t) for t in MCPToolAdapter.get_by_service(db, service_id)]
-    return {"service_id": service_id, "service_name": service.name, "tools": tools, "count": len(tools)}
+    listed = [t for t in tools if t.removed_at is None]
+    return {"service_id": service_id, "service_name": service.name, "tools": tools, "count": len(listed),
+            "pending_count": sum(1 for t in listed if t.state == "pending"),
+            "first_review": not MCPToolAdapter.has_approved_version(db, service_id)}
+
+
+@router.post("/api/services/{service_id}/tools/approve-all", response_model=ApproveAllToolsResponse,
+             tags=["Services"])
+async def approve_all_service_tools(service_id: str, body: ApproveAllToolsRequest, http_request: Request,
+                                    db: Session = Depends(get_db), user: AdminUser = Depends(get_current_user)):
+    """Approve the first tool list of a service in one go (#32): the pending versions with these hashes. Refused
+    with 409 once any tool of the service has been approved: later changes are reviewed one by one."""
+    try:
+        ServiceAdapter.get_existing(db, service_id)
+        pairs = MCPToolAdapter.approve_first_list(db, service_id, body.hashes, user.audit_name)
+    except AdapterError as e:
+        raise _adapter_exc(e)
+    _audit(db, http_request, user, AuditAction.TOOL_APPROVE_ALL, ResourceType.SERVICE, service_id,
+           {"tools": [{"name": t.name, "hash": v.hash} for t, v in pairs], "count": len(pairs)})
+    tools = MCPToolAdapter.get_by_service(db, service_id)
+    return ApproveAllToolsResponse(approved=len(pairs), tools=[_tool_info(t) for t in tools])
+
+
+def _decide_tool(service_id, tool_id, body, http_request, db, user, state, action):
+    try:
+        ServiceAdapter.get_existing(db, service_id)
+        tool, version, previous = MCPToolAdapter.decide(db, service_id, tool_id, body.hash, state, user.audit_name)
+    except AdapterError as e:
+        raise _adapter_exc(e)
+    _audit(db, http_request, user, action, ResourceType.SERVICE, service_id,
+           {"tool": tool.name, "tool_id": str(tool.id), "hash": version.hash, "previous_state": previous,
+            "current": version.hash == tool.current_hash})
+    return ToolDecisionResponse(tool=_tool_info(tool), previous_state=previous)
+
+
+@router.post("/api/services/{service_id}/tools/{tool_id}/approve", response_model=ToolDecisionResponse,
+             tags=["Services"])
+async def approve_service_tool(service_id: str, tool_id: str, body: ToolDecisionRequest, http_request: Request,
+                               db: Session = Depends(get_db), user: AdminUser = Depends(get_current_user)):
+    """Approve one version of a tool (a pending or a rejected one), named by its hash (#32)."""
+    return _decide_tool(service_id, tool_id, body, http_request, db, user, "approved", AuditAction.TOOL_APPROVE)
+
+
+@router.post("/api/services/{service_id}/tools/{tool_id}/reject", response_model=ToolDecisionResponse,
+             tags=["Services"])
+async def reject_service_tool(service_id: str, tool_id: str, body: ToolDecisionRequest, http_request: Request,
+                              db: Session = Depends(get_db), user: AdminUser = Depends(get_current_user)):
+    """Reject one version of a tool, or withdraw its approval (#32). A rejected version stays hidden and can be
+    approved later."""
+    return _decide_tool(service_id, tool_id, body, http_request, db, user, "rejected", AuditAction.TOOL_REJECT)
 
 
 @router.post("/api/services/{service_id}/refresh-tools", response_model=RefreshToolsResponse, tags=["Services"])
@@ -233,15 +296,15 @@ async def refresh_service_tools(service_id: str, http_request: Request, body: Op
         logger.warning(f"refresh tools failed for {service.name}: {e}")
         raise HTTPException(status_code=502, detail={"error": "service.remote_unreachable",
                                                      "fallback": f"Could not reach MCP service: {e}"})
-    MCPToolAdapter.sync_tools(db, service_id, [
-        {"name": t.name, "description": t.description, "input_schema": t.input_schema} for t in tools
-    ])
-    infos = [_tool_info(t) for t in MCPToolAdapter.get_by_service(db, service_id)]
+    listed = MCPToolAdapter.sync_tools(db, service_id, [t.to_mcp() for t in tools])
+    infos = [_tool_info(t) for t in listed]
+    pending = sum(1 for t in infos if t.state == "pending")
     _audit(db, http_request, user, "refresh_tools", ResourceType.SERVICE, service_id,
-           {"service_name": service.name, "tools_count": len(infos), "identity": body.identity,
+           {"service_name": service.name, "tools_count": len(infos), "tools_pending": pending,
+            "identity": body.identity,
             **({"jti": body.jti} if body.identity == "token" else {})})
     return RefreshToolsResponse(success=True, message=f"Refreshed {len(infos)} tools", tools_count=len(infos),
-                                tools=infos)
+                                tools_pending=pending, tools=infos)
 
 
 @router.post("/api/services/health-check-all", response_model=BulkHealthCheckResponse, tags=["Services"])

@@ -50,6 +50,10 @@ class AuditAction(str, Enum):
     CREATE_SERVICE = "create_service"
     DELETE_SERVICE = "delete_service"
     UPDATE_SERVICE = "update_service"
+    # Tool pinning (#32)
+    TOOL_APPROVE = "tool_approve"
+    TOOL_REJECT = "tool_reject"
+    TOOL_APPROVE_ALL = "tool_approve_all"
 
     # Admin-console accounts
     ADMIN_SETUP = "admin_setup"
