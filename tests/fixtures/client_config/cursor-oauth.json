@@ -1,0 +1,41 @@
+{
+  "client": "cursor",
+  "variant": "oauth",
+  "issuer": "https://gate.example.com",
+  "docs_url": "https://cursor.com/docs/context/mcp",
+  "servers": [
+    {
+      "name": "Folio",
+      "key": "Folio",
+      "url": "https://folio.example.com/mcp",
+      "scopes": [
+        "rag:read"
+      ]
+    },
+    {
+      "name": "Morph yard",
+      "key": "Morph-yard",
+      "url": "http://127.0.0.1:5055/mcp",
+      "scopes": []
+    },
+    {
+      "name": "Folio",
+      "key": "Folio-2",
+      "url": "https://other.example.com/mcp",
+      "scopes": []
+    }
+  ],
+  "file": {
+    "format": "json",
+    "filename": "mcp.json",
+    "path": "~/.cursor/mcp.json",
+    "content": "{\n  \"mcpServers\": {\n    \"Folio\": {\n      \"url\": \"https://folio.example.com/mcp\"\n    },\n    \"Morph-yard\": {\n      \"url\": \"http://127.0.0.1:5055/mcp\"\n    },\n    \"Folio-2\": {\n      \"url\": \"https://other.example.com/mcp\"\n    }\n  }\n}\n"
+  },
+  "commands": [],
+  "install_links": [
+    "cursor://anysphere.cursor-deeplink/mcp/install?name=Folio&config=eyJ1cmwiOiJodHRwczovL2ZvbGlvLmV4YW1wbGUuY29tL21jcCJ9",
+    "cursor://anysphere.cursor-deeplink/mcp/install?name=Morph-yard&config=eyJ1cmwiOiJodHRwOi8vMTI3LjAuMC4xOjUwNTUvbWNwIn0%3D",
+    "cursor://anysphere.cursor-deeplink/mcp/install?name=Folio-2&config=eyJ1cmwiOiJodHRwczovL290aGVyLmV4YW1wbGUuY29tL21jcCJ9"
+  ],
+  "pat_page": null
+}

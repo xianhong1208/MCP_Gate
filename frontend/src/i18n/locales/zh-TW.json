@@ -642,7 +642,7 @@
       "ownScopesSubtitle": "只存在於這台伺服器,與全域註冊表並行;簽給其他伺服器的 token 不會帶有這些 scope。名稱不可與全域 scope 重複。",
       "ownScopesEmpty": "此伺服器尚未宣告自己的 scope",
       "integrationTitle": "接入設定",
-      "integrationSubtitle": "Server 端(FastMCP)與 MCP client 端可直接複製的設定。",
+      "integrationSubtitle": "Server 端（FastMCP）可直接複製的程式碼。用戶端設定請見「連接用戶端」。",
       "snippetsUnavailable": "目前無法取得接入範例。",
       "issuerLabel": "Issuer",
       "issuePat": "簽發 Personal Token",
@@ -651,8 +651,6 @@
       "tokensHint": "簽發 Personal Access Token,或連接 OAuth client",
       "viewAllTokens": "查看全部",
       "snippetFamily": {
-        "claudeCode": "Claude Code",
-        "mcpJson": "mcp.json",
         "fastmcp": "FastMCP"
       },
       "snippetVariant": {
@@ -1299,6 +1297,11 @@
       "serverError": "發生未預期的錯誤,請稍後再試",
       "networkError": "網路錯誤,請檢查您的連線",
       "requestFailed": "請求失敗"
+    },
+    "client_config": {
+      "no_url": "這台伺服器還沒有位址或 audience，用戶端無法連線。",
+      "unknown_client": "未知的用戶端：請選擇 Claude Code、Cursor、VS Code 或 Codex。",
+      "unknown_variant": "未知的方式：請選擇登入或個人 token。"
     }
   },
   "components": {
@@ -1379,6 +1382,58 @@
       "mcp_resources_read": "讀取 resources",
       "mcp_prompts_read": "讀取 prompts",
       "offline_access": "要求 refresh token"
+    }
+  },
+  "clientConfig": {
+    "title": "連接用戶端",
+    "subtitle": "Claude Code、Cursor、VS Code 與 Codex 的設定。每個人用自己的 MCP Gate 帳號登入。",
+    "connect": "連接用戶端",
+    "connectAll": "連接用戶端",
+    "allTitle": "把用戶端連到所有伺服器",
+    "allSubtitle": "一個設定檔，包含這裡列出的所有啟用中 MCP 伺服器。",
+    "loadFailed": "無法載入用戶端設定",
+    "variant": {
+      "oauth": "登入",
+      "pat": "個人 token"
+    },
+    "oauthIntro": "用戶端會自行找到 MCP Gate（OAuth discovery）、自行註冊，並開啟瀏覽器讓你登入。設定檔裡不會有token。",
+    "patTitle": "給沒有瀏覽器的機器",
+    "patBody": "用在 CI 或遠端 shell。設定檔永遠不含token：它從環境變數讀取（VS Code 會詢問一次）。一個個人 token只適用於一台伺服器。",
+    "createPat": "建立個人 token",
+    "noServers": "還沒有任何伺服器有位址。",
+    "commandsTitle": "指令",
+    "addToCursor": "加入 Cursor",
+    "addToCursorNamed": "將 {{name}} 加入 Cursor",
+    "docs": "{{client}} 文件",
+    "download": "下載 {{filename}}",
+    "dcrReview": "這個 MCP Gate 的新 OAuth 用戶端需要管理員審核。第一次嘗試登入後，到「OAuth 用戶端」核准它，再登入一次。",
+    "skipped": "未包含（尚無位址）：{{names}}",
+    "steps": {
+      "createPat": "為這台伺服器建立個人 token（上方連結）並複製。",
+      "setEnv": "在用戶端啟動的環境設定它，例如在 shell 設定檔加入 export {{env}}='<YOUR_PAT>'。不要貼進設定檔。",
+      "claudeCode": {
+        "runCommands": "執行下方指令。加上 --scope user 可在所有專案使用這台伺服器。",
+        "login": "claude mcp login 會在瀏覽器中登入（或在 Claude Code 執行 /mcp 並選擇 Authenticate）。",
+        "runPatCommands": "執行下方指令。Claude Code 連線時才展開標頭裡的 ${VAR}；單引號讓 shell 不會先展開它。",
+        "orFile": "或分享給整個專案：把 JSON 放到專案根目錄的 {{path}}。"
+      },
+      "cursor": {
+        "installLink": "點下方的「加入 Cursor」。",
+        "orFile": "或把 JSON 合併到 {{path}}（所有專案）或 .cursor/mcp.json（單一專案）。",
+        "login": "在 Cursor 設定 → MCP，伺服器會顯示「Needs login」：點它並在瀏覽器登入。"
+      },
+      "vscode": {
+        "runCommands": "執行下方指令，把伺服器加入你的使用者設定檔。",
+        "orFile": "或把 JSON 合併到工作區的 {{path}}。",
+        "login": "啟動伺服器：VS Code 會開啟瀏覽器讓你用 MCP Gate 登入。",
+        "patFile": "把 JSON 合併到工作區的 {{path}}。",
+        "patPrompt": "伺服器啟動時，VS Code 會詢問一次token，並存在它的秘密儲存區。"
+      },
+      "codex": {
+        "runCommands": "執行下方指令：codex mcp login 會開啟瀏覽器登入。",
+        "orFile": "或把 TOML 附加到 {{path}}。是加進檔案，不要取代整個檔案。",
+        "patFile": "把 TOML 附加到 {{path}}。是加進檔案，不要取代整個檔案。"
+      }
     }
   }
 }

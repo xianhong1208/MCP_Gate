@@ -646,7 +646,7 @@
       "ownScopesSubtitle": "Exist only for this server, next to the global registry; tokens for other servers can never carry them. Names may not reuse a global scope.",
       "ownScopesEmpty": "This server declares no scopes of its own",
       "integrationTitle": "Integration",
-      "integrationSubtitle": "Copy-paste snippets for the server side (FastMCP) and for MCP clients.",
+      "integrationSubtitle": "Copy-paste snippets for the server side (FastMCP). Client configuration is under Connect a client.",
       "snippetsUnavailable": "Integration snippets are unavailable.",
       "issuerLabel": "Issuer",
       "issuePat": "Issue personal token",
@@ -655,8 +655,6 @@
       "tokensHint": "Issue a personal token, or connect an OAuth client",
       "viewAllTokens": "View all",
       "snippetFamily": {
-        "claudeCode": "Claude Code",
-        "mcpJson": "mcp.json",
         "fastmcp": "FastMCP"
       },
       "snippetVariant": {
@@ -1321,6 +1319,11 @@
       "serverError": "An unexpected error occurred. Please try again.",
       "networkError": "Network error. Please check your connection.",
       "requestFailed": "Request failed"
+    },
+    "client_config": {
+      "no_url": "This server has no address or audience yet, so a client cannot connect to it.",
+      "unknown_client": "Unknown client: choose Claude Code, Cursor, VS Code or Codex.",
+      "unknown_variant": "Unknown variant: choose sign-in or personal token."
     }
   },
   "components": {
@@ -1401,6 +1404,58 @@
       "mcp_resources_read": "Read resources",
       "mcp_prompts_read": "Read prompts",
       "offline_access": "Request a refresh token"
+    }
+  },
+  "clientConfig": {
+    "title": "Connect a client",
+    "subtitle": "Configuration for Claude Code, Cursor, VS Code and Codex. Each person signs in with their own MCP Gate account.",
+    "connect": "Connect a client",
+    "connectAll": "Connect clients",
+    "allTitle": "Connect clients to every server",
+    "allSubtitle": "One configuration file with every active MCP server listed here.",
+    "loadFailed": "Failed to load the client configuration",
+    "variant": {
+      "oauth": "Sign in",
+      "pat": "Personal token"
+    },
+    "oauthIntro": "The client finds MCP Gate on its own (OAuth discovery), registers itself and opens a browser to sign in. No token goes into the file.",
+    "patTitle": "For machines without a browser",
+    "patBody": "Use this in CI or a remote shell. The file never contains a token: it reads one from an environment variable (VS Code asks for it once). A personal token works for one server only.",
+    "createPat": "Create a personal token",
+    "noServers": "No server has an address yet.",
+    "commandsTitle": "Commands",
+    "addToCursor": "Add to Cursor",
+    "addToCursorNamed": "Add {{name}} to Cursor",
+    "docs": "{{client}} documentation",
+    "download": "Download {{filename}}",
+    "dcrReview": "New OAuth clients wait for an admin's review on this MCP Gate. After the first sign-in attempt, approve the client under OAuth Clients, then sign in again.",
+    "skipped": "Left out (no address yet): {{names}}",
+    "steps": {
+      "createPat": "Create a personal token for the server (link above) and copy it.",
+      "setEnv": "Set it where the client starts, e.g. export {{env}}='<YOUR_PAT>' in your shell profile. Never paste it into the file.",
+      "claudeCode": {
+        "runCommands": "Run the commands below. Add --scope user to use the server in every project.",
+        "login": "claude mcp login signs you in in the browser (or run /mcp in Claude Code and choose Authenticate).",
+        "runPatCommands": "Run the commands below. Claude Code reads ${VAR} in the header when it connects; the single quotes keep your shell from expanding it.",
+        "orFile": "Or share it with a project: put the JSON in {{path}} at the project root."
+      },
+      "cursor": {
+        "installLink": "Click \"Add to Cursor\" below.",
+        "orFile": "Or merge the JSON into {{path}} (all projects) or .cursor/mcp.json (one project).",
+        "login": "In Cursor Settings → MCP, the server shows \"Needs login\": click it and sign in in the browser."
+      },
+      "vscode": {
+        "runCommands": "Run the command below to add the server to your user profile.",
+        "orFile": "Or merge the JSON into {{path}} in your workspace.",
+        "login": "Start the server: VS Code opens the browser to sign in with MCP Gate.",
+        "patFile": "Merge the JSON into {{path}} in your workspace.",
+        "patPrompt": "When the server starts, VS Code asks for the token once and keeps it in its secret storage."
+      },
+      "codex": {
+        "runCommands": "Run the commands below: codex mcp login opens the browser to sign in.",
+        "orFile": "Or append the TOML to {{path}}. Add it to the file; do not replace the file.",
+        "patFile": "Append the TOML to {{path}}. Add it to the file; do not replace the file."
+      }
     }
   }
 }

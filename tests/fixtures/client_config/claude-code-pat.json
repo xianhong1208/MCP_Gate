@@ -1,0 +1,44 @@
+{
+  "client": "claude-code",
+  "variant": "pat",
+  "issuer": "https://gate.example.com",
+  "docs_url": "https://code.claude.com/docs/en/mcp",
+  "servers": [
+    {
+      "name": "Folio",
+      "key": "Folio",
+      "url": "https://folio.example.com/mcp",
+      "scopes": [
+        "rag:read"
+      ],
+      "pat_env": "MCP_GATE_PAT_FOLIO"
+    },
+    {
+      "name": "Morph yard",
+      "key": "Morph-yard",
+      "url": "http://127.0.0.1:5055/mcp",
+      "scopes": [],
+      "pat_env": "MCP_GATE_PAT_MORPH_YARD"
+    },
+    {
+      "name": "Folio",
+      "key": "Folio-2",
+      "url": "https://other.example.com/mcp",
+      "scopes": [],
+      "pat_env": "MCP_GATE_PAT_FOLIO_2"
+    }
+  ],
+  "file": {
+    "format": "json",
+    "filename": "mcp.json",
+    "path": ".mcp.json",
+    "content": "{\n  \"mcpServers\": {\n    \"Folio\": {\n      \"type\": \"http\",\n      \"url\": \"https://folio.example.com/mcp\",\n      \"headers\": {\n        \"Authorization\": \"Bearer ${MCP_GATE_PAT_FOLIO}\"\n      }\n    },\n    \"Morph-yard\": {\n      \"type\": \"http\",\n      \"url\": \"http://127.0.0.1:5055/mcp\",\n      \"headers\": {\n        \"Authorization\": \"Bearer ${MCP_GATE_PAT_MORPH_YARD}\"\n      }\n    },\n    \"Folio-2\": {\n      \"type\": \"http\",\n      \"url\": \"https://other.example.com/mcp\",\n      \"headers\": {\n        \"Authorization\": \"Bearer ${MCP_GATE_PAT_FOLIO_2}\"\n      }\n    }\n  }\n}\n"
+  },
+  "commands": [
+    "claude mcp add --transport http Folio https://folio.example.com/mcp --header 'Authorization: Bearer ${MCP_GATE_PAT_FOLIO}'",
+    "claude mcp add --transport http Morph-yard http://127.0.0.1:5055/mcp --header 'Authorization: Bearer ${MCP_GATE_PAT_MORPH_YARD}'",
+    "claude mcp add --transport http Folio-2 https://other.example.com/mcp --header 'Authorization: Bearer ${MCP_GATE_PAT_FOLIO_2}'"
+  ],
+  "install_links": [],
+  "pat_page": "https://gate.example.com/tokens/create"
+}

@@ -1,0 +1,44 @@
+{
+  "client": "cursor",
+  "variant": "pat",
+  "issuer": "https://gate.example.com",
+  "docs_url": "https://cursor.com/docs/context/mcp",
+  "servers": [
+    {
+      "name": "Folio",
+      "key": "Folio",
+      "url": "https://folio.example.com/mcp",
+      "scopes": [
+        "rag:read"
+      ],
+      "pat_env": "MCP_GATE_PAT_FOLIO"
+    },
+    {
+      "name": "Morph yard",
+      "key": "Morph-yard",
+      "url": "http://127.0.0.1:5055/mcp",
+      "scopes": [],
+      "pat_env": "MCP_GATE_PAT_MORPH_YARD"
+    },
+    {
+      "name": "Folio",
+      "key": "Folio-2",
+      "url": "https://other.example.com/mcp",
+      "scopes": [],
+      "pat_env": "MCP_GATE_PAT_FOLIO_2"
+    }
+  ],
+  "file": {
+    "format": "json",
+    "filename": "mcp.json",
+    "path": "~/.cursor/mcp.json",
+    "content": "{\n  \"mcpServers\": {\n    \"Folio\": {\n      \"url\": \"https://folio.example.com/mcp\",\n      \"headers\": {\n        \"Authorization\": \"Bearer ${env:MCP_GATE_PAT_FOLIO}\"\n      }\n    },\n    \"Morph-yard\": {\n      \"url\": \"http://127.0.0.1:5055/mcp\",\n      \"headers\": {\n        \"Authorization\": \"Bearer ${env:MCP_GATE_PAT_MORPH_YARD}\"\n      }\n    },\n    \"Folio-2\": {\n      \"url\": \"https://other.example.com/mcp\",\n      \"headers\": {\n        \"Authorization\": \"Bearer ${env:MCP_GATE_PAT_FOLIO_2}\"\n      }\n    }\n  }\n}\n"
+  },
+  "commands": [],
+  "install_links": [
+    "cursor://anysphere.cursor-deeplink/mcp/install?name=Folio&config=eyJ1cmwiOiJodHRwczovL2ZvbGlvLmV4YW1wbGUuY29tL21jcCIsImhlYWRlcnMiOnsiQXV0aG9yaXphdGlvbiI6IkJlYXJlciAke2VudjpNQ1BfR0FURV9QQVRfRk9MSU99In19",
+    "cursor://anysphere.cursor-deeplink/mcp/install?name=Morph-yard&config=eyJ1cmwiOiJodHRwOi8vMTI3LjAuMC4xOjUwNTUvbWNwIiwiaGVhZGVycyI6eyJBdXRob3JpemF0aW9uIjoiQmVhcmVyICR7ZW52Ok1DUF9HQVRFX1BBVF9NT1JQSF9ZQVJEfSJ9fQ%3D%3D",
+    "cursor://anysphere.cursor-deeplink/mcp/install?name=Folio-2&config=eyJ1cmwiOiJodHRwczovL290aGVyLmV4YW1wbGUuY29tL21jcCIsImhlYWRlcnMiOnsiQXV0aG9yaXphdGlvbiI6IkJlYXJlciAke2VudjpNQ1BfR0FURV9QQVRfRk9MSU9fMn0ifX0%3D"
+  ],
+  "pat_page": "https://gate.example.com/tokens/create"
+}

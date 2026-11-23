@@ -302,6 +302,14 @@ export const systemApi = {
 
 // ==================== OAuth 2.1 management ====================
 
+/** Client configuration export (#36): Claude Code / Cursor / VS Code / Codex snippets. `serviceId` null = all servers */
+export const clientConfigApi = {
+  async get(serviceId, client, variant = 'oauth') {
+    const path = serviceId ? `/api/services/${encodeURIComponent(serviceId)}/client-config` : '/api/client-config'
+    return request(`${path}${qs({ client, variant })}`)
+  },
+}
+
 export const oauthApi = {
   clients: {
     /** status: all | approved | pending | revoked */
