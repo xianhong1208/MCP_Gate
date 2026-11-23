@@ -636,6 +636,10 @@
       "audienceCustom": "Custom audience — tokens for this server carry exactly this value.",
       "audienceDefault": "Defaults to the MCP URL. Set a custom audience in the service settings if the server expects something else.",
       "staticTokenBadge": "Static bearer token configured",
+      "protocol": "MCP version",
+      "protocolModern": "stateless",
+      "protocolLegacy": "initialize handshake",
+      "protocolHint": "How MCP Gate last talked to this server ({{when}}). Kept in memory only: shown after the first health check, scan or tool refresh since MCP Gate started.",
       "scopesTitle": "Allowed scopes",
       "scopesAll": "No restriction — any registered scope may be granted.",
       "ownScopesTitle": "Scopes declared by this server",
@@ -813,6 +817,9 @@
       "pending": "pending",
       "revoked": "revoked"
     },
+    "dcrNotice_one": "1 client registered through Dynamic Client Registration, which MCP 2026-07-28 deprecates in favour of Client ID Metadata Documents (an https URL as the client id). It keeps working; current MCP clients use metadata documents on their own.",
+    "dcrNotice_other": "{{count}} clients registered through Dynamic Client Registration, which MCP 2026-07-28 deprecates in favour of Client ID Metadata Documents (an https URL as the client id). They keep working; current MCP clients use metadata documents on their own.",
+    "dcrBadgeHint": "Dynamic Client Registration is deprecated by MCP 2026-07-28; it still works for older clients.",
     "via": {
       "dcr": "Dynamic registration",
       "cimd": "Metadata document",

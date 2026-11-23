@@ -163,6 +163,7 @@ def _register(request: Request, db: Session, raw: bytes) -> JSONResponse:
             raise OAuthError("invalid_client_metadata", "request body must be a JSON object")
         client, secret = oauth.register_client(db, metadata, created_via="dcr")
         logger.info(f"DCR: registered client {client.client_id} ({client.client_name}) approved={client.is_approved}")
+        oauth.log_dcr_deprecation_once()
         record_oauth_event(db, AuditAction.OAUTH_CLIENT_CREATE, client_id=client.client_id,
                            client_name=client.client_name, ip_address=_client_ip(request),
                            request_path=request.url.path,

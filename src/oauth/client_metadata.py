@@ -357,7 +357,7 @@ def _display_uri(doc: dict, name: str, column) -> Optional[str]:
 def validate_document(url: str, doc) -> dict:
     """Check a fetched document against §4 / §5 and MCP's required fields; return the oauth_clients column
     values it maps to. Raises MetadataError."""
-    from src.oauth.service import MAX_REDIRECT_URIS, _valid_redirect_uri
+    from src.oauth.service import MAX_REDIRECT_URIS, _valid_redirect_uri, check_application_type
 
     if not isinstance(doc, dict):
         raise MetadataError("document must be a JSON object")
@@ -380,6 +380,11 @@ def validate_document(url: str, doc) -> dict:
     for uri in redirect_uris:
         if len(uri) > limit or not _valid_redirect_uri(uri):
             raise MetadataError(f"invalid redirect_uri: {clip(uri, 80)}")
+
+    try:
+        check_application_type(doc.get("application_type"))
+    except OAuthError as e:
+        raise MetadataError(e.description)
 
     declared_grants = _string_list(doc, "grant_types")
     grants = [g for g in SUPPORTED_GRANTS if g in (DEFAULT_GRANTS if declared_grants is None else declared_grants)]

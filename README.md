@@ -18,13 +18,13 @@ MCP Gate puts standards-based authentication in front of every MCP server you ru
 
 ## Key features
 
-- **A standards-based authorization server.** Covers the authorization part of the [MCP specification](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization): RFC 8414 metadata, RFC 7591 dynamic client registration, Client ID Metadata Documents (the registration method of MCP 2026-07-28), authorization code + PKCE, refresh-token rotation with replay detection, RFC 7009 revocation, RFC 7662 introspection, RFC 8707 resource indicators, RFC 9207 `iss`, and `private_key_jwt` client authentication.
+- **A standards-based authorization server.** Covers the authorization part of the [MCP specification](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization) (2026-07-28): RFC 8414 metadata, Client ID Metadata Documents (the preferred registration method), RFC 7591 dynamic client registration (deprecated by the specification, still supported), authorization code + PKCE, refresh-token rotation with replay detection, RFC 7009 revocation, RFC 7662 introspection, RFC 8707 resource indicators, RFC 9207 `iss`, and `private_key_jwt` client authentication.
 - **Offline verification.** RS256 tokens bound to each server's audience, so a token for one server never works on another. Servers fetch the JWKS once and verify locally. Signing keys rotate on their own every 90 days, each published a day before it signs; a leaked key can be revoked from the console, and `ENCRYPTION_KEY` rotates with one command.
 - **Revocation that reaches offline verifiers.** A server polls the revocation feed and refuses a revoked token within seconds, personal access tokens included, without calling MCP Gate per request.
 - **A consent screen** for clients that register themselves, with decisions remembered per client and server.
 - **Connect a client in one step.** Each server's page has ready-made configuration for Claude Code, Cursor, VS Code and Codex (commands, the config file to copy or download, a one-click Cursor install link), signing in through MCP Gate by default. See [Connect a client](#6-connect-a-client).
 - **Personal access tokens** for scripts, CI and machines without a browser; the client snippets read them from an environment variable, never from the file.
-- **A server registry.** Register or scan MCP servers, sync their tools, watch their health, and see each tool list as a given token sees it ("Inspect as").
+- **A server registry.** Register or scan MCP servers, sync their tools, watch their health, and see each tool list as a given token sees it ("Inspect as"). It speaks MCP 2026-07-28 (`server/discover`, stateless servers) and falls back to the `initialize` handshake for servers on 2024-11-05 to 2025-11-25; each server's page shows which one it answered with. See [MCP protocol versions](docs/reference.md#mcp-protocol-versions).
 - **Tool pinning.** Every tool definition is pinned by a SHA-256 hash; a new or changed tool waits for an admin, who sees a diff against the approved version before approving or rejecting it. A FastMCP middleware on your server hides every unapproved tool and reports new ones at once. See [Tool pinning and approval](docs/reference.md#tool-pinning-and-approval).
 - **Poisoning scan.** Built-in rules flag hidden instructions, invisible characters, mentions of other servers' tools, requests for secrets, suspicious URLs and encoded text in a tool definition, highlighted on the approval card. No model and no network; findings inform the approval and never block on their own. See [Poisoning scan](docs/reference.md#poisoning-scan).
 - **Marketplace and orchestrator.** Deploy MCP servers from a catalog, or paste a `{command, args, env}` block and let MCP Gate run it in Docker or as a local process behind an HTTP bridge.
@@ -192,6 +192,8 @@ def whoami() -> dict:
 if __name__ == "__main__":
     feeds = "on" if isinstance(verifier, MCPGateVerifier) else "off"
     print(f"MCP Gate: {MCP_GATE}   audience: {AUDIENCE}   revocation feed: {feeds}   tool approvals: {feeds}")
+    # Serves MCP 2026-07-28 (stateless) and older clients on the same endpoint. Add stateless_http=True to keep no
+    # sessions for older clients either (e.g. behind a load balancer); MCPGateVerifier and the middleware work both ways.
     mcp.run(transport="http", host=HOST, port=PORT)
 ```
 
@@ -252,7 +254,7 @@ Revoke the token in the console (**Tokens → Revoke**) and, with the feed on, t
 
 ### 6. Connect a client
 
-Open the server's page and use **Connect a client** (or the plug icon on the services list; **Connect clients** there covers every server at once). It has a tab for **Claude Code, Cursor, VS Code and Codex** with the commands, the config file to copy or download and the steps, all for that server's audience. Clients need nothing up front: on first use they find MCP Gate, register themselves and open the consent screen in your browser. For Claude Code:
+Open the server's page and use **Connect a client** (or the plug icon on the services list; **Connect clients** there covers every server at once). It has a tab for **Claude Code, Cursor, VS Code and Codex** with the commands, the config file to copy or download and the steps, all for that server's audience. Clients need nothing up front: on first use they find MCP Gate, identify themselves with a Client ID Metadata Document (or, older clients, register through dynamic client registration) and open the consent screen in your browser. For Claude Code:
 
 ```bash
 claude mcp add --transport http demo http://127.0.0.1:8000/mcp

@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback } from 'react'
-import { formatDate } from '../utils/format'
+import { formatDate, formatDateTime } from '../utils/format'
 import { useParams, useNavigate, useLocation, Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import {
   Copy, Check, Trash2, Clock, RefreshCw, ChevronDown,
-  Activity, Key, Edit3, Wrench, Code2, ShieldCheck, ShieldX, ShieldAlert, CheckCheck, ScanSearch,
+  Activity, Key, Network, Edit3, Wrench, Code2, ShieldCheck, ShieldX, ShieldAlert, CheckCheck, ScanSearch,
 } from 'lucide-react'
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { servicesApi, statsApi, oauthApi } from '../services/api'
@@ -810,7 +810,7 @@ export default function ServiceDetailPage() {
                 }] : []),
               ]}
             />
-            {(service.has_static_token || service.health?.response_time_ms != null || service.health?.last_checked || service.created_at || service.health?.error_message) && (
+            {(service.has_static_token || service.health?.response_time_ms != null || service.health?.last_checked || service.health?.protocol_version || service.created_at || service.health?.error_message) && (
             <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-border pt-4 text-xs text-muted-foreground">
               {service.has_static_token && (
                 <Badge tone="neutral"><Key className="h-3 w-3" />{t('services.detail.staticTokenBadge')}</Badge>
@@ -827,6 +827,20 @@ export default function ServiceDetailPage() {
                   <Clock className="h-3.5 w-3.5" aria-hidden="true" />
                   {t('services.detail.lastChecked')}
                   <LastChecked value={service.health.last_checked} withIcon={false} className="text-foreground" />
+                </span>
+              )}
+              {service.health?.protocol_version && (
+                <span
+                  className="flex items-center gap-1.5"
+                  data-testid="service-protocol"
+                  title={t('services.detail.protocolHint', { when: formatDateTime(service.health.protocol_seen_at) })}
+                >
+                  <Network className="h-3.5 w-3.5" aria-hidden="true" />
+                  {t('services.detail.protocol')}
+                  <span className="font-mono tabular-nums text-foreground">{service.health.protocol_version}</span>
+                  {service.health.protocol_era && (
+                    <Badge tone="neutral">{t(service.health.protocol_era === 'modern' ? 'services.detail.protocolModern' : 'services.detail.protocolLegacy')}</Badge>
+                  )}
                 </span>
               )}
               {service.created_at && (
