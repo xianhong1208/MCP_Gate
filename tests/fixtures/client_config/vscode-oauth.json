@@ -1,0 +1,41 @@
+{
+  "client": "vscode",
+  "variant": "oauth",
+  "issuer": "https://gate.example.com",
+  "docs_url": "https://code.visualstudio.com/docs/agents/reference/mcp-configuration",
+  "servers": [
+    {
+      "name": "Folio",
+      "key": "Folio",
+      "url": "https://folio.example.com/mcp",
+      "scopes": [
+        "rag:read"
+      ]
+    },
+    {
+      "name": "Morph yard",
+      "key": "Morph-yard",
+      "url": "http://127.0.0.1:5055/mcp",
+      "scopes": []
+    },
+    {
+      "name": "Folio",
+      "key": "Folio-2",
+      "url": "https://other.example.com/mcp",
+      "scopes": []
+    }
+  ],
+  "file": {
+    "format": "json",
+    "filename": "mcp.json",
+    "path": ".vscode/mcp.json",
+    "content": "{\n  \"servers\": {\n    \"Folio\": {\n      \"type\": \"http\",\n      \"url\": \"https://folio.example.com/mcp\"\n    },\n    \"Morph-yard\": {\n      \"type\": \"http\",\n      \"url\": \"http://127.0.0.1:5055/mcp\"\n    },\n    \"Folio-2\": {\n      \"type\": \"http\",\n      \"url\": \"https://other.example.com/mcp\"\n    }\n  }\n}\n"
+  },
+  "commands": [
+    "code --add-mcp '{\"name\":\"Folio\",\"type\":\"http\",\"url\":\"https://folio.example.com/mcp\"}'",
+    "code --add-mcp '{\"name\":\"Morph-yard\",\"type\":\"http\",\"url\":\"http://127.0.0.1:5055/mcp\"}'",
+    "code --add-mcp '{\"name\":\"Folio-2\",\"type\":\"http\",\"url\":\"https://other.example.com/mcp\"}'"
+  ],
+  "install_links": [],
+  "pat_page": null
+}

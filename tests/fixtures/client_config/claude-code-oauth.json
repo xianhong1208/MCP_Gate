@@ -1,0 +1,44 @@
+{
+  "client": "claude-code",
+  "variant": "oauth",
+  "issuer": "https://gate.example.com",
+  "docs_url": "https://code.claude.com/docs/en/mcp",
+  "servers": [
+    {
+      "name": "Folio",
+      "key": "Folio",
+      "url": "https://folio.example.com/mcp",
+      "scopes": [
+        "rag:read"
+      ]
+    },
+    {
+      "name": "Morph yard",
+      "key": "Morph-yard",
+      "url": "http://127.0.0.1:5055/mcp",
+      "scopes": []
+    },
+    {
+      "name": "Folio",
+      "key": "Folio-2",
+      "url": "https://other.example.com/mcp",
+      "scopes": []
+    }
+  ],
+  "file": {
+    "format": "json",
+    "filename": "mcp.json",
+    "path": ".mcp.json",
+    "content": "{\n  \"mcpServers\": {\n    \"Folio\": {\n      \"type\": \"http\",\n      \"url\": \"https://folio.example.com/mcp\"\n    },\n    \"Morph-yard\": {\n      \"type\": \"http\",\n      \"url\": \"http://127.0.0.1:5055/mcp\"\n    },\n    \"Folio-2\": {\n      \"type\": \"http\",\n      \"url\": \"https://other.example.com/mcp\"\n    }\n  }\n}\n"
+  },
+  "commands": [
+    "claude mcp add --transport http Folio https://folio.example.com/mcp",
+    "claude mcp login Folio",
+    "claude mcp add --transport http Morph-yard http://127.0.0.1:5055/mcp",
+    "claude mcp login Morph-yard",
+    "claude mcp add --transport http Folio-2 https://other.example.com/mcp",
+    "claude mcp login Folio-2"
+  ],
+  "install_links": [],
+  "pat_page": null
+}

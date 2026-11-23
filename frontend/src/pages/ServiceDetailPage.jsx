@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback } from 'react'
 import { formatDate } from '../utils/format'
-import { useParams, useNavigate, Link } from 'react-router-dom'
+import { useParams, useNavigate, useLocation, Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import {
   Copy, Check, Trash2, Clock, RefreshCw, ChevronDown,
-  Activity, Key, Edit3, Wrench, Terminal, FileJson, Code2, ShieldCheck, ShieldX, ShieldAlert, CheckCheck, ScanSearch,
+  Activity, Key, Edit3, Wrench, Code2, ShieldCheck, ShieldX, ShieldAlert, CheckCheck, ScanSearch,
 } from 'lucide-react'
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { servicesApi, statsApi, oauthApi } from '../services/api'
@@ -13,6 +13,7 @@ import CodeBlock from '../components/CodeBlock'
 import ServiceFormModal from '../components/ServiceFormModal'
 import HealthIndicator from '../components/HealthIndicator'
 import ScopeEditor from '../components/ScopeEditor'
+import ClientConfigPanel from '../components/ClientConfigPanel'
 import MarkdownLite from '../components/MarkdownLite'
 import { copyToClipboard } from '../utils/clipboard'
 import { feedTone, revocationReachesServer } from '../utils/revocation'
@@ -24,7 +25,7 @@ import { KindBadge, StatusBadge, ScopeChips } from './TokensPage'
 import clsx from 'clsx'
 import {
   PageHeader, Button, IconButton, Badge, StatusDot, Card, CardHeader, SectionLabel, DescriptionList,
-  EmptyState, Alert, LoadingBlock, Tabs, SegmentedControl, Select,
+  EmptyState, Alert, LoadingBlock, SegmentedControl, Select,
 } from '../components/ui'
 
 // recharts stroke attrs cannot read CSS vars: give fallback colors; the real line color
@@ -436,17 +437,15 @@ function describeHealthError(t, raw) {
   return t('services.health.failed')
 }
 
-// Integration snippets are grouped by target (family) and flavour (variant); the backend key is `${family}_${variant}`.
-const SNIPPET_FAMILIES = [
-  { key: 'claude_code', labelKey: 'services.detail.snippetFamily.claudeCode', icon: Terminal, lang: 'bash', variants: ['oauth', 'pat'] },
-  { key: 'mcp_json', labelKey: 'services.detail.snippetFamily.mcpJson', icon: FileJson, lang: 'json', variants: ['oauth', 'pat'] },
-  { key: 'fastmcp', labelKey: 'services.detail.snippetFamily.fastmcp', icon: Code2, lang: 'python', variants: ['server', 'hooks', 'client'] },
-]
+// Server-side integration snippets (FastMCP); the backend key is `fastmcp_${variant}`. MCP client configuration
+// (Claude Code, Cursor, VS Code, Codex) lives in the "Connect a client" panel (#36).
+const FASTMCP_VARIANTS = ['server', 'hooks', 'client']
 
 export default function ServiceDetailPage() {
   const { t } = useTranslation()
   const { serviceId } = useParams()
   const navigate = useNavigate()
+  const location = useLocation()
   const { confirm, confirmDelete, confirmTokenRevoke } = useConfirm()
   const toast = useToast()
   const decodedServiceId = decodeURIComponent(serviceId)
@@ -460,8 +459,7 @@ export default function ServiceDetailPage() {
   })
   const [isLoadingOwnScopes, setIsLoadingOwnScopes] = useState(true)
   const [snippets, setSnippets] = useState(null)
-  const [snippetFamily, setSnippetFamily] = useState('claude_code')
-  const [snippetVariant, setSnippetVariant] = useState('oauth')
+  const [snippetVariant, setSnippetVariant] = useState('server')
   const [tokens, setTokens] = useState([])
   const [usageStats, setUsageStats] = useState([])
   const [isLoading, setIsLoading] = useState(true)
@@ -550,6 +548,14 @@ export default function ServiceDetailPage() {
       .finally(() => { if (!cancelled) setIsLoadingStats(false) })
     return () => { cancelled = true }
   }, [service?.id])   // eslint-disable-line react-hooks/exhaustive-deps
+
+  // "Connect" on the services list links to #connect: scroll there once the page has rendered
+  const hasService = !!service
+  useEffect(() => {
+    if (!hasService || location.hash !== '#connect') return
+    const el = document.getElementById('connect')
+    if (el) el.scrollIntoView({ block: 'start' })
+  }, [hasService, location.hash])
 
   const handleCopy = async (text) => {
     try {
@@ -716,15 +722,8 @@ export default function ServiceDetailPage() {
   const totalFailed = usageStats.reduce((s, x) => s + (x.failed || 0), 0)
   const totalUsage = totalSuccess + totalFailed
   const hasMcpConnection = !!(service.host && service.port)
-  const activeFamily = SNIPPET_FAMILIES.find((f) => f.key === snippetFamily) || SNIPPET_FAMILIES[0]
-  const activeVariant = activeFamily.variants.includes(snippetVariant) ? snippetVariant : activeFamily.variants[0]
-  const activeSnippetKey = `${activeFamily.key}_${activeVariant}`
-  const activeSnippetTitle = `${t(activeFamily.labelKey)} · ${t(`services.detail.snippetVariant.${activeVariant}`)}`
-  const selectFamily = (key) => {
-    const family = SNIPPET_FAMILIES.find((f) => f.key === key) || SNIPPET_FAMILIES[0]
-    setSnippetFamily(family.key)
-    if (!family.variants.includes(snippetVariant)) setSnippetVariant(family.variants[0])
-  }
+  const activeSnippetKey = `fastmcp_${snippetVariant}`
+  const activeSnippetTitle = `${t('services.detail.snippetFamily.fastmcp')} · ${t(`services.detail.snippetVariant.${snippetVariant}`)}`
 
   return (
     <div className="space-y-8">
@@ -873,6 +872,15 @@ export default function ServiceDetailPage() {
             )}
           </Card>
 
+          {/* Connect a client (#36) */}
+          <Card id="connect" className="scroll-mt-20">
+            <CardHeader
+              title={t('clientConfig.title')}
+              description={t('clientConfig.subtitle')}
+            />
+            <ClientConfigPanel serviceId={decodedServiceId} />
+          </Card>
+
           {/* Integration */}
           <Card>
             <CardHeader
@@ -883,22 +891,15 @@ export default function ServiceDetailPage() {
               <p className="text-sm text-muted-foreground">{t('services.detail.snippetsUnavailable')}</p>
             ) : (
               <div className="space-y-4">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <Tabs
-                    size="sm"
-                    value={activeFamily.key}
-                    onChange={selectFamily}
-                    className="min-w-0 flex-1"
-                    items={SNIPPET_FAMILIES.map((f) => ({ key: f.key, label: t(f.labelKey), icon: f.icon }))}
-                  />
+                <div className="flex flex-wrap items-center gap-3">
                   <SegmentedControl
                     size="sm"
-                    value={activeVariant}
+                    value={snippetVariant}
                     onChange={setSnippetVariant}
-                    items={activeFamily.variants.map((v) => ({ key: v, label: t(`services.detail.snippetVariant.${v}`) }))}
+                    items={FASTMCP_VARIANTS.map((v) => ({ key: v, label: t(`services.detail.snippetVariant.${v}`), icon: Code2 }))}
                   />
                 </div>
-                <CodeBlock title={activeSnippetTitle} language={activeFamily.lang} value={snippets[activeSnippetKey]} rows={22} />
+                <CodeBlock title={activeSnippetTitle} language="python" value={snippets[activeSnippetKey]} rows={22} />
                 <DescriptionList
                   items={[
                     { label: t('services.detail.issuerLabel'), value: snippets.issuer, mono: true },

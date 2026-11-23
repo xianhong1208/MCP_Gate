@@ -176,12 +176,27 @@ MCP Gate 只記錄這些決定;它不在 client 與 server 之間,所以單靠�
 - `POST /oauth/policy`(可帶 `etag`)回應 `{"format": 1, "hash_version": 1, "audience", "service_id", "tools": {"approved": [...], "pending": [...], "rejected": [...]}, "rules": [], "unchanged": false, "etag", "now"}`,每個清單都是 64 位十六進位雜湊。其他雜湊都算未知:隱藏並回報。`rules` 保留給 1.6 的 tool 層級 policy,目前是空的;不認得的欄位請忽略。帶上手上的 `etag`,若沒有變化就只回 `{"unchanged": true, "etag", "now"}`。server 被停用或刪除時,所有清單都是空的。
 - `POST /oauth/tool-report`,`tools` 是 `tools/list` 回傳格式的 tool 物件 JSON 陣列(最多 200 個、body 最大 2 MiB、每個 client 每分鐘 30 次、每份定義最大 64 KiB)。MCP Gate 會自己為每份定義計算雜湊:一併送來的 `hash` 只拿來比對,不同的會列在 `hash_mismatch`。回應是 `{"recorded": [{"name", "hash", "state", "new"}], "invalid": [{"index", "name", "reason"}], "hash_mismatch": [...]}`。回報和重新整理走同一套規則,只是它沒提到的 tool 不受影響。新的定義會以 `tool_report` 記入稽核日誌,執行者是該 resource server。
 
+### 連接 MCP client
+
+每台 server 頁面上的 **連接用戶端** 面板(服務列表的插頭圖示也會帶到這裡;列表上方的 **連接用戶端** 則一次產生所有 server),提供 **Claude Code、Cursor、VS Code 與 Codex** 的現成設定:每個 client 一個分頁,client 有指令就給指令,還有它讀取的設定檔(可複製或下載)與步驟。每個片段裡的 server 網址都是那台 server 的 **audience**:client 會把它連線的網址當成 RFC 8707 的 `resource` 送出,而 MCP Gate 只接受已登記的 audience,同一台 server 換個寫法就會得到 `invalid_target`。audience 不是 `http(s)` 網址時,改用 server 自己的位址。
+
+| Client | 登入(預設) | 個人 token | 依據 |
+|---|---|---|---|
+| Claude Code | `claude mcp add --transport http <name> <url>`,再 `claude mcp login <name>`(或 `/mcp`);`.mcp.json` `{"mcpServers": {"<name>": {"type": "http", "url": …}}}` | `--header 'Authorization: Bearer ${MCP_GATE_PAT_<NAME>}'`;Claude Code 連線時才展開變數 | [Claude Code MCP](https://code.claude.com/docs/en/mcp) |
+| Cursor | **加入 Cursor** 安裝連結(`cursor://anysphere.cursor-deeplink/mcp/install`),或 `~/.cursor/mcp.json` `{"mcpServers": {"<name>": {"url": …}}}`;從 *Needs login* 登入 | `"headers": {"Authorization": "Bearer ${env:MCP_GATE_PAT_<NAME>}"}` | [Cursor MCP](https://cursor.com/docs/context/mcp)、[安裝連結](https://cursor.com/docs/context/mcp/install-links) |
+| VS Code | `code --add-mcp '{"name": …, "type": "http", "url": …}'`,或 `.vscode/mcp.json` `{"servers": {…}}` | `password: true` 的 `promptString` input,標頭裡用 `${input:mcp-gate-pat-<name>}`:VS Code 問一次,token 存在它的秘密儲存區 | [VS Code MCP 設定](https://code.visualstudio.com/docs/agents/reference/mcp-configuration) |
+| Codex | `codex mcp add <name> --url <url>`,再 `codex mcp login <name>`;`~/.codex/config.toml` `[mcp_servers.<name>]` `url = …` | `bearer_token_env_var = "MCP_GATE_PAT_<NAME>"` | [Codex MCP](https://learn.chatgpt.com/docs/extend/mcp?surface=cli) |
+
+**登入** 不需要事先做任何事:這些 client 都會讀 server 的 protected resource metadata、找到 MCP Gate、自行註冊(Client ID Metadata Document 或動態註冊),再開啟同意頁。片段不固定 scope;client 依 server 公告的去要,MCP Gate 給 server 允許的預設 scope。`dcr_auto_approve` 關閉時,新 client 要先等管理員在 *OAuth Clients* 核准,面板會提示。**個人 token** 給沒有瀏覽器的機器(CI、遠端 shell)。片段永遠不含 token:每個都引用以 server 命名的環境變數(或 VS Code 的密碼提示),而一張 personal access token 只適用於一台 server。
+
+`GET /api/services/{id}/client-config?client=claude-code|cursor|vscode|codex&variant=oauth|pat` 回傳 `file`(`format`、`path`、`filename`、`content`)、`commands`、`install_links`、`servers`(名稱、設定鍵、網址、接受的 scope、PAT 變數)、`docs_url`、`issuer`、`dcr_auto_approve`、`requires_auth`,`pat` 另有 `pat_page`;加 `&download=1` 只回傳設定檔附件。`GET /api/client-config` 對所有啟用中的 server 做同樣的事(依名稱排序),沒有位址的列在 `skipped`。兩者都需要管理台登入(與讀取 server 相同),錯誤為 `409 client_config.no_url` / `422 client_config.unknown_client` / `422 client_config.unknown_variant`。設定鍵是 server 名稱只留 `A–Z a–z 0–9 - _`(重複時加編號),每個值都依它落入的 shell、JSON 或 TOML 正確跳脫。
+
 ## 使用管理台
 
 | 頁面 | 在這裡做什麼 |
 |---|---|
 | **Dashboard** | 服務健康、token 活動、最近事件、系統狀態。 |
-| **Services** | 登記或掃描 MCP server、設定 audience 與允許的 scope、宣告 server 專屬 scope、更新 tools 並核准新的或變更的 tool([Tool 釘選與核准](#tool-釘選與核准))、執行健康檢查、複製接入片段。 |
+| **Services** | 登記或掃描 MCP server、設定 audience 與允許的 scope、宣告 server 專屬 scope、更新 tools 並核准新的或變更的 tool([Tool 釘選與核准](#tool-釘選與核准))、執行健康檢查、複製接入片段與用戶端設定([連接 MCP client](#連接-mcp-client))。 |
 | **Tokens · Issue Token** | MCP Gate 簽發過的所有 token——OAuth 授權與 PAT——含撤銷、到期與最後使用資訊。 |
 | **OAuth Clients** | 動態註冊、中繼資料文件與受信任的 client:核准、撤銷、刪除;scope 註冊表;簽章金鑰輪替。 |
 | **Marketplace** | 從 catalog 部署 MCP server,或自帶 `{command, args, env}`。 |
@@ -198,7 +213,7 @@ MCP Gate 只記錄這些決定;它不在 client 與 server 之間,所以單靠�
 | OAuth(公開) | `GET /.well-known/oauth-authorization-server` · `GET /.well-known/openid-configuration` · `GET /.well-known/jwks.json` · `POST /oauth/register` · `GET /oauth/authorize` · `GET/POST /oauth/authorize/requests/{id}[/decision]`(同意頁)· `POST /oauth/token` · `POST /oauth/revoke` · `POST /oauth/introspect` |
 | Resource server | `POST /oauth/revoked`(撤銷清單)· `POST /oauth/usage`(使用回報)· `POST /oauth/policy`(tool policy feed)· `POST /oauth/tool-report`(tool 回報);需綁定到該 server 的 confidential client,見[撤銷清單](#撤銷清單)與 [Server 上的 tool 核准](#server-上的-tool-核准) |
 | 管理台 session | `GET /api/session/status` · `POST /api/session/setup` · `POST /api/session/login` · `POST /api/session/logout` · `GET /api/session/me` · `PUT /api/session/me/{profile,password}` · `GET /api/session/oauth/{github,google}/{start,callback}` |
-| 管理 API(需登入) | `/api/services*` · `/api/oauth/{clients,scopes,tokens,consents,keys,activity,overview,snippets}` · `/api/discovery/*` · `/api/marketplace*` · `/api/managed*` · `/api/byo-mcp*` · `/api/stats/*` · `/api/audit/*` · `/api/system/*` |
+| 管理 API(需登入) | `/api/services*` · `/api/client-config` · `/api/oauth/{clients,scopes,tokens,consents,keys,activity,overview,snippets}` · `/api/discovery/*` · `/api/marketplace*` · `/api/managed*` · `/api/byo-mcp*` · `/api/stats/*` · `/api/audit/*` · `/api/system/*` |
 | 維運 | `GET /health` · `WS /ws/services`(服務狀態即時推播) |
 
 用腳本呼叫管理 API 時,先 `POST /api/session/login`,之後每個請求都要帶 `mcp_session` cookie、以 `X-Session-Binding` 標頭帶上登入回應裡的 `session_binding` 值,寫入請求還要帶同源的 `Origin` 標頭。

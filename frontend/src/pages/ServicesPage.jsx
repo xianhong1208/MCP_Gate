@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import {
   Server, Plus, Trash2, Key, RefreshCw, Check, Download,
-  Radio, Search, Activity, Wrench, Copy, Edit3, Lock, ShieldAlert, ScanSearch,
+  Radio, Search, Activity, Wrench, Copy, Edit3, Lock, ShieldAlert, ScanSearch, Plug,
 } from 'lucide-react'
 import { servicesApi, discoveryApi, oauthApi } from '../services/api'
 import { exportServicesToCSV } from '../utils/export'
@@ -12,6 +12,7 @@ import { copyToClipboard } from '../utils/clipboard'
 import useVisiblePolling from '../hooks/useVisiblePolling'
 import LastChecked from '../components/LastChecked'
 import ServiceFormModal from '../components/ServiceFormModal'
+import ClientConfigPanel from '../components/ClientConfigPanel'
 import { useConfirm } from '../contexts/ConfirmContext'
 import { useToast } from '../contexts/ToastContext'
 import HealthIndicator from '../components/HealthIndicator'
@@ -309,6 +310,7 @@ export default function ServicesPage() {
   const [showScanModal, setShowScanModal] = useState(false)
   const [editingService, setEditingService] = useState(null)
   const [viewingToolsService, setViewingToolsService] = useState(null)
+  const [showConnectAll, setShowConnectAll] = useState(false)
   const [selectedServices, setSelectedServices] = useState(new Set())
   const [isBatchDeleting, setIsBatchDeleting] = useState(false)
   const [checkingHealth, setCheckingHealth] = useState(new Set())
@@ -445,6 +447,11 @@ export default function ServicesPage() {
             />
             {services.length > 0 && (
               <IconButton variant="secondary" icon={Download} title={t('services.list.exportTitle')} onClick={() => exportServicesToCSV(services)} />
+            )}
+            {services.length > 0 && (
+              <Button variant="secondary" icon={Plug} onClick={() => setShowConnectAll(true)} title={t('clientConfig.allTitle')}>
+                {t('clientConfig.connectAll')}
+              </Button>
             )}
             <Button variant="secondary" icon={Activity} onClick={handleCheckAllHealth} disabled={isLoading} loading={checkingAll} title={t('services.list.checkAllTitle')}>
               {checkingAll ? t('services.list.checkingAll') : t('services.list.checkAll')}
@@ -585,6 +592,7 @@ export default function ServicesPage() {
                         className={clsx(isCheckingHealth && 'animate-spin')}
                       />
                       <IconButton icon={Edit3} title={t('services.list.editService')} onClick={() => setEditingService(service)} />
+                      <IconButton icon={Plug} title={t('clientConfig.connect')} to={`/services/${encodeURIComponent(service.id)}#connect`} />
                       <IconButton icon={Key} title={t('services.list.issueToken')} to={`/tokens/create?service_id=${encodeURIComponent(service.id)}`} />
                       <span className="mx-1 h-4 w-px bg-border" aria-hidden="true" />
                       <IconButton variant="destructive" icon={Trash2} title={t('services.list.deleteService')} onClick={() => handleDelete(service.id, service.name)} />
@@ -609,6 +617,13 @@ export default function ServicesPage() {
           onClose={() => setEditingService(null)}
           onSubmit={(fields) => handleUpdate(editingService.id, fields)}
         />
+      )}
+      {showConnectAll && (
+        <Dialog open onClose={() => setShowConnectAll(false)} size="2xl" title={t('clientConfig.allTitle')} description={t('clientConfig.allSubtitle')}>
+          <DialogBody>
+            <ClientConfigPanel serviceId={null} />
+          </DialogBody>
+        </Dialog>
       )}
       {viewingToolsService && <ToolsModal service={viewingToolsService} onClose={() => setViewingToolsService(null)} />}
     </div>

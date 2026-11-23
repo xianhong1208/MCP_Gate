@@ -22,7 +22,8 @@ MCP Gate puts standards-based authentication in front of every MCP server you ru
 - **Offline verification.** RS256 tokens bound to each server's audience, so a token for one server never works on another. Servers fetch the JWKS once and verify locally. Signing keys rotate on their own every 90 days, each published a day before it signs; a leaked key can be revoked from the console, and `ENCRYPTION_KEY` rotates with one command.
 - **Revocation that reaches offline verifiers.** A server polls the revocation feed and refuses a revoked token within seconds, personal access tokens included, without calling MCP Gate per request.
 - **A consent screen** for clients that register themselves, with decisions remembered per client and server.
-- **Personal access tokens** for scripts, CI and clients without OAuth, with ready-to-paste `claude mcp add` and `mcpServers` snippets.
+- **Connect a client in one step.** Each server's page has ready-made configuration for Claude Code, Cursor, VS Code and Codex (commands, the config file to copy or download, a one-click Cursor install link), signing in through MCP Gate by default. See [Connect a client](#6-connect-a-client).
+- **Personal access tokens** for scripts, CI and machines without a browser; the client snippets read them from an environment variable, never from the file.
 - **A server registry.** Register or scan MCP servers, sync their tools, watch their health, and see each tool list as a given token sees it ("Inspect as").
 - **Tool pinning.** Every tool definition is pinned by a SHA-256 hash; a new or changed tool waits for an admin, who sees a diff against the approved version before approving or rejecting it. A FastMCP middleware on your server hides every unapproved tool and reports new ones at once. See [Tool pinning and approval](docs/reference.md#tool-pinning-and-approval).
 - **Poisoning scan.** Built-in rules flag hidden instructions, invisible characters, mentions of other servers' tools, requests for secrets, suspicious URLs and encoded text in a tool definition, highlighted on the approval card. No model and no network; findings inform the approval and never block on their own. See [Poisoning scan](docs/reference.md#poisoning-scan).
@@ -249,22 +250,26 @@ curl -i -X POST http://127.0.0.1:8000/mcp \
 
 Revoke the token in the console (**Tokens → Revoke**) and, with the feed on, the next call is refused within one poll interval (15 seconds in the example).
 
-### 6. Connect an MCP client
+### 6. Connect a client
 
-Clients that speak OAuth need nothing up front. On first use they register with MCP Gate and open the consent screen in your browser:
+Open the server's page and use **Connect a client** (or the plug icon on the services list; **Connect clients** there covers every server at once). It has a tab for **Claude Code, Cursor, VS Code and Codex** with the commands, the config file to copy or download and the steps, all for that server's audience. Clients need nothing up front: on first use they find MCP Gate, register themselves and open the consent screen in your browser. For Claude Code:
 
 ```bash
 claude mcp add --transport http demo http://127.0.0.1:8000/mcp
+claude mcp login demo
 ```
 
-Clients without OAuth take the personal access token as a header:
+Codex is the same with `codex mcp add demo --url http://127.0.0.1:8000/mcp` and `codex mcp login demo`; Cursor gets an **Add to Cursor** link, VS Code a `code --add-mcp` command.
+
+On a machine without a browser (CI, a remote shell), switch the panel to **Personal token**: the snippets read a personal access token from an environment variable, never from the file:
 
 ```bash
+export MCP_GATE_PAT_DEMO='<YOUR_PAT>'
 claude mcp add --transport http demo http://127.0.0.1:8000/mcp \
-  --header "Authorization: Bearer <PERSONAL_ACCESS_TOKEN>"
+  --header 'Authorization: Bearer ${MCP_GATE_PAT_DEMO}'
 ```
 
-The **Integration** panel on each server's page generates these snippets, and the server code, for that server's own URL and audience.
+`GET /api/services/{id}/client-config?client=claude-code|cursor|vscode|codex` returns the same for scripts. See [Connecting MCP clients](docs/reference.md#connecting-mcp-clients) for each client's file shape and the documentation it follows. The **Integration** panel below it generates the server code.
 
 ## How it works
 

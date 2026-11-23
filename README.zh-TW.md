@@ -22,7 +22,8 @@ MCP Gate 把標準化的身分驗證放在你每一台 MCP server 前面。[Fast
 - **離線驗證。** RS256 token 綁定每台 server 的 audience,給 A 的 token 永遠不能打 B。server 只抓一次 JWKS,之後在本地驗證。簽章金鑰每 90 天自動輪替,新金鑰在開始簽發前一天先公開;外洩的金鑰可以在管理台撤銷,`ENCRYPTION_KEY` 也能用一個指令輪替。
 - **撤銷也傳得到離線驗證的 server。** server 輪詢撤銷清單,幾秒內就拒絕已撤銷的 token(PAT 也算在內),不必每個請求都問 MCP Gate。
 - **同意頁**:自行註冊的 client 第一次連線要你按允許,可依 client 與 server 記住決定。
-- **Personal access token(PAT)**:給腳本、CI 與不會走 OAuth 的 client,附可直接貼上的 `claude mcp add` 與 `mcpServers` 片段。
+- **一步連上 client。** 每台 server 頁面都有 Claude Code、Cursor、VS Code 與 Codex 的現成設定(指令、可複製或下載的設定檔、Cursor 一鍵安裝連結),預設透過 MCP Gate 登入。見[連上 client](#6-連上-client)。
+- **Personal access token(PAT)**:給腳本、CI 與沒有瀏覽器的機器;client 片段從環境變數讀取它,永遠不寫進設定檔。
 - **服務登錄。** 手動登記或掃描 MCP server、同步工具清單、監看健康狀態,還能用某張 token 的身分查看它看得到的工具(「Inspect as」)。
 - **Tool 釘選。** 每個 tool 定義都以 SHA-256 雜湊釘選;新的或變更過的 tool 要等管理員看過與已核准版本的差異後核准或拒絕。server 上的 FastMCP middleware 會隱藏所有未核准的 tool,並立刻回報新的 tool。見 [Tool 釘選與核准](docs/reference.zh-TW.md#tool-釘選與核准)。
 - **Poisoning 掃描。** 內建規則會標示 tool 定義裡藏的指令、不可見字元、提到其他 server 的 tool、索取機密、可疑網址與編碼文字,並在核准卡片上標亮。不用模型、不連網;發現只供核准時參考,本身不會擋下任何東西。見 [Poisoning 掃描](docs/reference.zh-TW.md#poisoning-掃描)。
@@ -249,22 +250,26 @@ curl -i -X POST http://127.0.0.1:8000/mcp \
 
 在管理台撤銷這張 token(**Tokens → Revoke**);開著撤銷清單時,下一次呼叫會在一個輪詢週期內被拒絕(範例是 15 秒)。
 
-### 6. 連上 MCP client
+### 6. 連上 client
 
-支援 OAuth 的 client 什麼都不用先做。第一次使用時,它會向 MCP Gate 註冊,並在瀏覽器開啟同意頁:
+打開 server 頁面,使用 **連接用戶端**(或服務列表上的插頭圖示;列表上方的 **連接用戶端** 一次涵蓋所有 server)。它為 **Claude Code、Cursor、VS Code 與 Codex** 各有一個分頁,含指令、可複製或下載的設定檔與步驟,全部依那台 server 的 audience 產生。client 什麼都不用先做:第一次使用時會自己找到 MCP Gate、自行註冊,並在瀏覽器開啟同意頁。以 Claude Code 為例:
 
 ```bash
 claude mcp add --transport http demo http://127.0.0.1:8000/mcp
+claude mcp login demo
 ```
 
-不支援 OAuth 的 client 把 personal access token 當標頭帶上:
+Codex 一樣是 `codex mcp add demo --url http://127.0.0.1:8000/mcp` 與 `codex mcp login demo`;Cursor 有 **加入 Cursor** 連結,VS Code 有 `code --add-mcp` 指令。
+
+在沒有瀏覽器的機器(CI、遠端 shell)上,把面板切到 **個人 token**:片段從環境變數讀取 personal access token,永遠不寫進設定檔:
 
 ```bash
+export MCP_GATE_PAT_DEMO='<YOUR_PAT>'
 claude mcp add --transport http demo http://127.0.0.1:8000/mcp \
-  --header "Authorization: Bearer <PERSONAL_ACCESS_TOKEN>"
+  --header 'Authorization: Bearer ${MCP_GATE_PAT_DEMO}'
 ```
 
-每台 server 頁面上的 **Integration** 面板,會依那台 server 的網址與 audience 產生這些片段,以及 server 程式碼。
+腳本可用 `GET /api/services/{id}/client-config?client=claude-code|cursor|vscode|codex` 取得相同內容。各 client 的設定檔格式與依據的文件見[連接 MCP client](docs/reference.zh-TW.md#連接-mcp-client)。下方的 **Integration** 面板產生 server 程式碼。
 
 ## 運作原理
 
