@@ -111,6 +111,24 @@ MCP 授權規範(2026-07-28)把動態註冊列為過時,改建議 [Client ID Met
 
 進階:`SERVER_HOST` / `SERVER_PORT` 可覆寫 bind 位址,只在它必須和 issuer 不同時使用(例如反向代理後面只聽 `127.0.0.1`)。完整的反向代理與 HTTPS 步驟見[部署](deploy.md)。
 
+### 動態用戶端註冊(DCR)
+
+MCP 2026-07-28 把動態用戶端註冊(RFC 7591)列為棄用,改用 [Client ID Metadata Documents](#client-id-metadata-documents)。MCP Gate 的 `/oauth/register` 照常可用,也仍列在 metadata(`registration_endpoint`)裡,給還沒改用 metadata document 的 client;新版 client 看到 server 宣告 `client_id_metadata_document_supported`(MCP Gate 有宣告)就會優先用 metadata document。啟動後第一個經由 DCR 註冊的 client 會留下一行警告說明此事,**OAuth Clients** 頁也會顯示有多少個啟用中的 client 是這樣註冊的。
+
+- **`application_type`。** 規範要求 client 註冊時送出 `application_type`(桌面 app、CLI 和 loopback redirect 用 `native`;遠端瀏覽器 app 用 `web`),因為 OpenID provider 會依它限制 redirect URI。MCP Gate 不是 OpenID provider:註冊與 metadata document 中的 `native`、`web` 都接受,其他值以 `invalid_client_metadata`(metadata document 則是 `invalid_client`)拒絕,不對 redirect URI 加任何額外規則。這個值不會被儲存。
+
+### MCP 協定版本
+
+MCP Gate 的掃描、健康檢查、*Refresh from server* 與 *Inspect as* 兩個世代的協定都會講:
+
+- **2026-07-28(無狀態)。** MCP Gate 先送 `server/discover`,協定版本、client 資訊與 capabilities 放在 `_meta`,並帶 `MCP-Protocol-Version` / `Mcp-Method` header。會回答它的 server 就不需要握手也沒有 session:每次重新整理只送一個 `tools/list`。
+- **2024-11-05 到 2025-11-25(`initialize` 握手)。** 其他任何回應 —— 像「missing session id」的 `400`、`404`、`405`、JSON-RPC「method not found」—— 依規範的向下相容規則都代表舊版 server:MCP Gate 改用 `initialize`(提出 2025-11-25,由 server 選版本),之後的請求帶 session id 與協商出的 `MCP-Protocol-Version`。
+- 新世代的錯誤(`-32022` 不支援的版本、`-32020` header 不一致、`-32021` 缺少 capability)絕不會讓它退回舊流程:不支援的版本會改用 server 列出的版本重試,否則回報「沒有共同的協定版本」。
+- MCP Gate 執行期間會依 server URL 記住它屬於哪個世代,失效時再重新探測,所以升級到 2026-07-28(或退回舊版)的 server 會在下一次檢查時被發現。
+- Server 頁面會顯示它最近一次回應所用的協定(例如 *MCP 版本 2026-07-28 · 無狀態*),MCP Gate 啟動後第一次健康檢查、掃描或重新整理之後才會出現;只保存在記憶體。`POST /api/services/{id}/health-check`、`GET /api/services/{id}`(`health.protocol_version`、`health.protocol_era`、`health.protocol_seen_at`)與 `POST /api/discovery/verify` 也會回報。
+
+你自己的 FastMCP server 不需要改:FastMCP 4 在同一個 endpoint 同時提供兩個世代,`MCPGateVerifier` 與 `MCPGateToolPinning` 在兩者下都能運作,`stateless_http=True` 也一樣。
+
 ### 撤銷清單
 
 MCP server 是離線驗證 token,單靠自己的話,被撤銷的 token 會一直有效到過期為止:access token 是 15 分鐘,PAT 則是它的整個效期。改為定期拉撤銷清單的 server,會在一個拉取間隔內拒絕它:

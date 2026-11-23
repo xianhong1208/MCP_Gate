@@ -120,7 +120,8 @@ async def scan_services(request: ScanRequest, http_request: Request, db: Session
                 host=svc.host, port=svc.port, protocol=svc.protocol, mcp_path=svc.mcp_path,
                 server_name=vr.server_name if vr else None, server_version=vr.server_version if vr else None,
                 server_description=vr.server_description if vr else None,
-                protocol_version=vr.protocol_version if vr else None, tools_count=len(svc.tools),
+                protocol_version=vr.protocol_version if vr else None, protocol_era=vr.protocol_era if vr else None,
+                tools_count=len(svc.tools),
                 requires_auth=svc.requires_auth,
             )
             if request.auto_register:
@@ -200,7 +201,8 @@ async def verify_service(request: VerifyRequest, db: Session = Depends(get_db),
             auth_token=request.auth_token, token_factory=_scanner_token_factory(db),
         )
         return VerifyResponse(
-            success=result.success, protocol_version=result.protocol_version, server_name=result.server_name,
+            success=result.success, protocol_version=result.protocol_version, protocol_era=result.protocol_era,
+            server_name=result.server_name,
             server_version=result.server_version, capabilities=result.capabilities, error=result.error,
             response_time_ms=result.response_time_ms,
         )

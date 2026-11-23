@@ -18,12 +18,12 @@ MCP Gate 把標準化的身分驗證放在你每一台 MCP server 前面。[Fast
 
 ## 主要特色
 
-- **標準化的授權伺服器。** 涵蓋 [MCP 規範](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization)的授權部分:RFC 8414 metadata、RFC 7591 動態註冊、Client ID Metadata Documents(MCP 2026-07-28 的註冊方式)、authorization code + PKCE、refresh token 輪替與重放偵測、RFC 7009 撤銷、RFC 7662 內省、RFC 8707 resource indicator、RFC 9207 `iss`,以及 `private_key_jwt` client 驗證。
+- **標準化的授權伺服器。** 涵蓋 [MCP 規範](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization)(2026-07-28)的授權部分:RFC 8414 metadata、Client ID Metadata Documents(建議的註冊方式)、RFC 7591 動態註冊(規範已列為棄用,仍支援)、authorization code + PKCE、refresh token 輪替與重放偵測、RFC 7009 撤銷、RFC 7662 內省、RFC 8707 resource indicator、RFC 9207 `iss`,以及 `private_key_jwt` client 驗證。
 - **離線驗證。** RS256 token 綁定每台 server 的 audience,給 A 的 token 永遠不能打 B。server 只抓一次 JWKS,之後在本地驗證。簽章金鑰每 90 天自動輪替,新金鑰在開始簽發前一天先公開;外洩的金鑰可以在管理台撤銷,`ENCRYPTION_KEY` 也能用一個指令輪替。
 - **撤銷也傳得到離線驗證的 server。** server 輪詢撤銷清單,幾秒內就拒絕已撤銷的 token(PAT 也算在內),不必每個請求都問 MCP Gate。
 - **同意頁**:自行註冊的 client 第一次連線要你按允許,可依 client 與 server 記住決定。
 - **Personal access token(PAT)**:給腳本、CI 與不會走 OAuth 的 client,附可直接貼上的 `claude mcp add` 與 `mcpServers` 片段。
-- **服務登錄。** 手動登記或掃描 MCP server、同步工具清單、監看健康狀態,還能用某張 token 的身分查看它看得到的工具(「Inspect as」)。
+- **服務登錄。** 手動登記或掃描 MCP server、同步工具清單、監看健康狀態,還能用某張 token 的身分查看它看得到的工具(「Inspect as」)。支援 MCP 2026-07-28(`server/discover`、無狀態 server),遇到 2024-11-05 到 2025-11-25 的 server 則退回 `initialize` 握手;每個 server 的頁面會顯示它用哪一版回應。見 [MCP 協定版本](docs/reference.zh-TW.md#mcp-協定版本)。
 - **Tool 釘選。** 每個 tool 定義都以 SHA-256 雜湊釘選;新的或變更過的 tool 要等管理員看過與已核准版本的差異後核准或拒絕。server 上的 FastMCP middleware 會隱藏所有未核准的 tool,並立刻回報新的 tool。見 [Tool 釘選與核准](docs/reference.zh-TW.md#tool-釘選與核准)。
 - **Poisoning 掃描。** 內建規則會標示 tool 定義裡藏的指令、不可見字元、提到其他 server 的 tool、索取機密、可疑網址與編碼文字,並在核准卡片上標亮。不用模型、不連網;發現只供核准時參考,本身不會擋下任何東西。見 [Poisoning 掃描](docs/reference.zh-TW.md#poisoning-掃描)。
 - **Marketplace 與 orchestrator。** 從 catalog 部署 MCP server,或貼一段 `{command, args, env}`,由 MCP Gate 掛上 HTTP bridge,跑在 Docker 或本機行程裡。
@@ -191,6 +191,8 @@ def whoami() -> dict:
 if __name__ == "__main__":
     feeds = "on" if isinstance(verifier, MCPGateVerifier) else "off"
     print(f"MCP Gate: {MCP_GATE}   audience: {AUDIENCE}   revocation feed: {feeds}   tool approvals: {feeds}")
+    # Serves MCP 2026-07-28 (stateless) and older clients on the same endpoint. Add stateless_http=True to keep no
+    # sessions for older clients either (e.g. behind a load balancer); MCPGateVerifier and the middleware work both ways.
     mcp.run(transport="http", host=HOST, port=PORT)
 ```
 
@@ -251,7 +253,7 @@ curl -i -X POST http://127.0.0.1:8000/mcp \
 
 ### 6. 連上 MCP client
 
-支援 OAuth 的 client 什麼都不用先做。第一次使用時,它會向 MCP Gate 註冊,並在瀏覽器開啟同意頁:
+支援 OAuth 的 client 什麼都不用先做。第一次使用時,它會以 Client ID Metadata Document 表明身分(較舊的 client 則用動態註冊),並在瀏覽器開啟同意頁:
 
 ```bash
 claude mcp add --transport http demo http://127.0.0.1:8000/mcp

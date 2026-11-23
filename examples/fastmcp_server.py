@@ -60,4 +60,6 @@ def whoami() -> dict:
 if __name__ == "__main__":
     print(f"MCP Gate : {MCP_GATE}")
     print(f"MCP URL    : {BASE_URL}/mcp   (audience={AUDIENCE})")
+    # Serves MCP 2026-07-28 (stateless) and older clients on the same endpoint. Add stateless_http=True to keep no
+    # sessions for older clients either (e.g. behind a load balancer); MCPGateVerifier and the middleware work both ways.
     mcp.run(transport="http", host=HOST, port=PORT)

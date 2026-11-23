@@ -28,7 +28,7 @@ from src.scheduler import get_scheduler
 from src.tool_pinning.scan import SCAN_RULES_VERSION, freeze_registry, is_flagged, scan_tool, summarize
 from src.utils.crypto import encrypt_token
 from src.utils.field_limits import FieldTooLongError, check_max_length
-from src.utils.mcp_target import InvalidTargetError
+from src.utils.mcp_target import InvalidTargetError, build_mcp_url
 from src.version import __build_commit__, __build_time__, __version__
 
 logger = get_logger("api")
@@ -91,9 +91,23 @@ def _pending_flagged(tools, registry) -> int:
     return count
 
 
+def _protocol_seen(service: Service) -> dict:
+    """How the scanner / health check last talked to this server since MCP Gate started (memory only)."""
+    from src.discovery.scanner import get_scanner
+    try:
+        url = build_mcp_url(service.protocol, service.host, service.port, service.mcp_path)
+    except (InvalidTargetError, TypeError, ValueError):
+        return {}
+    seen = get_scanner().protocol_seen(url)
+    if seen is None:
+        return {}
+    return {"protocol_version": seen.version, "protocol_era": seen.era,
+            "protocol_seen_at": format_datetime(seen.seen_at)}
+
+
 def _service_info(service: Service, include_tools: bool = False, registry=None) -> ServiceInfo:
     data = service.to_dict(include_tools=False, include_health=True)
-    data["health"] = ServiceHealthInfo(**data["health"])
+    data["health"] = ServiceHealthInfo(**data["health"], **_protocol_seen(service))
     listed = [t for t in service.tools if t.removed_at is None]
     data["tools_count"] = len(listed)
     data["tools_pending"] = sum(1 for t in listed if t.state == "pending")
@@ -405,6 +419,7 @@ async def check_service_health(service_id: str, db: Session = Depends(get_db), _
                                      error_message=error_message, increment_fail_count=True)
     return ServiceHealthCheckResponse(service_name=adopted or service.name, status=new_status,
                                       response_time_ms=result.response_time_ms, error_message=error_message,
+                                      protocol_version=result.protocol_version, protocol_era=result.protocol_era,
                                       previous_status=previous, status_changed=new_status != previous)
 
 

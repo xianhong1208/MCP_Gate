@@ -35,6 +35,7 @@ from src.adapters import (
     OAuthTokenAdapter, ServiceAdapter, TokenUsageAdapter, normalize_audience,
 )
 from src.config import Config
+from src.logging import get_logger
 from src.oauth import client_assertion, client_metadata, signing_keys
 from src.oauth.consent_policy import should_skip_consent
 from src.oauth.errors import OAuthError
@@ -55,6 +56,9 @@ DEFAULT_SCANNER_SCOPES = "mcp:tools:read mcp:tools:invoke mcp:resources:read mcp
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
+logger = get_logger("oauth")
+
+
 def issuer() -> str:
     return Config.get_oauth_config().issuer.rstrip("/")
 
@@ -116,6 +120,40 @@ def _loopback_only(redirect_uris: list) -> bool:
         except ValueError:
             return False
     return bool(hosts) and all(web and host in LOOPBACK_HOSTS for web, host in hosts)
+
+
+# OpenID Connect Dynamic Client Registration's application_type (MCP 2026-07-28, SEP-837: clients MUST send it in
+# DCR). MCP Gate is not an OpenID provider, so it puts no redirect-URI constraints on the value -- the spec says
+# non-OIDC servers safely ignore it -- but a value outside OIDC's two is refused so a broken client finds out.
+APPLICATION_TYPES = ("native", "web")
+
+
+def check_application_type(value) -> Optional[str]:
+    """None when absent; the value when it is "native" or "web"; otherwise OAuthError(invalid_client_metadata)."""
+    if value is None:
+        return None
+    if not isinstance(value, str) or value not in APPLICATION_TYPES:
+        raise OAuthError("invalid_client_metadata", 'application_type must be "native" or "web"')
+    return value
+
+
+# MCP 2026-07-28 deprecates Dynamic Client Registration in favour of Client ID Metadata Documents. MCP Gate keeps
+# it for older clients and says so once per process when one registers.
+DCR_DEPRECATION_NOTICE = (
+    "Dynamic Client Registration is deprecated by MCP 2026-07-28 in favour of Client ID Metadata Documents; "
+    "it keeps working for older clients (see docs/reference.md, 'Dynamic Client Registration')."
+)
+_dcr_notice_logged = False
+
+
+def log_dcr_deprecation_once() -> bool:
+    """Log DCR_DEPRECATION_NOTICE the first time a client registers through DCR. True when it was logged now."""
+    global _dcr_notice_logged
+    if _dcr_notice_logged:
+        return False
+    _dcr_notice_logged = True
+    logger.warning(DCR_DEPRECATION_NOTICE)
+    return True
 
 
 def redirect_with(base: str, params: dict) -> str:
@@ -217,6 +255,8 @@ def register_client(
         if value is not None and value != "" and not _valid_info_uri(value):
             raise OAuthError("invalid_client_metadata",
                              f"{field} must be an https URL (http only for localhost / loopback)")
+
+    check_application_type(metadata.get("application_type"))
 
     if is_approved is None:
         is_approved = True if created_via != "dcr" else Config.get_oauth_config().dcr_auto_approve
