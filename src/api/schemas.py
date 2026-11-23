@@ -44,6 +44,11 @@ class ServiceHealthInfo(BaseModel):
     response_time_ms: Optional[float] = None
     error_message: Optional[str] = None
     fail_count: int = 0
+    # How MCP Gate last talked to the server since it started (kept in memory, not stored): the protocol revision
+    # and era -- "modern" = server/discover, stateless (MCP 2026-07-28+); "legacy" = the initialize handshake
+    protocol_version: Optional[str] = None
+    protocol_era: Optional[str] = None
+    protocol_seen_at: Optional[str] = None
 
 
 ToolHash = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
@@ -218,6 +223,7 @@ class DiscoveredServiceInfo(BaseModel):
     server_version: Optional[str] = None
     server_description: Optional[str] = None
     protocol_version: Optional[str] = None
+    protocol_era: Optional[str] = None
     tools_count: int = 0
     requires_auth: bool = False
     registered: bool = False
@@ -256,6 +262,7 @@ class VerifyRequest(BaseModel):
 class VerifyResponse(BaseModel):
     success: bool
     protocol_version: Optional[str] = None
+    protocol_era: Optional[str] = None
     server_name: Optional[str] = None
     server_version: Optional[str] = None
     capabilities: Optional[dict] = None
@@ -268,6 +275,8 @@ class ServiceHealthCheckResponse(BaseModel):
     status: str
     response_time_ms: Optional[float] = None
     error_message: Optional[str] = None
+    protocol_version: Optional[str] = None
+    protocol_era: Optional[str] = None
     previous_status: Optional[str] = None
     status_changed: bool = False
 

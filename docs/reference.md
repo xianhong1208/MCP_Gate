@@ -111,6 +111,24 @@ Dynamic registration (`/oauth/register`) keeps working alongside; set `OAUTH_CIM
 
 Advanced: `SERVER_HOST` / `SERVER_PORT` override the bind address when it must differ from the issuer, for example listening on `127.0.0.1` behind a reverse proxy. See [Deploy](deploy.md) for the full reverse-proxy and HTTPS procedure.
 
+### Dynamic Client Registration
+
+MCP 2026-07-28 deprecates Dynamic Client Registration (RFC 7591) in favour of [Client ID Metadata Documents](#client-id-metadata-documents). MCP Gate keeps `/oauth/register` working and listed in its metadata (`registration_endpoint`) for clients that do not use metadata documents yet; current clients prefer a metadata document when the server advertises `client_id_metadata_document_supported`, which MCP Gate does. The first registration through DCR after a start logs one warning saying so, and **OAuth Clients** shows how many active clients came in that way.
+
+- **`application_type`.** The specification asks clients to send `application_type` (`native` for desktop apps, CLIs and loopback redirects; `web` for remote browser apps) when they register, because OpenID providers restrict redirect URIs by it. MCP Gate is not an OpenID provider: it accepts `native` and `web` from registrations and metadata documents, refuses any other value with `invalid_client_metadata` (or `invalid_client` for a document), and puts no extra rule on the redirect URIs. The value is not stored.
+
+### MCP protocol versions
+
+MCP Gate's scanner, health checks, *Refresh from server* and *Inspect as* speak both eras of the protocol:
+
+- **2026-07-28 (stateless).** MCP Gate first sends `server/discover` with the protocol version, its client info and capabilities in `_meta` and the `MCP-Protocol-Version` / `Mcp-Method` headers. A server that answers it is read without a handshake or a session: one `tools/list` per refresh.
+- **2024-11-05 to 2025-11-25 (`initialize` handshake).** Any other answer — a `400` such as "missing session id", `404`, `405`, a JSON-RPC "method not found" — means an older server, as the specification's backward-compatibility rules say: MCP Gate falls back to `initialize` (offering 2025-11-25; the server picks the version), then sends the session id and the negotiated `MCP-Protocol-Version` on the following requests.
+- A modern error (`-32022` unsupported version, `-32020` header mismatch, `-32021` missing capability) is never a reason to fall back: an unsupported version is retried with one the server lists, or reported as "no protocol version in common".
+- The era is remembered per server URL while MCP Gate runs and probed again when it stops working, so a server upgraded to 2026-07-28 (or rolled back) is picked up by the next check.
+- The server's page shows the protocol it last answered with (for example *MCP version 2026-07-28 · stateless*) after the first health check, scan or refresh since MCP Gate started; it is kept in memory only. `POST /api/services/{id}/health-check`, `GET /api/services/{id}` (`health.protocol_version`, `health.protocol_era`, `health.protocol_seen_at`) and `POST /api/discovery/verify` report it.
+
+Your own FastMCP server needs no change: FastMCP 4 serves both eras on one endpoint, and `MCPGateVerifier` and `MCPGateToolPinning` work in either, also with `stateless_http=True`.
+
 ### Revocation feed
 
 MCP servers verify tokens offline, so on its own a server keeps accepting a revoked token until it expires — 15 minutes for an access token, as long as its lifetime for a personal access token. A server that polls the revocation feed rejects it within one poll interval instead:

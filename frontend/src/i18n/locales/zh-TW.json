@@ -632,6 +632,10 @@
       "audienceCustom": "自訂 audience,簽給此 server 的 token 會帶完全相同的值。",
       "audienceDefault": "預設使用 MCP URL;若 server 端期望其他值,請在服務設定中自訂 audience。",
       "staticTokenBadge": "已設定靜態 Bearer token",
+      "protocol": "MCP 版本",
+      "protocolModern": "無狀態",
+      "protocolLegacy": "initialize 握手",
+      "protocolHint": "MCP Gate 最近一次與此伺服器溝通的方式（{{when}}）。只保存在記憶體：MCP Gate 啟動後，第一次健康檢查、掃描或重新整理工具之後才會顯示。",
       "scopesTitle": "允許的 scope",
       "scopesAll": "不限制,任何已註冊的 scope 都可簽發。",
       "ownScopesTitle": "此伺服器宣告的 scope",
@@ -797,6 +801,8 @@
       "pending": "待核准",
       "revoked": "已撤銷"
     },
+    "dcrNotice_other": "有 {{count}} 個用戶端是透過動態用戶端註冊（DCR）註冊的；MCP 2026-07-28 已將 DCR 列為棄用，改用 Client ID Metadata Document（以 https 網址作為 client id）。這些用戶端仍可正常使用；新版 MCP 用戶端會自動改用 metadata document。",
+    "dcrBadgeHint": "MCP 2026-07-28 已將動態用戶端註冊列為棄用；舊版用戶端仍可使用。",
     "via": {
       "dcr": "動態註冊",
       "cimd": "中繼資料文件",
