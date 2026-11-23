@@ -28,6 +28,8 @@ PostgreSQL 上跑的 CI,以及一輪針對 OAuth 端點、管理台 session、�
 
 **1.4.0(2026-11-14),安全與維運。** 自動產生的密鑰改放在獨立的 `secrets/` 目錄,不再和資料庫放在一起。簽章金鑰每 90 天自動輪替(啟用前一天先公開;主控台有「立即輪替」與緊急「撤銷」),加密金鑰也能不停機輪替。官方 Docker image(`tonyhuang1101/mcp-gate`)與 compose 檔。設定改為 `config/` 下的五個檔案。密鑰 volume 遺失時會拒絕啟動,而不是啟動一個無法簽發 token 的伺服器。
 
+**1.5.0(2026-11-23),認識你的工具。** server 列出的每個工具都用雜湊值釘住,新出現或有變動的工具要等管理員核准;使用 FastMCP middleware 的 server 在核准前會把它藏起來,規則透過新的工具政策清單送達(從沒拿到清單時預設關閉)。內建的 poisoning 掃描會在核准卡片上標出隱藏字元、注入的指示、冒名其他工具、密鑰與可疑網址。支援 MCP 2026-07-28:`server/discover`、無狀態 server、`application_type`,以及動態註冊 client 的淘汰提醒。每個 server 的頁面都能直接匯出 Claude Code、Cursor、VS Code 與 Codex 的設定。
+
 細節見 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 接下來幾版怎麼搭在一起
@@ -43,7 +45,6 @@ MCP Gate 會在同一個管理台管兩種 server:
 
 | 版本 | 你會得到 |
 |---|---|
-| **1.5:認識你的工具** | 每個工具的描述與輸入 schema 都用雜湊值釘住,**新出現或有變動的工具,在管理員核准前都不會被看到**。掃描工具描述裡的 prompt injection(「tool poisoning」)。支援 MCP 2026-07-28:`server/discover`、無狀態 server、動態註冊 client 的淘汰提醒、`application_type`。直接匯出 Claude Code、Cursor、VS Code 與 Codex 的 client 設定。 |
 | **1.6:誰能呼叫什麼** | **工具層級的政策:** 把工具對應到 scope,依 token 或 client 允許或拒絕個別工具。規則透過政策清單送到你的 server,由 README 範例裡同一套 `MCPGateVerifier` / FastMCP middleware 擴充後執行,請求一樣不經過 MCP Gate。**Step-up:** 權限不夠的呼叫會回 `WWW-Authenticate: … scope=`,client 再去申請。**工具組合(bundle)**,一次授權一組工具。**「Inspect as」** 會列出一張 token 能呼叫和不能呼叫的工具。 |
 | **1.7:看見每一次呼叫** | 工具呼叫的稽核紀錄(工具、呼叫者、結果與時間;預設不記錄參數)。每個工具的延遲與錯誤。配額。OpenTelemetry 匯出。告警。 |
 | **1.8:目錄與供應鏈** | Marketplace 與官方 MCP Registry 同步。server 版本會固定,升級要先審查才會套用。檢查 image 簽章。MCP Gate 執行的 server 有沙箱限制。 |

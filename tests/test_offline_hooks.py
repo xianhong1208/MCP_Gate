@@ -158,6 +158,23 @@ def test_metadata_advertises_extension_endpoints(client):
 # ---------------------------------------------------------------------------
 # examples/mcp_gate_hooks.py against the app, in-process
 # ---------------------------------------------------------------------------
+async def stop_verifier(verifier):
+    """Stop a verifier's background sync between requests, not inside one: cancelling it while its first feed poll
+    is being answered in-process cancels the request mid-commit, which PostgreSQL runs report as an unraisable
+    IllegalStateChangeError from get_db."""
+    import asyncio
+
+    task = verifier._task
+    if task is None:
+        return
+    for _ in range(100):
+        if verifier._last_poll is not None or task.done():
+            break
+        await asyncio.sleep(0.05)
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+
+
 def _load_hooks_module():
     path = pathlib.Path(__file__).resolve().parents[1] / "examples" / "mcp_gate_hooks.py"
     spec = importlib.util.spec_from_file_location("mcp_gate_hooks", path)
@@ -192,8 +209,7 @@ async def test_verifier_rejects_after_poll_and_reports_usage(owner_client, servi
         assert verifier._pending == {}
         tok = owner_client.get(f"/api/oauth/tokens/{pat['jti']}").json()
         assert tok["use_count"] == 2
-        if verifier._task:
-            verifier._task.cancel()
+        await stop_verifier(verifier)
 
 
 @pytest.mark.asyncio
@@ -215,5 +231,4 @@ async def test_verifier_with_private_key_jwt_client(owner_client, service, app):
         assert (await verifier.verify_token(pat["access_token"])) is not None
         await verifier.sync_once()  # both endpoints accept the assertion
         assert owner_client.get(f"/api/oauth/tokens/{pat['jti']}").json()["use_count"] == 1
-        if verifier._task:
-            verifier._task.cancel()
+        await stop_verifier(verifier)

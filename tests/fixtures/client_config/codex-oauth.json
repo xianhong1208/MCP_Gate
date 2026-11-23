@@ -1,0 +1,44 @@
+{
+  "client": "codex",
+  "variant": "oauth",
+  "issuer": "https://gate.example.com",
+  "docs_url": "https://learn.chatgpt.com/docs/extend/mcp?surface=cli",
+  "servers": [
+    {
+      "name": "Folio",
+      "key": "Folio",
+      "url": "https://folio.example.com/mcp",
+      "scopes": [
+        "rag:read"
+      ]
+    },
+    {
+      "name": "Morph yard",
+      "key": "Morph-yard",
+      "url": "http://127.0.0.1:5055/mcp",
+      "scopes": []
+    },
+    {
+      "name": "Folio",
+      "key": "Folio-2",
+      "url": "https://other.example.com/mcp",
+      "scopes": []
+    }
+  ],
+  "file": {
+    "format": "toml",
+    "filename": "config.toml",
+    "path": "~/.codex/config.toml",
+    "content": "[mcp_servers.Folio]\nurl = \"https://folio.example.com/mcp\"\n\n[mcp_servers.Morph-yard]\nurl = \"http://127.0.0.1:5055/mcp\"\n\n[mcp_servers.Folio-2]\nurl = \"https://other.example.com/mcp\"\n"
+  },
+  "commands": [
+    "codex mcp add Folio --url https://folio.example.com/mcp",
+    "codex mcp login Folio",
+    "codex mcp add Morph-yard --url http://127.0.0.1:5055/mcp",
+    "codex mcp login Morph-yard",
+    "codex mcp add Folio-2 --url https://other.example.com/mcp",
+    "codex mcp login Folio-2"
+  ],
+  "install_links": [],
+  "pat_page": null
+}

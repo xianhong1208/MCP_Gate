@@ -9,7 +9,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import (
-    Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, Uuid, true as sa_true,
+    Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, Uuid, false as sa_false, true as sa_true,
 )
 from sqlalchemy.orm import relationship
 
@@ -196,26 +196,123 @@ class Service(Base):
         return data
 
 
+# Tool pinning (#32): the states a tool version can be in
+TOOL_STATE_APPROVED = "approved"
+TOOL_STATE_PENDING = "pending"
+TOOL_STATE_REJECTED = "rejected"
+TOOL_STATES = (TOOL_STATE_APPROVED, TOOL_STATE_PENDING, TOOL_STATE_REJECTED)
+# decided_by of the versions approved as the baseline when an existing deployment upgraded to pinning
+TOOL_BASELINE_ACTOR = "upgrade"
+# Where a tool version was first seen (#33): a refresh / scan by MCP Gate, or a report from the server itself
+# (POST /oauth/tool-report, sent by the pinning middleware when it lists a definition MCP Gate has not approved)
+TOOL_SOURCE_SCAN = "scan"
+TOOL_SOURCE_REPORTED = "reported"
+TOOL_SOURCES = (TOOL_SOURCE_SCAN, TOOL_SOURCE_REPORTED)
+
+
+def _json_or_none(raw: str | None):
+    return json.loads(raw) if raw else None
+
+
 class MCPTool(Base):
+    """One tool of a service, by name. Its current definition (what the server listed last) is kept here; every
+    definition it has ever had is an MCPToolVersion, identified by its hash, with its own approval state (#32).
+
+    A tool the server no longer lists is not deleted: removed_at is set and its versions (and their approvals) are
+    kept, so it comes back with its history if the server lists it again."""
     __tablename__ = "mcp_tools"
+    __table_args__ = (UniqueConstraint("service_id", "name", name="uq_mcp_tools_service_id_name"),)
 
     id = Column(Uuid, primary_key=True, default=uuid.uuid4)
     service_id = Column(Uuid, ForeignKey("services.id", ondelete="CASCADE"), nullable=False, index=True)
     name = Column(String(128), nullable=False)
+    title = Column(Text, nullable=True)
     description = Column(Text, nullable=True)
     input_schema = Column(Text, nullable=True)
+    output_schema = Column(Text, nullable=True)
+    annotations = Column(Text, nullable=True)
+    # SHA-256 (hex) of the current definition: src/tool_pinning/hashing.py
+    current_hash = Column(String(64), nullable=True)
+    last_seen_at = Column(DateTime, nullable=True)
+    # Set when a refresh no longer lists the tool; cleared when it is listed again
+    removed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=local_now, nullable=False)
 
     service = relationship("Service", back_populates="tools")
+    versions = relationship("MCPToolVersion", back_populates="tool", cascade="all, delete-orphan",
+                            order_by="MCPToolVersion.first_seen_at")
+
+    @property
+    def current_version(self):
+        return next((v for v in self.versions if v.hash == self.current_hash), None)
+
+    @property
+    def state(self) -> str:
+        """The approval state of the current definition (pending when it has none recorded)."""
+        current = self.current_version
+        return current.state if current is not None else TOOL_STATE_PENDING
+
+    @property
+    def approved_version(self):
+        """The most recently approved version, for comparing a pending change with it."""
+        approved = [v for v in self.versions if v.state == TOOL_STATE_APPROVED]
+        return max(approved, key=lambda v: (v.decided_at or v.first_seen_at, v.first_seen_at)) if approved else None
 
     def to_dict(self) -> dict:
         return {
             "id": str(self.id),
             "service_id": str(self.service_id),
             "name": self.name,
+            "title": self.title,
             "description": self.description,
-            "input_schema": json.loads(self.input_schema) if self.input_schema else None,
+            "input_schema": _json_or_none(self.input_schema),
+            "output_schema": _json_or_none(self.output_schema),
+            "annotations": _json_or_none(self.annotations),
+            "hash": self.current_hash,
+            "state": self.state,
+            "removed_at": format_datetime(self.removed_at),
             "created_at": format_datetime(self.created_at),
+        }
+
+
+class MCPToolVersion(Base):
+    """One definition a tool has had, pinned by its hash, with an approval state (#32).
+
+    definition is the canonical JSON the hash was taken over, so an old version can be shown and diffed. A version
+    is never deleted while its tool exists: approving a change keeps the earlier approved version for comparison."""
+    __tablename__ = "mcp_tool_versions"
+    __table_args__ = (UniqueConstraint("tool_id", "hash", name="uq_mcp_tool_versions_tool_id_hash"),)
+
+    id = Column(Uuid, primary_key=True, default=uuid.uuid4)
+    tool_id = Column(Uuid, ForeignKey("mcp_tools.id", ondelete="CASCADE"), nullable=False, index=True)
+    hash = Column(String(64), nullable=False)
+    definition = Column(Text, nullable=False)
+    state = Column(String(16), nullable=False, default=TOOL_STATE_PENDING)
+    first_seen_at = Column(DateTime, default=local_now, nullable=False)
+    last_seen_at = Column(DateTime, default=local_now, nullable=False)
+    decided_at = Column(DateTime, nullable=True)
+    # Who approved or rejected it (the admin's audit name), or "upgrade" for the baseline approval
+    decided_by = Column(String(256), nullable=True)
+    # Approved by the upgrade from a definition that only knew name, description and inputSchema (title,
+    # outputSchema and annotations were never stored before pinning): see MCPToolCRUD.sync_tools
+    legacy_baseline = Column(Boolean, nullable=False, default=False, server_default=sa_false())
+    # How MCP Gate first learned this definition: TOOL_SOURCE_SCAN or TOOL_SOURCE_REPORTED (#33)
+    source = Column(String(16), nullable=False, default=TOOL_SOURCE_SCAN, server_default=TOOL_SOURCE_SCAN)
+
+    tool = relationship("MCPTool", back_populates="versions")
+
+    def to_dict(self) -> dict:
+        return {
+            "id": str(self.id),
+            "hash": self.hash,
+            "state": self.state,
+            "definition": json.loads(self.definition),
+            "first_seen_at": format_datetime(self.first_seen_at),
+            "last_seen_at": format_datetime(self.last_seen_at),
+            "decided_at": format_datetime(self.decided_at),
+            "decided_by": self.decided_by,
+            "baseline": self.decided_by == TOOL_BASELINE_ACTOR,
+            "source": self.source or TOOL_SOURCE_SCAN,
         }
 
 
@@ -314,6 +411,9 @@ class OAuthClient(Base):
     # When this resource server last read the revocation feed (POST /oauth/revoked): tells the console whether a
     # revocation reaches the server before the token expires
     revocation_polled_at = Column(DateTime, nullable=True)
+    # When this resource server last read the tool policy feed (POST /oauth/policy, #33): tells the console whether
+    # the server enforces tool approvals (its pinning middleware hides unapproved tools)
+    policy_polled_at = Column(DateTime, nullable=True)
     # created_via = cimd: when the client's metadata document was last fetched and stored (the client_id is the
     # document's https URL; see src/oauth/client_metadata.py)
     metadata_fetched_at = Column(DateTime, nullable=True)
@@ -350,6 +450,7 @@ class OAuthClient(Base):
             "updated_at": format_datetime(self.updated_at),
             "last_used_at": format_datetime(self.last_used_at),
             "revocation_polled_at": format_datetime(self.revocation_polled_at),
+            "policy_polled_at": format_datetime(self.policy_polled_at),
             "metadata_fetched_at": format_datetime(self.metadata_fetched_at),
         }
 

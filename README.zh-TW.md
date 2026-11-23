@@ -18,12 +18,15 @@ MCP Gate 把標準化的身分驗證放在你每一台 MCP server 前面。[Fast
 
 ## 主要特色
 
-- **標準化的授權伺服器。** 涵蓋 [MCP 規範](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization)的授權部分:RFC 8414 metadata、RFC 7591 動態註冊、Client ID Metadata Documents(MCP 2026-07-28 的註冊方式)、authorization code + PKCE、refresh token 輪替與重放偵測、RFC 7009 撤銷、RFC 7662 內省、RFC 8707 resource indicator、RFC 9207 `iss`,以及 `private_key_jwt` client 驗證。
+- **標準化的授權伺服器。** 涵蓋 [MCP 規範](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization)(2026-07-28)的授權部分:RFC 8414 metadata、Client ID Metadata Documents(建議的註冊方式)、RFC 7591 動態註冊(規範已列為棄用,仍支援)、authorization code + PKCE、refresh token 輪替與重放偵測、RFC 7009 撤銷、RFC 7662 內省、RFC 8707 resource indicator、RFC 9207 `iss`,以及 `private_key_jwt` client 驗證。
 - **離線驗證。** RS256 token 綁定每台 server 的 audience,給 A 的 token 永遠不能打 B。server 只抓一次 JWKS,之後在本地驗證。簽章金鑰每 90 天自動輪替,新金鑰在開始簽發前一天先公開;外洩的金鑰可以在管理台撤銷,`ENCRYPTION_KEY` 也能用一個指令輪替。
 - **撤銷也傳得到離線驗證的 server。** server 輪詢撤銷清單,幾秒內就拒絕已撤銷的 token(PAT 也算在內),不必每個請求都問 MCP Gate。
 - **同意頁**:自行註冊的 client 第一次連線要你按允許,可依 client 與 server 記住決定。
-- **Personal access token(PAT)**:給腳本、CI 與不會走 OAuth 的 client,附可直接貼上的 `claude mcp add` 與 `mcpServers` 片段。
-- **服務登錄。** 手動登記或掃描 MCP server、同步工具清單、監看健康狀態,還能用某張 token 的身分查看它看得到的工具(「Inspect as」)。
+- **一步連上 client。** 每台 server 頁面都有 Claude Code、Cursor、VS Code 與 Codex 的現成設定(指令、可複製或下載的設定檔、Cursor 一鍵安裝連結),預設透過 MCP Gate 登入。見[連上 client](#6-連上-client)。
+- **Personal access token(PAT)**:給腳本、CI 與沒有瀏覽器的機器;client 片段從環境變數讀取它,永遠不寫進設定檔。
+- **服務登錄。** 手動登記或掃描 MCP server、同步工具清單、監看健康狀態,還能用某張 token 的身分查看它看得到的工具(「Inspect as」)。支援 MCP 2026-07-28(`server/discover`、無狀態 server),遇到 2024-11-05 到 2025-11-25 的 server 則退回 `initialize` 握手;每個 server 的頁面會顯示它用哪一版回應。見 [MCP 協定版本](docs/reference.zh-TW.md#mcp-協定版本)。
+- **Tool 釘選。** 每個 tool 定義都以 SHA-256 雜湊釘選;新的或變更過的 tool 要等管理員看過與已核准版本的差異後核准或拒絕。server 上的 FastMCP middleware 會隱藏所有未核准的 tool,並立刻回報新的 tool。見 [Tool 釘選與核准](docs/reference.zh-TW.md#tool-釘選與核准)。
+- **Poisoning 掃描。** 內建規則會標示 tool 定義裡藏的指令、不可見字元、提到其他 server 的 tool、索取機密、可疑網址與編碼文字,並在核准卡片上標亮。不用模型、不連網;發現只供核准時參考,本身不會擋下任何東西。見 [Poisoning 掃描](docs/reference.zh-TW.md#poisoning-掃描)。
 - **Marketplace 與 orchestrator。** 從 catalog 部署 MCP server,或貼一段 `{command, args, env}`,由 MCP Gate 掛上 HTTP bridge,跑在 Docker 或本機行程裡。
 - **零設定啟動。** 預設 SQLite、首次啟動自動產生密鑰、在瀏覽器裡建立擁有者帳號;換 PostgreSQL 只要一個環境變數。管理台有英文與繁體中文。
 
@@ -66,7 +69,7 @@ uv run python main.py
 docker run -d --name mcp-gate -p 4568:4568 \
   -e OAUTH_ISSUER=http://localhost:4568 \
   -v mcp-gate-data:/app/data -v mcp-gate-secrets:/app/secrets \
-  tonyhuang1101/mcp-gate:1.4.0
+  tonyhuang1101/mcp-gate:1.5.0
 docker logs mcp-gate | grep "Setup token"
 ```
 
@@ -74,13 +77,13 @@ docker logs mcp-gate | grep "Setup token"
 
 ## 快速開始
 
-以下示範用 MCP Gate 保護一台 FastMCP server、用 personal access token 呼叫它,並開啟撤銷清單。假設 MCP Gate 在 `http://localhost:4568`,server 在 `http://127.0.0.1:8000/mcp`。
+以下示範用 MCP Gate 保護一台 FastMCP server、用 personal access token 呼叫它,並開啟撤銷清單與 tool 核准。假設 MCP Gate 在 `http://localhost:4568`,server 在 `http://127.0.0.1:8000/mcp`。
 
 ### 1. 登記 server
 
 在管理台打開 **Services → Register Service**,輸入 host `127.0.0.1`、port `8000`、path `/mcp`。server 的 **audience**(token 對哪個網址有效)預設就是它的 MCP URL:`http://127.0.0.1:8000/mcp`。一定要先登記:MCP Gate 只替它認得的 audience 簽 token。
 
-### 2. (選用)為撤銷清單登記 client
+### 2. (選用)為撤銷清單與 tool 核准登記 client
 
 離線驗證的 server 單靠自己,會一直接受已撤銷的 token,直到它過期。要讓它在幾秒內拒絕,打開 **OAuth Clients → Register trusted client**,選:
 
@@ -88,28 +91,33 @@ docker logs mcp-gate | grep "Setup token"
 - 驗證方式 *Client secret*;
 - **Resource server for**:步驟 1 登記的 server。
 
-記下 client id 與 secret(secret 只顯示一次)。跳過這一步,下面的範例也能跑,只是沒有撤銷清單。
+記下 client id 與 secret(secret 只顯示一次)。同一個 client 也會讀取這台 server 的 tool 核准狀態:有了它,server 只列出並執行你在管理台核准過的 tools。跳過這一步,下面的範例也能跑,只是兩者都沒有。
 
 ### 3. 寫 server
 
-把 [`examples/mcp_gate_hooks.py`](examples/mcp_gate_hooks.py) 複製到 server 旁邊。裡面是 `MCPGateVerifier`:FastMCP 的 `JWTVerifier` 再加上撤銷清單與使用回報,只需要 `fastmcp` 和 `httpx`。接著把下面這段存成 `server.py`(就是 [`examples/fastmcp_server_hooks.py`](examples/fastmcp_server_hooks.py)):
+把 [`examples/mcp_gate_hooks.py`](examples/mcp_gate_hooks.py) 複製到 server 旁邊。裡面是 `MCPGateVerifier`:FastMCP 的 `JWTVerifier` 再加上撤銷清單與使用回報;以及 `MCPGateToolPinning`:一個 FastMCP middleware,會隱藏管理員還沒核准的 tools。只需要 `fastmcp` 和 `httpx`。接著把下面這段存成 `server.py`(就是 [`examples/fastmcp_server_hooks.py`](examples/fastmcp_server_hooks.py)):
 
 ```python
-"""A FastMCP server protected by MCP Gate, with the revocation feed.
+"""A FastMCP server protected by MCP Gate, with the revocation feed and tool approvals.
 
 Every request must carry an access token issued by MCP Gate for this server's audience. Tokens are verified
 offline against MCP Gate's JWKS; MCP Gate is never on the request path. When a resource-server client is
-configured (MCP_GATE_CLIENT_ID / MCP_GATE_CLIENT_SECRET), MCPGateVerifier also polls MCP Gate's revocation
-feed, so a revoked token is refused within `poll_interval` seconds, and reports token usage to the console.
+configured (MCP_GATE_CLIENT_ID / MCP_GATE_CLIENT_SECRET):
+
+- MCPGateVerifier polls MCP Gate's revocation feed, so a revoked token is refused within `poll_interval`
+  seconds, and reports token usage to the console;
+- MCPGateToolPinning lists and runs only the tools an admin approved in the console. A new or changed tool is
+  hidden at once and shows up in the console as pending. The approved list is cached in MCP_GATE_POLICY_CACHE,
+  so a restart while MCP Gate is down keeps it; with no list at all every tool stays hidden.
 
     pip install fastmcp httpx          # or: uv add fastmcp httpx
-    cp examples/mcp_gate_hooks.py .    # MCPGateVerifier lives in that single file
+    cp examples/mcp_gate_hooks.py .    # MCPGateVerifier and MCPGateToolPinning live in that single file
     MCP_GATE_URL=http://localhost:4568 python server.py
 
 Before starting it, register the server in the MCP Gate console (Services -> Register Service: host
-127.0.0.1, port 8000, path /mcp), so its audience is http://127.0.0.1:8000/mcp. For the revocation feed,
-also register a confidential client with grant type client_credentials and "Resource server for" set to
-this server, and export its id and secret. See the README's Quick start.
+127.0.0.1, port 8000, path /mcp), so its audience is http://127.0.0.1:8000/mcp. For the feeds, also register
+a confidential client with grant type client_credentials and "Resource server for" set to this server, and
+export its id and secret. See the README's Quick start.
 """
 
 import os
@@ -119,7 +127,7 @@ from fastmcp.server.auth import RemoteAuthProvider
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 from fastmcp.server.dependencies import get_access_token
 
-from mcp_gate_hooks import MCPGateVerifier
+from mcp_gate_hooks import MCPGateToolPinning, MCPGateVerifier
 
 MCP_GATE = os.environ.get("MCP_GATE_URL", "http://localhost:4568").rstrip("/")  # MCP Gate's OAUTH_ISSUER
 HOST = os.environ.get("MCP_HOST", "127.0.0.1")
@@ -134,6 +142,7 @@ verifier_settings = dict(
     required_scopes=["mcp:tools:invoke"],
 )
 
+middleware = []
 if os.environ.get("MCP_GATE_CLIENT_ID"):
     # Offline verification plus the revocation feed and usage reports.
     verifier = MCPGateVerifier(
@@ -143,8 +152,15 @@ if os.environ.get("MCP_GATE_CLIENT_ID"):
         poll_interval=15,   # seconds between revocation-feed polls
         flush_interval=30,  # seconds between usage reports
     )
+    # Only tools approved in the console are listed and callable.
+    middleware.append(MCPGateToolPinning(
+        verifier,
+        cache_file=os.environ.get("MCP_GATE_POLICY_CACHE", "mcp_gate_policy.json"),  # last approved list
+        poll_interval=15,   # seconds between tool-policy polls
+        fail_open=False,    # True: list every tool until the first list arrives (default: hide them all)
+    ))
 else:
-    # Offline verification only: a revoked token keeps working until it expires.
+    # Offline verification only: a revoked token keeps working until it expires, and every tool is listed.
     verifier = JWTVerifier(**verifier_settings)
 
 auth = RemoteAuthProvider(
@@ -153,7 +169,7 @@ auth = RemoteAuthProvider(
     base_url=BASE_URL,
 )
 
-mcp = FastMCP(name="demo", instructions="A demo server protected by MCP Gate", auth=auth)
+mcp = FastMCP(name="demo", instructions="A demo server protected by MCP Gate", auth=auth, middleware=middleware)
 
 
 @mcp.tool
@@ -174,8 +190,10 @@ def whoami() -> dict:
 
 
 if __name__ == "__main__":
-    revocation = "on" if isinstance(verifier, MCPGateVerifier) else "off"
-    print(f"MCP Gate: {MCP_GATE}   audience: {AUDIENCE}   revocation feed: {revocation}")
+    feeds = "on" if isinstance(verifier, MCPGateVerifier) else "off"
+    print(f"MCP Gate: {MCP_GATE}   audience: {AUDIENCE}   revocation feed: {feeds}   tool approvals: {feeds}")
+    # Serves MCP 2026-07-28 (stateless) and older clients on the same endpoint. Add stateless_http=True to keep no
+    # sessions for older clients either (e.g. behind a load balancer); MCPGateVerifier and the middleware work both ways.
     mcp.run(transport="http", host=HOST, port=PORT)
 ```
 
@@ -189,7 +207,9 @@ export MCP_GATE_CLIENT_SECRET=…
 python server.py
 ```
 
-它會印出 `MCP Gate: http://localhost:4568   audience: http://127.0.0.1:8000/mcp   revocation feed: on`。幾秒內,管理台上這台 server 的頁面就會顯示 **Revocation feed: Wired**。
+它會印出 `MCP Gate: http://localhost:4568   audience: http://127.0.0.1:8000/mcp   revocation feed: on   tool approvals: on`。幾秒內,管理台上這台 server 的頁面就會顯示 **Revocation feed: Wired** 與 **Tool approvals: Enforced by the server**。
+
+開啟 tool 核准後,新的 server 在你核准之前不會列出任何 tool。第一次有 client 列出 tools 時,server 會把 `hello` 和 `whoami` 回報給 MCP Gate,管理台上這台 server 的頁面就會顯示它們待核准、由 server 回報。看過定義後按 **Approve all**;一次輪詢之內(範例是 15 秒)兩個 tool 就會列出來。之後只要某個 tool 的名稱、說明或 schema 改變,它會立刻被隱藏,並附上與已核准版本的差異,等你再次核准。見 [Server 上的 tool 核准](docs/reference.zh-TW.md#server-上的-tool-核准)。
 
 ### 5. 用 personal access token 呼叫
 
@@ -232,22 +252,26 @@ curl -i -X POST http://127.0.0.1:8000/mcp \
 
 在管理台撤銷這張 token(**Tokens → Revoke**);開著撤銷清單時,下一次呼叫會在一個輪詢週期內被拒絕(範例是 15 秒)。
 
-### 6. 連上 MCP client
+### 6. 連上 client
 
-支援 OAuth 的 client 什麼都不用先做。第一次使用時,它會向 MCP Gate 註冊,並在瀏覽器開啟同意頁:
+打開 server 頁面,使用 **連接用戶端**(或服務列表上的插頭圖示;列表上方的 **連接用戶端** 一次涵蓋所有 server)。它為 **Claude Code、Cursor、VS Code 與 Codex** 各有一個分頁,含指令、可複製或下載的設定檔與步驟,全部依那台 server 的 audience 產生。client 什麼都不用先做:第一次使用時會自己找到 MCP Gate、以 Client ID Metadata Document 表明身分(較舊的 client 則用動態註冊),並在瀏覽器開啟同意頁。以 Claude Code 為例:
 
 ```bash
 claude mcp add --transport http demo http://127.0.0.1:8000/mcp
+claude mcp login demo
 ```
 
-不支援 OAuth 的 client 把 personal access token 當標頭帶上:
+Codex 一樣是 `codex mcp add demo --url http://127.0.0.1:8000/mcp` 與 `codex mcp login demo`;Cursor 有 **加入 Cursor** 連結,VS Code 有 `code --add-mcp` 指令。
+
+在沒有瀏覽器的機器(CI、遠端 shell)上,把面板切到 **個人 token**:片段從環境變數讀取 personal access token,永遠不寫進設定檔:
 
 ```bash
+export MCP_GATE_PAT_DEMO='<YOUR_PAT>'
 claude mcp add --transport http demo http://127.0.0.1:8000/mcp \
-  --header "Authorization: Bearer <PERSONAL_ACCESS_TOKEN>"
+  --header 'Authorization: Bearer ${MCP_GATE_PAT_DEMO}'
 ```
 
-每台 server 頁面上的 **Integration** 面板,會依那台 server 的網址與 audience 產生這些片段,以及 server 程式碼。
+腳本可用 `GET /api/services/{id}/client-config?client=claude-code|cursor|vscode|codex` 取得相同內容。各 client 的設定檔格式與依據的文件見[連接 MCP client](docs/reference.zh-TW.md#連接-mcp-client)。下方的 **Integration** 面板產生 server 程式碼。
 
 ## 運作原理
 

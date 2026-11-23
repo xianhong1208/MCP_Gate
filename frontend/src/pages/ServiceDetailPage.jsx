@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback } from 'react'
-import { formatDate } from '../utils/format'
-import { useParams, useNavigate, Link } from 'react-router-dom'
+import { formatDate, formatDateTime } from '../utils/format'
+import { useParams, useNavigate, useLocation, Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import {
   Copy, Check, Trash2, Clock, RefreshCw, ChevronDown,
-  Activity, Key, Edit3, Wrench, Terminal, FileJson, Code2,
+  Activity, Key, Network, Edit3, Wrench, Code2, ShieldCheck, ShieldX, ShieldAlert, CheckCheck, ScanSearch,
 } from 'lucide-react'
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { servicesApi, statsApi, oauthApi } from '../services/api'
@@ -13,16 +13,19 @@ import CodeBlock from '../components/CodeBlock'
 import ServiceFormModal from '../components/ServiceFormModal'
 import HealthIndicator from '../components/HealthIndicator'
 import ScopeEditor from '../components/ScopeEditor'
+import ClientConfigPanel from '../components/ClientConfigPanel'
 import MarkdownLite from '../components/MarkdownLite'
 import { copyToClipboard } from '../utils/clipboard'
 import { feedTone, revocationReachesServer } from '../utils/revocation'
+import { toolChanges } from '../utils/toolDiff'
+import { countBySeverity, excerptSegments, groupByRule, highlightSegments, needlesFor, plainText, sortFindings, toolsNeedingConfirm } from '../utils/toolFindings'
 import { useConfirm } from '../contexts/ConfirmContext'
 import { useToast } from '../contexts/ToastContext'
 import { KindBadge, StatusBadge, ScopeChips } from './TokensPage'
 import clsx from 'clsx'
 import {
   PageHeader, Button, IconButton, Badge, StatusDot, Card, CardHeader, SectionLabel, DescriptionList,
-  EmptyState, Alert, LoadingBlock, Tabs, SegmentedControl, Select,
+  EmptyState, Alert, LoadingBlock, SegmentedControl, Select,
 } from '../components/ui'
 
 // recharts stroke attrs cannot read CSS vars: give fallback colors; the real line color
@@ -63,6 +66,30 @@ function RevocationFeedStatus({ status }) {
       </span>
       {!revocationReachesServer(status.state) && (
         <span className="mt-1 block text-xs text-muted-foreground">{t('services.detail.feedHint')}</span>
+      )}
+    </span>
+  )
+}
+
+/** Whether this server enforces tool approvals: its pinning middleware's polls of the tool policy feed (#33) */
+function PolicyFeedStatus({ status }) {
+  const { t } = useTranslation()
+  const polled = status.state === 'active' || status.state === 'stale'
+  return (
+    <span className="block break-normal font-sans" data-testid="policy-feed-status">
+      <span className="flex flex-wrap items-center justify-end gap-1.5">
+        <StatusDot tone={status.state === 'not_wired' ? 'neutral' : feedTone(status.state)} />
+        {polled ? (
+          <>
+            <span>{status.state === 'active' ? t('services.detail.policyActive') : t('services.detail.policyStale')}</span>
+            <LastChecked value={status.last_poll} withIcon={false} className="text-foreground" />
+          </>
+        ) : (
+          <span>{status.state === 'never_polled' ? t('services.detail.policyNeverPolled') : t('services.detail.policyNotWired')}</span>
+        )}
+      </span>
+      {status.state !== 'active' && (
+        <span className="mt-1 block text-xs text-muted-foreground">{t('services.detail.policyHint')}</span>
       )}
     </span>
   )
@@ -132,7 +159,16 @@ function ToolSchema({ schema }) {
   )
 }
 
-function ToolItem({ tool }) {
+/** The approval state of a tool as a badge (#32); approved tools show none unless asked. */
+function ToolStateBadge({ tool, showApproved = false }) {
+  const { t } = useTranslation()
+  if (tool.removed_at) return <Badge tone="neutral">{t('services.toolPin.state.removed')}</Badge>
+  if (tool.state === 'pending') return <Badge tone="warning">{t('services.toolPin.state.pending')}</Badge>
+  if (tool.state === 'rejected') return <Badge tone="danger">{t('services.toolPin.state.rejected')}</Badge>
+  return showApproved ? <Badge tone="success">{t('services.toolPin.state.approved')}</Badge> : null
+}
+
+function ToolItem({ tool, onDecide, deciding }) {
   const { t } = useTranslation()
   const [isExpanded, setIsExpanded] = useState(false)
   const toast = useToast()
@@ -146,8 +182,9 @@ function ToolItem({ tool }) {
       toast.error(t('services.common.schemaCopyFailed'))
     }
   }
+  const busy = deciding === tool.hash
   return (
-    <div className={clsx('group -mx-2 rounded-lg transition-colors duration-150', isExpanded ? 'bg-muted/40' : 'hover:bg-muted/40')}>
+    <div className={clsx('group -mx-2 rounded-lg transition-colors duration-150', isExpanded ? 'bg-muted/40' : 'hover:bg-muted/40', tool.removed_at && 'opacity-70')}>
       <div className="flex items-center gap-3 px-2 py-2">
         <button
           type="button"
@@ -162,7 +199,11 @@ function ToolItem({ tool }) {
             <Wrench className="h-3.5 w-3.5" aria-hidden="true" />
           </span>
           <span className="min-w-0 flex-1">
-            <span className="block truncate font-mono text-xs font-medium text-foreground">{tool.name}</span>
+            <span className="flex min-w-0 items-center gap-2">
+              <span className="truncate font-mono text-xs font-medium text-foreground">{tool.name}</span>
+              <ToolStateBadge tool={tool} />
+              {tool.flagged && <FlaggedBadge findings={tool.findings} />}
+            </span>
             {/* Collapsed: one line only. Long agent-facing descriptions (headings, mode tables, rules) open on click. */}
             {summary && <span className="mt-0.5 block truncate text-xs text-muted-foreground" title={summary}>{summary}</span>}
           </span>
@@ -180,15 +221,212 @@ function ToolItem({ tool }) {
             </div>
           )}
           {tool.input_schema && <ToolSchema schema={tool.input_schema} />}
-          {tool.input_schema && (
-            <div className="flex justify-end">
-              <Button variant="ghost" size="xs" icon={Copy} onClick={handleCopySchema}>{t('services.common.copyInputSchema')}</Button>
-            </div>
-          )}
+          {tool.findings?.length > 0 && <ToolFindings findings={tool.findings} />}
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="min-w-0 truncate font-mono text-[11px] text-subtle-foreground" title={tool.hash || ''}>
+              {t('services.toolPin.hashLabel')} {tool.hash ? tool.hash.slice(0, 12) : '—'} · {t('services.toolPin.versionCount', { count: tool.versions?.length || 0 })}
+            </span>
+            <span className="flex flex-wrap items-center gap-1">
+              {tool.hash && tool.state === 'rejected' && (
+                <Button variant="ghost" size="xs" icon={ShieldCheck} loading={busy} onClick={() => onDecide(tool, 'approve')}>{t('services.toolPin.approve')}</Button>
+              )}
+              {tool.hash && tool.state === 'approved' && (
+                <Button variant="ghost" size="xs" icon={ShieldX} loading={busy} onClick={() => onDecide(tool, 'reject')}>{t('services.toolPin.withdraw')}</Button>
+              )}
+              {tool.input_schema && (
+                <Button variant="ghost" size="xs" icon={Copy} onClick={handleCopySchema}>{t('services.common.copyInputSchema')}</Button>
+              )}
+            </span>
+          </div>
         </div>
       )}
     </div>
   )
+}
+
+const DIFF_LINE = {
+  add: 'bg-success/10 text-foreground',
+  del: 'bg-danger/10 text-muted-foreground line-through decoration-danger/40',
+  same: 'text-muted-foreground',
+}
+const DIFF_MARK = { add: '+', del: '−', same: ' ' }
+
+/** One changed field: its line diff, wrapped (never a horizontal scroll on a phone). */
+function FieldDiff({ field, lines, folded = false, needles = [] }) {
+  const { t } = useTranslation()
+  const [open, setOpen] = useState(!folded)
+  return (
+    <div className="overflow-hidden rounded-lg border border-border bg-background/60">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        className={clsx('flex w-full items-center justify-between gap-2 px-3 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wide text-subtle-foreground', open && 'border-b border-border')}
+      >
+        {t(`services.toolPin.field.${field}`)}
+        <ChevronDown className={clsx('h-3.5 w-3.5 shrink-0 transition-transform duration-200', open && 'rotate-180')} aria-hidden="true" />
+      </button>
+      {open && <div className="max-h-72 overflow-y-auto py-1 font-mono text-[11px] leading-relaxed">
+        {lines.map((l, i) => (
+          <div key={i} className={clsx('flex gap-2 px-3', DIFF_LINE[l.op])}>
+            <span className={clsx('w-3 shrink-0 select-none', l.op === 'add' ? 'text-success' : l.op === 'del' ? 'text-danger' : 'text-subtle-foreground')} aria-hidden="true">{DIFF_MARK[l.op]}</span>
+            <span className="min-w-0 flex-1 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{l.text ? <Highlighted text={l.text} needles={l.op === 'del' ? [] : needles} /> : ' '}</span>
+          </div>
+        ))}
+      </div>}
+    </div>
+  )
+}
+
+// On a new tool every field is an addition: the text fields are open, the schemas folded so the card stays short
+const FOLDED_WHEN_NEW = new Set(['inputSchema', 'outputSchema', 'annotations'])
+
+/** A pending tool version to approve or reject, compared with the approved one (or shown whole when it is new). */
+function ToolApprovalCard({ tool, onDecide, deciding }) {
+  const { t } = useTranslation()
+  const current = (tool.versions || []).find((v) => v.hash === tool.hash)
+  const before = tool.approved_version?.definition || null
+  const changes = toolChanges(before, current?.definition || {})
+  const findings = current?.findings || tool.findings || []
+  const busy = deciding === tool.hash
+  return (
+    <div className="rounded-lg border border-warning/30 bg-warning/5 p-3" data-testid="tool-approval-card">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <ShieldAlert className="h-4 w-4 shrink-0 text-warning" aria-hidden="true" />
+            <span className="break-all font-mono text-xs font-semibold text-foreground">{tool.name}</span>
+            <Badge tone={before ? 'warning' : 'info'}>{before ? t('services.toolPin.changed') : t('services.toolPin.newTool')}</Badge>
+            {current?.source && (
+              <Badge tone="neutral" title={current.source === 'reported' ? t('services.toolPin.sourceReportedHint') : undefined}>
+                {t(`services.toolPin.source.${current.source === 'reported' ? 'reported' : 'scan'}`)}
+              </Badge>
+            )}
+            {findings.length > 0 && <FlaggedBadge findings={findings} showInfo />}
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {before ? t('services.toolPin.changedHint', { date: formatDate(tool.approved_version.decided_at) }) : t('services.toolPin.newHint')}
+          </p>
+        </div>
+        <div className="flex shrink-0 gap-1.5">
+          <Button variant="secondary" size="xs" icon={ShieldX} loading={busy} onClick={() => onDecide(tool, 'reject')}>{t('services.toolPin.reject')}</Button>
+          <Button variant="primary" size="xs" icon={ShieldCheck} loading={busy} onClick={() => onDecide(tool, 'approve')}>{t('services.toolPin.approve')}</Button>
+        </div>
+      </div>
+      {findings.length > 0 && <ToolFindings findings={findings} className="mt-3" />}
+      <div className="mt-3 space-y-2">
+        {changes.length === 0 ? (
+          <p className="text-xs text-muted-foreground">{t('services.toolPin.noFieldChanges')}</p>
+        ) : changes.map((c) => {
+          const needles = needlesFor(findings, c.field)
+          // a schema with a finding opens even on a new tool, so the highlighted text is in view
+          return <FieldDiff key={c.field} field={c.field} lines={c.lines} needles={needles} folded={!before && FOLDED_WHEN_NEW.has(c.field) && needles.length === 0} />
+        })}
+      </div>
+      <p className="mt-2 break-all font-mono text-[11px] text-subtle-foreground">
+        {before && <>{tool.approved_version.hash.slice(0, 12)} → </>}{tool.hash}
+      </p>
+    </div>
+  )
+}
+
+const SEVERITY_TONE = { high: 'danger', warning: 'warning', info: 'neutral' }
+
+/** An invisible character made visible: a small boxed code point label. */
+function InvisibleChar({ label, mark = false }) {
+  return (
+    <span className={clsx('mx-px inline-block rounded-sm border px-0.5 align-baseline font-mono text-[10px] leading-none',
+      mark ? 'border-danger/50 bg-danger/15 text-danger' : 'border-warning/50 bg-warning/15 text-warning')}
+    title={label} data-testid="invisible-char">{label}</span>
+  )
+}
+
+/** Text with the scan's matches highlighted and every invisible character shown as its code point. */
+function Highlighted({ text, needles = [] }) {
+  return highlightSegments(text, needles).map((seg, i) => {
+    if (seg.invisible) return <InvisibleChar key={i} label={seg.invisible} mark={seg.mark} />
+    return seg.mark
+      ? <mark key={i} className="rounded-sm bg-danger/20 px-px text-foreground ring-1 ring-inset ring-danger/40" data-testid="finding-mark">{seg.text}</mark>
+      : <span key={i}>{seg.text}</span>
+  })
+}
+
+/** "Flagged" chip on a tool: the most severe finding's tone and the counts in its tooltip. */
+function FlaggedBadge({ findings, showInfo = false }) {
+  const { t } = useTranslation()
+  const counts = countBySeverity(findings)
+  const severity = counts.high ? 'high' : counts.warning ? 'warning' : 'info'
+  if (severity === 'info' && !showInfo) return null
+  const total = counts.high + counts.warning + counts.info
+  return (
+    <Badge tone={SEVERITY_TONE[severity]} title={t('services.toolScan.countsHint', counts)} data-testid="tool-flagged-badge">
+      <ScanSearch className="h-3 w-3" aria-hidden="true" />
+      {severity === 'info' ? t('services.toolScan.notes', { count: total }) : t('services.toolScan.flagged', { count: counts.high + counts.warning })}
+    </Badge>
+  )
+}
+
+/** What the poisoning scan found in one definition, grouped by rule, with the matched text (#34). */
+function ToolFindings({ findings, className }) {
+  const { t } = useTranslation()
+  const groups = groupByRule(findings)
+  const [showInfo, setShowInfo] = useState(false)
+  const visible = groups.filter((g) => showInfo || g.severity !== 'info')
+  const hiddenInfo = groups.filter((g) => g.severity === 'info').reduce((n, g) => n + g.findings.length, 0)
+  return (
+    <div className={clsx('rounded-lg border border-border bg-background/60 p-3', className)} data-testid="tool-findings">
+      <div className="flex flex-wrap items-center gap-2 text-xs font-semibold text-foreground">
+        <ScanSearch className="h-3.5 w-3.5 shrink-0 text-subtle-foreground" aria-hidden="true" />
+        {t('services.toolScan.title')}
+        <span className="font-normal text-muted-foreground">{t('services.toolScan.notBlocking')}</span>
+      </div>
+      <ul className="mt-2 space-y-2.5">
+        {visible.map((g) => (
+          <li key={g.rule} className="min-w-0" data-testid={`finding-${g.rule}`}>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <Badge tone={SEVERITY_TONE[g.severity]}>{t(`services.toolScan.severity.${g.severity}`)}</Badge>
+              <span className="text-xs font-medium text-foreground">{t(`services.toolScan.rule.${g.rule}.label`)}</span>
+              {g.findings.length > 1 && <span className="text-[11px] tabular-nums text-subtle-foreground">×{g.findings.length}</span>}
+            </div>
+            <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">{t(`services.toolScan.rule.${g.rule}.explain`)}</p>
+            <ul className="mt-1 space-y-1">
+              {sortFindings(g.findings).slice(0, 6).map((f, i) => (
+                <li key={i} className="min-w-0 rounded-md bg-muted/50 px-2 py-1 font-mono text-[11px] leading-relaxed">
+                  {f.path && <span className="mr-1.5 break-all text-subtle-foreground">{f.path}</span>}
+                  {g.findings.length > 1 && f.severity !== g.severity && <Badge tone={SEVERITY_TONE[f.severity]} className="mr-1">{t(`services.toolScan.severity.${f.severity}`)}</Badge>}
+                  <span className="whitespace-pre-wrap break-words text-foreground [overflow-wrap:anywhere]">
+                    {excerptSegments(f.excerpt).map((seg, j) => (seg.invisible
+                      ? <InvisibleChar key={j} label={seg.invisible} mark />
+                      : <span key={j}>{seg.text}</span>))}
+                  </span>
+                  {f.detail && <span className="mt-0.5 block whitespace-pre-wrap break-words text-warning [overflow-wrap:anywhere]">{f.detail}</span>}
+                </li>
+              ))}
+              {g.findings.length > 6 && <li className="text-[11px] text-subtle-foreground">{t('services.toolScan.more', { count: g.findings.length - 6 })}</li>}
+            </ul>
+          </li>
+        ))}
+      </ul>
+      {hiddenInfo > 0 && (
+        <button type="button" className="mt-2 text-[11px] text-link transition-colors duration-200 hover:text-link-hover" onClick={() => setShowInfo(!showInfo)}>
+          {showInfo ? t('services.toolScan.hideInfo') : t('services.toolScan.showInfo', { count: hiddenInfo })}
+        </button>
+      )}
+    </div>
+  )
+}
+
+/** The confirm text for approving definitions with high-severity findings: one line per finding, a few at most. */
+function highFindingLines(t, tools) {
+  const lines = []
+  for (const tool of tools) {
+    for (const f of sortFindings(tool.findings).filter((x) => x.severity === 'high')) {
+      // the matched text without its invisible characters (they are listed by the rule name), kept short
+      const text = plainText(f.match)
+      lines.push(`• ${tool.name}: ${t(`services.toolScan.rule.${f.rule}.label`)}${text ? ` — “${text.length > 60 ? `${text.slice(0, 60)}…` : text}”` : ''}`)
+    }
+  }
+  return lines.length > 6 ? [...lines.slice(0, 6), t('services.toolScan.more', { count: lines.length - 6 })] : lines
 }
 
 /** Turn a raw health-check exception into a short, translated label; the raw text stays in the tooltip. */
@@ -199,18 +437,16 @@ function describeHealthError(t, raw) {
   return t('services.health.failed')
 }
 
-// Integration snippets are grouped by target (family) and flavour (variant); the backend key is `${family}_${variant}`.
-const SNIPPET_FAMILIES = [
-  { key: 'claude_code', labelKey: 'services.detail.snippetFamily.claudeCode', icon: Terminal, lang: 'bash', variants: ['oauth', 'pat'] },
-  { key: 'mcp_json', labelKey: 'services.detail.snippetFamily.mcpJson', icon: FileJson, lang: 'json', variants: ['oauth', 'pat'] },
-  { key: 'fastmcp', labelKey: 'services.detail.snippetFamily.fastmcp', icon: Code2, lang: 'python', variants: ['server', 'hooks', 'client'] },
-]
+// Server-side integration snippets (FastMCP); the backend key is `fastmcp_${variant}`. MCP client configuration
+// (Claude Code, Cursor, VS Code, Codex) lives in the "Connect a client" panel (#36).
+const FASTMCP_VARIANTS = ['server', 'hooks', 'client']
 
 export default function ServiceDetailPage() {
   const { t } = useTranslation()
   const { serviceId } = useParams()
   const navigate = useNavigate()
-  const { confirmDelete, confirmTokenRevoke } = useConfirm()
+  const location = useLocation()
+  const { confirm, confirmDelete, confirmTokenRevoke } = useConfirm()
   const toast = useToast()
   const decodedServiceId = decodeURIComponent(serviceId)
 
@@ -223,8 +459,7 @@ export default function ServiceDetailPage() {
   })
   const [isLoadingOwnScopes, setIsLoadingOwnScopes] = useState(true)
   const [snippets, setSnippets] = useState(null)
-  const [snippetFamily, setSnippetFamily] = useState('claude_code')
-  const [snippetVariant, setSnippetVariant] = useState('oauth')
+  const [snippetVariant, setSnippetVariant] = useState('server')
   const [tokens, setTokens] = useState([])
   const [usageStats, setUsageStats] = useState([])
   const [isLoading, setIsLoading] = useState(true)
@@ -233,9 +468,12 @@ export default function ServiceDetailPage() {
   const [copiedEndpoint, setCopiedEndpoint] = useState(false)
   const [isCheckingHealth, setIsCheckingHealth] = useState(false)
   const [isRefreshingTools, setIsRefreshingTools] = useState(false)
+  const [decidingHash, setDecidingHash] = useState(null)
+  const [isApprovingAll, setIsApprovingAll] = useState(false)
   const [showEditModal, setShowEditModal] = useState(false)
   const [revokingJti, setRevokingJti] = useState(null)
   const [feedStatus, setFeedStatus] = useState(null)
+  const [policyStatus, setPolicyStatus] = useState(null)
 
   const reloadOwnScopes = useCallback(async () => {
     const res = await oauthApi.serviceScopes.list(decodedServiceId)
@@ -283,10 +521,12 @@ export default function ServiceDetailPage() {
       oauthApi.tokens.list({ serviceId: decodedServiceId }).catch(() => ({ tokens: [] })),
       oauthApi.serviceScopes.list(decodedServiceId).catch(() => ({ own: [] })),
       oauthApi.revocationFeed.forService(decodedServiceId).catch(() => null),
-    ]).then(([svc, sc, sn, tk, own, feed]) => {
+      oauthApi.policyFeed.forService(decodedServiceId).catch(() => null),
+    ]).then(([svc, sc, sn, tk, own, feed, policy]) => {
       if (cancelled) return
       setService(svc)
       setFeedStatus(feed)
+      setPolicyStatus(policy)
       setScopes(sc.scopes || [])
       setSnippets(sn)
       setTokens(tk.tokens || [])
@@ -308,6 +548,14 @@ export default function ServiceDetailPage() {
       .finally(() => { if (!cancelled) setIsLoadingStats(false) })
     return () => { cancelled = true }
   }, [service?.id])   // eslint-disable-line react-hooks/exhaustive-deps
+
+  // "Connect" on the services list links to #connect: scroll there once the page has rendered
+  const hasService = !!service
+  useEffect(() => {
+    if (!hasService || location.hash !== '#connect') return
+    const el = document.getElementById('connect')
+    if (el) el.scrollIntoView({ block: 'start' })
+  }, [hasService, location.hash])
 
   const handleCopy = async (text) => {
     try {
@@ -357,12 +605,57 @@ export default function ServiceDetailPage() {
         identity: refreshMode,
         jti: refreshMode === 'token' ? selectedInspectToken.jti : null,
       })
-      toast.success(t('services.detail.refreshToolsSuccess', { n: result.tools_count }))
+      toast.success(result.tools_pending > 0
+        ? t('services.toolPin.refreshedWithPending', { n: result.tools_count, count: result.tools_pending })
+        : t('services.detail.refreshToolsSuccess', { n: result.tools_count }))
       await reload()
     } catch (err) {
       toast.error(t('services.detail.refreshToolsFailed', { message: err.message }))
     } finally {
       setIsRefreshingTools(false)
+    }
+  }
+
+  // Approving a definition the scan rated high asks once, naming what it found (#34); anything else is one click
+  const confirmHighFindings = async (tools) => {
+    const flagged = toolsNeedingConfirm(tools)
+    if (flagged.length === 0) return true
+    return confirm({
+      title: t('services.toolScan.confirmTitle', { count: flagged.length }),
+      message: `${t('services.toolScan.confirmMessage')}\n\n${highFindingLines(t, flagged).join('\n')}`,
+      confirmText: t('services.toolScan.confirmApprove'),
+      type: 'warning',
+    })
+  }
+
+  const handleDecideTool = async (tool, decision) => {
+    if (decision === 'approve' && !(await confirmHighFindings([tool]))) return
+    setDecidingHash(tool.hash)
+    try {
+      if (decision === 'approve') await servicesApi.approveTool(decodedServiceId, tool.id, tool.hash)
+      else await servicesApi.rejectTool(decodedServiceId, tool.id, tool.hash)
+      toast.success(t(decision === 'approve' ? 'services.toolPin.approvedToast' : 'services.toolPin.rejectedToast', { name: tool.name }))
+      await reload()
+    } catch (err) {
+      toast.error(t('services.toolPin.decideFailed', { message: err.message }))
+      await reload().catch(() => {})
+    } finally {
+      setDecidingHash(null)
+    }
+  }
+
+  const handleApproveAll = async (pendingTools) => {
+    if (!(await confirmHighFindings(pendingTools))) return
+    setIsApprovingAll(true)
+    try {
+      const res = await servicesApi.approveAllTools(decodedServiceId, pendingTools.map((tl) => tl.hash))
+      toast.success(t('services.toolPin.approvedAllToast', { count: res.approved }))
+      await reload()
+    } catch (err) {
+      toast.error(t('services.toolPin.decideFailed', { message: err.message }))
+      await reload().catch(() => {})
+    } finally {
+      setIsApprovingAll(false)
     }
   }
 
@@ -419,19 +712,18 @@ export default function ServiceDetailPage() {
     )
   }
 
+  const allTools = service.tools || []
+  const listedTools = allTools.filter((tl) => !tl.removed_at)
+  const removedTools = allTools.filter((tl) => tl.removed_at)
+  const pendingTools = listedTools.filter((tl) => tl.state === 'pending')
+  // Approve all is for a service's first tool list only: nothing of it was ever approved
+  const firstReview = !allTools.some((tl) => (tl.versions || []).some((v) => v.state === 'approved'))
   const totalSuccess = usageStats.reduce((s, x) => s + (x.success || 0), 0)
   const totalFailed = usageStats.reduce((s, x) => s + (x.failed || 0), 0)
   const totalUsage = totalSuccess + totalFailed
   const hasMcpConnection = !!(service.host && service.port)
-  const activeFamily = SNIPPET_FAMILIES.find((f) => f.key === snippetFamily) || SNIPPET_FAMILIES[0]
-  const activeVariant = activeFamily.variants.includes(snippetVariant) ? snippetVariant : activeFamily.variants[0]
-  const activeSnippetKey = `${activeFamily.key}_${activeVariant}`
-  const activeSnippetTitle = `${t(activeFamily.labelKey)} · ${t(`services.detail.snippetVariant.${activeVariant}`)}`
-  const selectFamily = (key) => {
-    const family = SNIPPET_FAMILIES.find((f) => f.key === key) || SNIPPET_FAMILIES[0]
-    setSnippetFamily(family.key)
-    if (!family.variants.includes(snippetVariant)) setSnippetVariant(family.variants[0])
-  }
+  const activeSnippetKey = `fastmcp_${snippetVariant}`
+  const activeSnippetTitle = `${t('services.detail.snippetFamily.fastmcp')} · ${t(`services.detail.snippetVariant.${snippetVariant}`)}`
 
   return (
     <div className="space-y-8">
@@ -445,6 +737,7 @@ export default function ServiceDetailPage() {
             {service.health && <HealthIndicator status={service.health.status} />}
             {service.source === 'auto_discovered' && <Badge tone="warning">{t('services.detail.autoTag')}</Badge>}
             {service.source === 'managed' && <Badge tone="accent">{t('services.list.managedTag')}</Badge>}
+            {pendingTools.length > 0 && <Badge tone="warning">{t('services.toolPin.pendingBadge', { count: pendingTools.length })}</Badge>}
           </>
         }
         actions={
@@ -511,9 +804,13 @@ export default function ServiceDetailPage() {
                   label: t('services.detail.revocationFeed'),
                   value: <RevocationFeedStatus status={feedStatus} />,
                 }] : []),
+                ...(policyStatus && service.effective_audience ? [{
+                  label: t('services.detail.toolPolicy'),
+                  value: <PolicyFeedStatus status={policyStatus} />,
+                }] : []),
               ]}
             />
-            {(service.has_static_token || service.health?.response_time_ms != null || service.health?.last_checked || service.created_at || service.health?.error_message) && (
+            {(service.has_static_token || service.health?.response_time_ms != null || service.health?.last_checked || service.health?.protocol_version || service.created_at || service.health?.error_message) && (
             <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-border pt-4 text-xs text-muted-foreground">
               {service.has_static_token && (
                 <Badge tone="neutral"><Key className="h-3 w-3" />{t('services.detail.staticTokenBadge')}</Badge>
@@ -530,6 +827,20 @@ export default function ServiceDetailPage() {
                   <Clock className="h-3.5 w-3.5" aria-hidden="true" />
                   {t('services.detail.lastChecked')}
                   <LastChecked value={service.health.last_checked} withIcon={false} className="text-foreground" />
+                </span>
+              )}
+              {service.health?.protocol_version && (
+                <span
+                  className="flex items-center gap-1.5"
+                  data-testid="service-protocol"
+                  title={t('services.detail.protocolHint', { when: formatDateTime(service.health.protocol_seen_at) })}
+                >
+                  <Network className="h-3.5 w-3.5" aria-hidden="true" />
+                  {t('services.detail.protocol')}
+                  <span className="font-mono tabular-nums text-foreground">{service.health.protocol_version}</span>
+                  {service.health.protocol_era && (
+                    <Badge tone="neutral">{t(service.health.protocol_era === 'modern' ? 'services.detail.protocolModern' : 'services.detail.protocolLegacy')}</Badge>
+                  )}
                 </span>
               )}
               {service.created_at && (
@@ -575,6 +886,15 @@ export default function ServiceDetailPage() {
             )}
           </Card>
 
+          {/* Connect a client (#36) */}
+          <Card id="connect" className="scroll-mt-20">
+            <CardHeader
+              title={t('clientConfig.title')}
+              description={t('clientConfig.subtitle')}
+            />
+            <ClientConfigPanel serviceId={decodedServiceId} />
+          </Card>
+
           {/* Integration */}
           <Card>
             <CardHeader
@@ -585,22 +905,15 @@ export default function ServiceDetailPage() {
               <p className="text-sm text-muted-foreground">{t('services.detail.snippetsUnavailable')}</p>
             ) : (
               <div className="space-y-4">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <Tabs
-                    size="sm"
-                    value={activeFamily.key}
-                    onChange={selectFamily}
-                    className="min-w-0 flex-1"
-                    items={SNIPPET_FAMILIES.map((f) => ({ key: f.key, label: t(f.labelKey), icon: f.icon }))}
-                  />
+                <div className="flex flex-wrap items-center gap-3">
                   <SegmentedControl
                     size="sm"
-                    value={activeVariant}
+                    value={snippetVariant}
                     onChange={setSnippetVariant}
-                    items={activeFamily.variants.map((v) => ({ key: v, label: t(`services.detail.snippetVariant.${v}`) }))}
+                    items={FASTMCP_VARIANTS.map((v) => ({ key: v, label: t(`services.detail.snippetVariant.${v}`), icon: Code2 }))}
                   />
                 </div>
-                <CodeBlock title={activeSnippetTitle} language={activeFamily.lang} value={snippets[activeSnippetKey]} rows={22} />
+                <CodeBlock title={activeSnippetTitle} language="python" value={snippets[activeSnippetKey]} rows={22} />
                 <DescriptionList
                   items={[
                     { label: t('services.detail.issuerLabel'), value: snippets.issuer, mono: true },
@@ -647,7 +960,12 @@ export default function ServiceDetailPage() {
           {/* Tools */}
           <Card>
             <CardHeader
-              title={<span className="flex items-center gap-2">{t('services.detail.mcpToolsLabel')}<Badge tone="neutral">{service.tools?.length || 0}</Badge></span>}
+              title={(
+                <span className="flex flex-wrap items-center gap-2">
+                  {t('services.detail.mcpToolsLabel')}<Badge tone="neutral">{listedTools.length}</Badge>
+                  {pendingTools.length > 0 && <Badge tone="warning">{t('services.toolPin.pendingBadge', { count: pendingTools.length })}</Badge>}
+                </span>
+              )}
               action={hasMcpConnection && (
                 <Button variant="ghost" size="xs" icon={RefreshCw} onClick={handleRefreshTools} loading={isRefreshingTools}>
                   {t('services.detail.refreshFromServer')}
@@ -686,7 +1004,28 @@ export default function ServiceDetailPage() {
                 )}
               </div>
             )}
-            {(service.tools || []).length === 0 ? (
+            {pendingTools.length > 0 && (
+              <div className="mb-4 space-y-3" data-testid="tool-approvals">
+                <Alert tone="warning" icon={ShieldAlert} title={t('services.toolPin.reviewTitle', { count: pendingTools.length })}>
+                  <p>{firstReview ? t('services.toolPin.reviewFirstHint') : t('services.toolPin.reviewHint')}</p>
+                  {pendingTools.some((tl) => tl.flagged) && (
+                    <p className="mt-1 font-medium text-danger">{t('services.toolScan.pendingFlagged', { count: pendingTools.filter((tl) => tl.flagged).length })}</p>
+                  )}
+                  {policyStatus && (
+                    <p className="mt-1">{policyStatus.state === 'active' ? t('services.toolPin.enforcedHint') : t('services.toolPin.notEnforcedHint')}</p>
+                  )}
+                  {firstReview && pendingTools.length > 1 && (
+                    <Button className="mt-2" variant="primary" size="sm" icon={CheckCheck} loading={isApprovingAll} onClick={() => handleApproveAll(pendingTools)}>
+                      {t('services.toolPin.approveAll', { count: pendingTools.length })}
+                    </Button>
+                  )}
+                </Alert>
+                {pendingTools.map((tool) => (
+                  <ToolApprovalCard key={tool.id} tool={tool} onDecide={handleDecideTool} deciding={decidingHash} />
+                ))}
+              </div>
+            )}
+            {allTools.length === 0 ? (
               <EmptyState
                 compact
                 icon={Wrench}
@@ -695,7 +1034,13 @@ export default function ServiceDetailPage() {
               />
             ) : (
               <div className="space-y-0.5">
-                {service.tools.map((tool) => <ToolItem key={tool.id || tool.name} tool={tool} />)}
+                {listedTools.map((tool) => <ToolItem key={tool.id || tool.name} tool={tool} onDecide={handleDecideTool} deciding={decidingHash} />)}
+                {removedTools.length > 0 && (
+                  <>
+                    <SectionLabel className="px-0 pb-1 pt-3">{t('services.toolPin.removedSection', { count: removedTools.length })}</SectionLabel>
+                    {removedTools.map((tool) => <ToolItem key={tool.id} tool={tool} onDecide={handleDecideTool} deciding={decidingHash} />)}
+                  </>
+                )}
               </div>
             )}
           </Card>

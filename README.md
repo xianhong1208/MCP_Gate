@@ -18,12 +18,15 @@ MCP Gate puts standards-based authentication in front of every MCP server you ru
 
 ## Key features
 
-- **A standards-based authorization server.** Covers the authorization part of the [MCP specification](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization): RFC 8414 metadata, RFC 7591 dynamic client registration, Client ID Metadata Documents (the registration method of MCP 2026-07-28), authorization code + PKCE, refresh-token rotation with replay detection, RFC 7009 revocation, RFC 7662 introspection, RFC 8707 resource indicators, RFC 9207 `iss`, and `private_key_jwt` client authentication.
+- **A standards-based authorization server.** Covers the authorization part of the [MCP specification](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization) (2026-07-28): RFC 8414 metadata, Client ID Metadata Documents (the preferred registration method), RFC 7591 dynamic client registration (deprecated by the specification, still supported), authorization code + PKCE, refresh-token rotation with replay detection, RFC 7009 revocation, RFC 7662 introspection, RFC 8707 resource indicators, RFC 9207 `iss`, and `private_key_jwt` client authentication.
 - **Offline verification.** RS256 tokens bound to each server's audience, so a token for one server never works on another. Servers fetch the JWKS once and verify locally. Signing keys rotate on their own every 90 days, each published a day before it signs; a leaked key can be revoked from the console, and `ENCRYPTION_KEY` rotates with one command.
 - **Revocation that reaches offline verifiers.** A server polls the revocation feed and refuses a revoked token within seconds, personal access tokens included, without calling MCP Gate per request.
 - **A consent screen** for clients that register themselves, with decisions remembered per client and server.
-- **Personal access tokens** for scripts, CI and clients without OAuth, with ready-to-paste `claude mcp add` and `mcpServers` snippets.
-- **A server registry.** Register or scan MCP servers, sync their tools, watch their health, and see each tool list as a given token sees it ("Inspect as").
+- **Connect a client in one step.** Each server's page has ready-made configuration for Claude Code, Cursor, VS Code and Codex (commands, the config file to copy or download, a one-click Cursor install link), signing in through MCP Gate by default. See [Connect a client](#6-connect-a-client).
+- **Personal access tokens** for scripts, CI and machines without a browser; the client snippets read them from an environment variable, never from the file.
+- **A server registry.** Register or scan MCP servers, sync their tools, watch their health, and see each tool list as a given token sees it ("Inspect as"). It speaks MCP 2026-07-28 (`server/discover`, stateless servers) and falls back to the `initialize` handshake for servers on 2024-11-05 to 2025-11-25; each server's page shows which one it answered with. See [MCP protocol versions](docs/reference.md#mcp-protocol-versions).
+- **Tool pinning.** Every tool definition is pinned by a SHA-256 hash; a new or changed tool waits for an admin, who sees a diff against the approved version before approving or rejecting it. A FastMCP middleware on your server hides every unapproved tool and reports new ones at once. See [Tool pinning and approval](docs/reference.md#tool-pinning-and-approval).
+- **Poisoning scan.** Built-in rules flag hidden instructions, invisible characters, mentions of other servers' tools, requests for secrets, suspicious URLs and encoded text in a tool definition, highlighted on the approval card. No model and no network; findings inform the approval and never block on their own. See [Poisoning scan](docs/reference.md#poisoning-scan).
 - **Marketplace and orchestrator.** Deploy MCP servers from a catalog, or paste a `{command, args, env}` block and let MCP Gate run it in Docker or as a local process behind an HTTP bridge.
 - **Zero-config start.** SQLite by default, secrets generated on first run, an in-browser setup for the owner account; PostgreSQL is one environment variable away. The console speaks English and Traditional Chinese.
 
@@ -66,7 +69,7 @@ The official image is [`tonyhuang1101/mcp-gate`](https://hub.docker.com/r/tonyhu
 docker run -d --name mcp-gate -p 4568:4568 \
   -e OAUTH_ISSUER=http://localhost:4568 \
   -v mcp-gate-data:/app/data -v mcp-gate-secrets:/app/secrets \
-  tonyhuang1101/mcp-gate:1.4.0
+  tonyhuang1101/mcp-gate:1.5.0
 docker logs mcp-gate | grep "Setup token"
 ```
 
@@ -74,13 +77,13 @@ Or `docker compose up -d` with the repository's `docker-compose.yml` (settings i
 
 ## Quick start
 
-This walk-through protects a FastMCP server with MCP Gate, calls it with a personal access token, and turns on the revocation feed. It assumes MCP Gate at `http://localhost:4568` and the server at `http://127.0.0.1:8000/mcp`.
+This walk-through protects a FastMCP server with MCP Gate, calls it with a personal access token, and turns on the revocation feed and tool approvals. It assumes MCP Gate at `http://localhost:4568` and the server at `http://127.0.0.1:8000/mcp`.
 
 ### 1. Register the server
 
 In the console, open **Services → Register Service** and enter host `127.0.0.1`, port `8000` and path `/mcp`. The server's **audience**, the URL its tokens are valid for, defaults to its MCP URL: `http://127.0.0.1:8000/mcp`. Register first: MCP Gate only issues tokens for audiences it knows.
 
-### 2. (Optional) Register a client for the revocation feed
+### 2. (Optional) Register a client for the revocation feed and tool approvals
 
 On its own, a server that verifies offline keeps accepting a revoked token until it expires. To have it refuse revoked tokens within seconds, open **OAuth Clients → Register trusted client** and choose:
 
@@ -88,28 +91,33 @@ On its own, a server that verifies offline keeps accepting a revoked token until
 - authentication *Client secret*;
 - **Resource server for**: the server you registered in step 1.
 
-Copy the client id and secret; the secret is shown once. Skip this step and the example below runs without the feed.
+Copy the client id and secret; the secret is shown once. The same client also reads the server's tool approvals: with it, the server lists and runs only the tools you approved in the console. Skip this step and the example below runs without either.
 
 ### 3. Write the server
 
-Copy [`examples/mcp_gate_hooks.py`](examples/mcp_gate_hooks.py) next to your server. It holds `MCPGateVerifier`, FastMCP's `JWTVerifier` plus the revocation feed and usage reports, and needs only `fastmcp` and `httpx`. Then save this as `server.py` (it is [`examples/fastmcp_server_hooks.py`](examples/fastmcp_server_hooks.py)):
+Copy [`examples/mcp_gate_hooks.py`](examples/mcp_gate_hooks.py) next to your server. It holds `MCPGateVerifier`, FastMCP's `JWTVerifier` plus the revocation feed and usage reports, and `MCPGateToolPinning`, a FastMCP middleware that hides every tool an admin has not approved. It needs only `fastmcp` and `httpx`. Then save this as `server.py` (it is [`examples/fastmcp_server_hooks.py`](examples/fastmcp_server_hooks.py)):
 
 ```python
-"""A FastMCP server protected by MCP Gate, with the revocation feed.
+"""A FastMCP server protected by MCP Gate, with the revocation feed and tool approvals.
 
 Every request must carry an access token issued by MCP Gate for this server's audience. Tokens are verified
 offline against MCP Gate's JWKS; MCP Gate is never on the request path. When a resource-server client is
-configured (MCP_GATE_CLIENT_ID / MCP_GATE_CLIENT_SECRET), MCPGateVerifier also polls MCP Gate's revocation
-feed, so a revoked token is refused within `poll_interval` seconds, and reports token usage to the console.
+configured (MCP_GATE_CLIENT_ID / MCP_GATE_CLIENT_SECRET):
+
+- MCPGateVerifier polls MCP Gate's revocation feed, so a revoked token is refused within `poll_interval`
+  seconds, and reports token usage to the console;
+- MCPGateToolPinning lists and runs only the tools an admin approved in the console. A new or changed tool is
+  hidden at once and shows up in the console as pending. The approved list is cached in MCP_GATE_POLICY_CACHE,
+  so a restart while MCP Gate is down keeps it; with no list at all every tool stays hidden.
 
     pip install fastmcp httpx          # or: uv add fastmcp httpx
-    cp examples/mcp_gate_hooks.py .    # MCPGateVerifier lives in that single file
+    cp examples/mcp_gate_hooks.py .    # MCPGateVerifier and MCPGateToolPinning live in that single file
     MCP_GATE_URL=http://localhost:4568 python server.py
 
 Before starting it, register the server in the MCP Gate console (Services -> Register Service: host
-127.0.0.1, port 8000, path /mcp), so its audience is http://127.0.0.1:8000/mcp. For the revocation feed,
-also register a confidential client with grant type client_credentials and "Resource server for" set to
-this server, and export its id and secret. See the README's Quick start.
+127.0.0.1, port 8000, path /mcp), so its audience is http://127.0.0.1:8000/mcp. For the feeds, also register
+a confidential client with grant type client_credentials and "Resource server for" set to this server, and
+export its id and secret. See the README's Quick start.
 """
 
 import os
@@ -119,7 +127,7 @@ from fastmcp.server.auth import RemoteAuthProvider
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 from fastmcp.server.dependencies import get_access_token
 
-from mcp_gate_hooks import MCPGateVerifier
+from mcp_gate_hooks import MCPGateToolPinning, MCPGateVerifier
 
 MCP_GATE = os.environ.get("MCP_GATE_URL", "http://localhost:4568").rstrip("/")  # MCP Gate's OAUTH_ISSUER
 HOST = os.environ.get("MCP_HOST", "127.0.0.1")
@@ -134,6 +142,7 @@ verifier_settings = dict(
     required_scopes=["mcp:tools:invoke"],
 )
 
+middleware = []
 if os.environ.get("MCP_GATE_CLIENT_ID"):
     # Offline verification plus the revocation feed and usage reports.
     verifier = MCPGateVerifier(
@@ -143,8 +152,15 @@ if os.environ.get("MCP_GATE_CLIENT_ID"):
         poll_interval=15,   # seconds between revocation-feed polls
         flush_interval=30,  # seconds between usage reports
     )
+    # Only tools approved in the console are listed and callable.
+    middleware.append(MCPGateToolPinning(
+        verifier,
+        cache_file=os.environ.get("MCP_GATE_POLICY_CACHE", "mcp_gate_policy.json"),  # last approved list
+        poll_interval=15,   # seconds between tool-policy polls
+        fail_open=False,    # True: list every tool until the first list arrives (default: hide them all)
+    ))
 else:
-    # Offline verification only: a revoked token keeps working until it expires.
+    # Offline verification only: a revoked token keeps working until it expires, and every tool is listed.
     verifier = JWTVerifier(**verifier_settings)
 
 auth = RemoteAuthProvider(
@@ -153,7 +169,7 @@ auth = RemoteAuthProvider(
     base_url=BASE_URL,
 )
 
-mcp = FastMCP(name="demo", instructions="A demo server protected by MCP Gate", auth=auth)
+mcp = FastMCP(name="demo", instructions="A demo server protected by MCP Gate", auth=auth, middleware=middleware)
 
 
 @mcp.tool
@@ -174,8 +190,10 @@ def whoami() -> dict:
 
 
 if __name__ == "__main__":
-    revocation = "on" if isinstance(verifier, MCPGateVerifier) else "off"
-    print(f"MCP Gate: {MCP_GATE}   audience: {AUDIENCE}   revocation feed: {revocation}")
+    feeds = "on" if isinstance(verifier, MCPGateVerifier) else "off"
+    print(f"MCP Gate: {MCP_GATE}   audience: {AUDIENCE}   revocation feed: {feeds}   tool approvals: {feeds}")
+    # Serves MCP 2026-07-28 (stateless) and older clients on the same endpoint. Add stateless_http=True to keep no
+    # sessions for older clients either (e.g. behind a load balancer); MCPGateVerifier and the middleware work both ways.
     mcp.run(transport="http", host=HOST, port=PORT)
 ```
 
@@ -189,7 +207,9 @@ export MCP_GATE_CLIENT_SECRET=…
 python server.py
 ```
 
-It prints `MCP Gate: http://localhost:4568   audience: http://127.0.0.1:8000/mcp   revocation feed: on`. Within a few seconds the server's page in the console shows **Revocation feed: Wired**.
+It prints `MCP Gate: http://localhost:4568   audience: http://127.0.0.1:8000/mcp   revocation feed: on   tool approvals: on`. Within a few seconds the server's page in the console shows **Revocation feed: Wired** and **Tool approvals: Enforced by the server**.
+
+With tool approvals on, a new server lists no tools until you approve them. The first time a client lists them, the server reports `hello` and `whoami` to MCP Gate, and the server's page shows them as pending, reported by the server. Read the definitions and press **Approve all**; within one poll (15 seconds in the example) both are listed. From then on, a tool whose name, description or schema changes is hidden at once and waits for your approval again, with a diff against the approved version. See [Tool approvals on the server](docs/reference.md#tool-approvals-on-the-server).
 
 ### 5. Call it with a personal access token
 
@@ -232,22 +252,26 @@ curl -i -X POST http://127.0.0.1:8000/mcp \
 
 Revoke the token in the console (**Tokens → Revoke**) and, with the feed on, the next call is refused within one poll interval (15 seconds in the example).
 
-### 6. Connect an MCP client
+### 6. Connect a client
 
-Clients that speak OAuth need nothing up front. On first use they register with MCP Gate and open the consent screen in your browser:
+Open the server's page and use **Connect a client** (or the plug icon on the services list; **Connect clients** there covers every server at once). It has a tab for **Claude Code, Cursor, VS Code and Codex** with the commands, the config file to copy or download and the steps, all for that server's audience. Clients need nothing up front: on first use they find MCP Gate, identify themselves with a Client ID Metadata Document (or, older clients, register through dynamic client registration) and open the consent screen in your browser. For Claude Code:
 
 ```bash
 claude mcp add --transport http demo http://127.0.0.1:8000/mcp
+claude mcp login demo
 ```
 
-Clients without OAuth take the personal access token as a header:
+Codex is the same with `codex mcp add demo --url http://127.0.0.1:8000/mcp` and `codex mcp login demo`; Cursor gets an **Add to Cursor** link, VS Code a `code --add-mcp` command.
+
+On a machine without a browser (CI, a remote shell), switch the panel to **Personal token**: the snippets read a personal access token from an environment variable, never from the file:
 
 ```bash
+export MCP_GATE_PAT_DEMO='<YOUR_PAT>'
 claude mcp add --transport http demo http://127.0.0.1:8000/mcp \
-  --header "Authorization: Bearer <PERSONAL_ACCESS_TOKEN>"
+  --header 'Authorization: Bearer ${MCP_GATE_PAT_DEMO}'
 ```
 
-The **Integration** panel on each server's page generates these snippets, and the server code, for that server's own URL and audience.
+`GET /api/services/{id}/client-config?client=claude-code|cursor|vscode|codex` returns the same for scripts. See [Connecting MCP clients](docs/reference.md#connecting-mcp-clients) for each client's file shape and the documentation it follows. The **Integration** panel below it generates the server code.
 
 ## How it works
 

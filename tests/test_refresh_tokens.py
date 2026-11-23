@@ -5,7 +5,7 @@ import httpx
 import pytest
 
 from tests.test_oauth_flow import RESOURCE, _authorize_and_consent, _exchange, _register, _register_console
-from tests.test_offline_hooks import _load_hooks_module
+from tests.test_offline_hooks import _load_hooks_module, stop_verifier
 
 
 def _flow(owner_client):
@@ -58,8 +58,7 @@ async def test_mcp_gate_verifier_rejects_non_access_tokens(owner_client, service
         assert await verifier.verify_token(tokens["access_token"]) is not None
         assert await verifier.verify_token(legacy) is None
         assert "legacy-rt" not in verifier._pending
-        if verifier._task:
-            verifier._task.cancel()
+        await stop_verifier(verifier)
 
 
 def test_revoked_refresh_token_is_in_the_feed(owner_client, service):

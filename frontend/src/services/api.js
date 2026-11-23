@@ -213,6 +213,26 @@ export const servicesApi = {
     })
   },
 
+  /** Tool pinning (#32): approve / reject the version of a tool with this hash (the one the admin was shown) */
+  async approveTool(id, toolId, hash) {
+    return request(`/api/services/${encodeURIComponent(id)}/tools/${encodeURIComponent(toolId)}/approve`, {
+      method: 'POST', body: JSON.stringify({ hash }),
+    })
+  },
+
+  async rejectTool(id, toolId, hash) {
+    return request(`/api/services/${encodeURIComponent(id)}/tools/${encodeURIComponent(toolId)}/reject`, {
+      method: 'POST', body: JSON.stringify({ hash }),
+    })
+  },
+
+  /** Approve all, for a service's first tool list only: the pending hashes shown */
+  async approveAllTools(id, hashes) {
+    return request(`/api/services/${encodeURIComponent(id)}/tools/approve-all`, {
+      method: 'POST', body: JSON.stringify({ hashes }),
+    })
+  },
+
   async checkHealth(id) {
     return request(`/api/services/${encodeURIComponent(id)}/health-check`, { method: 'POST' })
   },
@@ -281,6 +301,14 @@ export const systemApi = {
 }
 
 // ==================== OAuth 2.1 management ====================
+
+/** Client configuration export (#36): Claude Code / Cursor / VS Code / Codex snippets. `serviceId` null = all servers */
+export const clientConfigApi = {
+  async get(serviceId, client, variant = 'oauth') {
+    const path = serviceId ? `/api/services/${encodeURIComponent(serviceId)}/client-config` : '/api/client-config'
+    return request(`${path}${qs({ client, variant })}`)
+  },
+}
 
 export const oauthApi = {
   clients: {
@@ -393,6 +421,13 @@ export const oauthApi = {
     },
     async forAudience(audience) {
       return request(`/api/oauth/revocation-feed${qs({ audience })}`)
+    },
+  },
+
+  /** Does the server enforce tool approvals (its pinning middleware's polls of the tool policy feed, #33) */
+  policyFeed: {
+    async forService(serviceId) {
+      return request(`/api/oauth/services/${encodeURIComponent(serviceId)}/policy-feed`)
     },
   },
 

@@ -1,0 +1,40 @@
+{
+  "client": "vscode",
+  "variant": "pat",
+  "issuer": "https://gate.example.com",
+  "docs_url": "https://code.visualstudio.com/docs/agents/reference/mcp-configuration",
+  "servers": [
+    {
+      "name": "Folio",
+      "key": "Folio",
+      "url": "https://folio.example.com/mcp",
+      "scopes": [
+        "rag:read"
+      ],
+      "pat_input": "mcp-gate-pat-Folio"
+    },
+    {
+      "name": "Morph yard",
+      "key": "Morph-yard",
+      "url": "http://127.0.0.1:5055/mcp",
+      "scopes": [],
+      "pat_input": "mcp-gate-pat-Morph-yard"
+    },
+    {
+      "name": "Folio",
+      "key": "Folio-2",
+      "url": "https://other.example.com/mcp",
+      "scopes": [],
+      "pat_input": "mcp-gate-pat-Folio-2"
+    }
+  ],
+  "file": {
+    "format": "json",
+    "filename": "mcp.json",
+    "path": ".vscode/mcp.json",
+    "content": "{\n  \"inputs\": [\n    {\n      \"type\": \"promptString\",\n      \"id\": \"mcp-gate-pat-Folio\",\n      \"description\": \"MCP Gate personal access token for Folio\",\n      \"password\": true\n    },\n    {\n      \"type\": \"promptString\",\n      \"id\": \"mcp-gate-pat-Morph-yard\",\n      \"description\": \"MCP Gate personal access token for Morph yard\",\n      \"password\": true\n    },\n    {\n      \"type\": \"promptString\",\n      \"id\": \"mcp-gate-pat-Folio-2\",\n      \"description\": \"MCP Gate personal access token for Folio\",\n      \"password\": true\n    }\n  ],\n  \"servers\": {\n    \"Folio\": {\n      \"type\": \"http\",\n      \"url\": \"https://folio.example.com/mcp\",\n      \"headers\": {\n        \"Authorization\": \"Bearer ${input:mcp-gate-pat-Folio}\"\n      }\n    },\n    \"Morph-yard\": {\n      \"type\": \"http\",\n      \"url\": \"http://127.0.0.1:5055/mcp\",\n      \"headers\": {\n        \"Authorization\": \"Bearer ${input:mcp-gate-pat-Morph-yard}\"\n      }\n    },\n    \"Folio-2\": {\n      \"type\": \"http\",\n      \"url\": \"https://other.example.com/mcp\",\n      \"headers\": {\n        \"Authorization\": \"Bearer ${input:mcp-gate-pat-Folio-2}\"\n      }\n    }\n  }\n}\n"
+  },
+  "commands": [],
+  "install_links": [],
+  "pat_page": "https://gate.example.com/tokens/create"
+}

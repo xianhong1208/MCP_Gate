@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import {
   Server, Plus, Trash2, Key, RefreshCw, Check, Download,
-  Radio, Search, Activity, Wrench, Copy, Edit3, Lock,
+  Radio, Search, Activity, Wrench, Copy, Edit3, Lock, ShieldAlert, ScanSearch, Plug,
 } from 'lucide-react'
 import { servicesApi, discoveryApi, oauthApi } from '../services/api'
 import { exportServicesToCSV } from '../utils/export'
@@ -12,6 +12,7 @@ import { copyToClipboard } from '../utils/clipboard'
 import useVisiblePolling from '../hooks/useVisiblePolling'
 import LastChecked from '../components/LastChecked'
 import ServiceFormModal from '../components/ServiceFormModal'
+import ClientConfigPanel from '../components/ClientConfigPanel'
 import { useConfirm } from '../contexts/ConfirmContext'
 import { useToast } from '../contexts/ToastContext'
 import HealthIndicator from '../components/HealthIndicator'
@@ -37,7 +38,7 @@ function ToolsModal({ service, onClose }) {
     setIsLoading(true)
     setError('')
     servicesApi.getTools(service.id)
-      .then((result) => { if (!cancelled) setTools(result.tools || []) })
+      .then((result) => { if (!cancelled) setTools((result.tools || []).filter((tl) => !tl.removed_at)) })
       .catch((err) => { if (!cancelled) setError(err.message || t('services.tools.loadFailed')) })
       .finally(() => { if (!cancelled) setIsLoading(false) })
     return () => { cancelled = true }
@@ -49,7 +50,9 @@ function ToolsModal({ service, onClose }) {
     try {
       const result = await servicesApi.refreshTools(service.id)
       setTools(result.tools || [])
-      toast.success(t('services.tools.refreshSuccess', { n: result.tools_count }))
+      toast.success(result.tools_pending > 0
+        ? t('services.toolPin.refreshedWithPending', { n: result.tools_count, count: result.tools_pending })
+        : t('services.tools.refreshSuccess', { n: result.tools_count }))
     } catch (err) {
       setRefreshError(err.message || t('services.tools.refreshFailed'))
     } finally {
@@ -85,7 +88,11 @@ function ToolsModal({ service, onClose }) {
               <div key={tool.id || tool.name} className="px-4 py-3">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0 flex-1">
-                    <h4 className="font-mono text-xs font-medium text-foreground">{tool.name}</h4>
+                    <h4 className="flex flex-wrap items-center gap-2 font-mono text-xs font-medium text-foreground">
+                      {tool.name}
+                      {tool.state === 'pending' && <Badge tone="warning">{t('services.toolPin.state.pending')}</Badge>}
+                      {tool.state === 'rejected' && <Badge tone="danger">{t('services.toolPin.state.rejected')}</Badge>}
+                    </h4>
                     {tool.description && <p className="mt-1 text-sm text-muted-foreground">{tool.description}</p>}
                   </div>
                   {tool.input_schema && (
@@ -303,6 +310,7 @@ export default function ServicesPage() {
   const [showScanModal, setShowScanModal] = useState(false)
   const [editingService, setEditingService] = useState(null)
   const [viewingToolsService, setViewingToolsService] = useState(null)
+  const [showConnectAll, setShowConnectAll] = useState(false)
   const [selectedServices, setSelectedServices] = useState(new Set())
   const [isBatchDeleting, setIsBatchDeleting] = useState(false)
   const [checkingHealth, setCheckingHealth] = useState(new Set())
@@ -440,6 +448,11 @@ export default function ServicesPage() {
             {services.length > 0 && (
               <IconButton variant="secondary" icon={Download} title={t('services.list.exportTitle')} onClick={() => exportServicesToCSV(services)} />
             )}
+            {services.length > 0 && (
+              <Button variant="secondary" icon={Plug} onClick={() => setShowConnectAll(true)} title={t('clientConfig.allTitle')}>
+                {t('clientConfig.connectAll')}
+              </Button>
+            )}
             <Button variant="secondary" icon={Activity} onClick={handleCheckAllHealth} disabled={isLoading} loading={checkingAll} title={t('services.list.checkAllTitle')}>
               {checkingAll ? t('services.list.checkingAll') : t('services.list.checkAll')}
             </Button>
@@ -525,6 +538,12 @@ export default function ServicesPage() {
                       </Link>
                       {service.source === 'auto_discovered' && <Badge tone="warning">{t('services.list.autoTag')}</Badge>}
                       {service.source === 'managed' && <Badge tone="accent">{t('services.list.managedTag')}</Badge>}
+                      {service.tools_pending > 0 && (
+                        <Badge tone="warning" title={t('services.toolPin.pendingBadge', { count: service.tools_pending })}><ShieldAlert className="h-3 w-3" />{service.tools_pending}</Badge>
+                      )}
+                      {service.tools_flagged > 0 && (
+                        <Badge tone="danger" title={t('services.toolScan.flaggedBadge', { count: service.tools_flagged })}><ScanSearch className="h-3 w-3" />{service.tools_flagged}</Badge>
+                      )}
                       {service.requires_auth ? (
                         <Badge tone="neutral" title={t('services.list.oauthBadge')}><Key className="h-3 w-3" />{t('services.list.oauthBadge')}</Badge>
                       ) : (
@@ -573,6 +592,7 @@ export default function ServicesPage() {
                         className={clsx(isCheckingHealth && 'animate-spin')}
                       />
                       <IconButton icon={Edit3} title={t('services.list.editService')} onClick={() => setEditingService(service)} />
+                      <IconButton icon={Plug} title={t('clientConfig.connect')} to={`/services/${encodeURIComponent(service.id)}#connect`} />
                       <IconButton icon={Key} title={t('services.list.issueToken')} to={`/tokens/create?service_id=${encodeURIComponent(service.id)}`} />
                       <span className="mx-1 h-4 w-px bg-border" aria-hidden="true" />
                       <IconButton variant="destructive" icon={Trash2} title={t('services.list.deleteService')} onClick={() => handleDelete(service.id, service.name)} />
@@ -597,6 +617,13 @@ export default function ServicesPage() {
           onClose={() => setEditingService(null)}
           onSubmit={(fields) => handleUpdate(editingService.id, fields)}
         />
+      )}
+      {showConnectAll && (
+        <Dialog open onClose={() => setShowConnectAll(false)} size="2xl" title={t('clientConfig.allTitle')} description={t('clientConfig.allSubtitle')}>
+          <DialogBody>
+            <ClientConfigPanel serviceId={null} />
+          </DialogBody>
+        </Dialog>
       )}
       {viewingToolsService && <ToolsModal service={viewingToolsService} onClose={() => setViewingToolsService(null)} />}
     </div>

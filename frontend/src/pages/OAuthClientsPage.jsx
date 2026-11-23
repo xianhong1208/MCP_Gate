@@ -526,6 +526,8 @@ export default function OAuthClientsPage() {
   useEffect(() => { load() }, [load])
 
   const visible = clients.filter((c) => clientStatus(c) === tab)
+  // MCP 2026-07-28 deprecates Dynamic Client Registration: say so while any active client still uses it
+  const dcrCount = clients.filter((c) => c.created_via === 'dcr' && c.is_active).length
 
   const runClientAction = async (client, action, successMsg) => {
     setBusy(client.client_id)
@@ -580,6 +582,10 @@ export default function OAuthClientsPage() {
       />
 
       {error && <Alert tone="danger">{error}</Alert>}
+
+      {dcrCount > 0 && (
+        <Alert tone="info">{t('clients.dcrNotice', { count: dcrCount })}</Alert>
+      )}
 
       <div className="space-y-4">
         <Tabs
@@ -646,7 +652,10 @@ export default function OAuthClientsPage() {
                       </div>
                     </TD>
                     <TD>
-                      <Badge tone={c.created_via === 'dcr' || c.created_via === 'cimd' ? 'warning' : isSystem ? 'neutral' : 'success'}>
+                      <Badge
+                        tone={c.created_via === 'dcr' || c.created_via === 'cimd' ? 'warning' : isSystem ? 'neutral' : 'success'}
+                        title={c.created_via === 'dcr' ? t('clients.dcrBadgeHint') : undefined}
+                      >
                         {t(`clients.via.${c.created_via}`, c.created_via)}
                       </Badge>
                     </TD>

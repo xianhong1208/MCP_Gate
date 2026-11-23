@@ -282,6 +282,13 @@
       "clientsHint": "核准與管理 client",
       "services": "服務",
       "servicesHint": "註冊並監控 MCP server"
+    },
+    "pendingTools": {
+      "title_other": "{{count}} 個 tools 等待核准",
+      "hint": "有新的或變更過的 tool 定義尚未審核。開啟該 server 比對後核准或拒絕。",
+      "count_other": "{{count}} 個待核准",
+      "flaggedHint_other": "其中 {{count}} 個被 poisoning 掃描標示。",
+      "flagged_other": "{{count}} 個被標示"
     }
   },
   "tokens": {
@@ -571,6 +578,12 @@
       "feedNeverPolled": "已綁定 resource server,但從未輪詢",
       "feedNotWired": "未串接:已撤銷的 token 在到期前仍然有效",
       "feedHint": "離線驗證 token 的 server 只有輪詢 POST /oauth/revoked 才會知道撤銷;請在 OAuth Clients 綁定一個 resource server,並用 MCPGateVerifier 輪詢。",
+      "toolPolicy": "Tool 核准",
+      "policyActive": "由 server 執行,最後輪詢",
+      "policyStale": "已停止輪詢,最後一次",
+      "policyNeverPolled": "已綁定 resource server,但釘選 middleware 從未輪詢",
+      "policyNotWired": "未執行:server 會列出所有 tools,不論是否核准",
+      "policyHint": "Server 只有在執行 MCPGateToolPinning middleware 時才會隱藏未核准的 tools;它以 resource server client 讀取 POST /oauth/policy。",
       "yes": "是",
       "no": "否",
       "responseTime": "回應時間",
@@ -619,13 +632,17 @@
       "audienceCustom": "自訂 audience,簽給此 server 的 token 會帶完全相同的值。",
       "audienceDefault": "預設使用 MCP URL;若 server 端期望其他值,請在服務設定中自訂 audience。",
       "staticTokenBadge": "已設定靜態 Bearer token",
+      "protocol": "MCP 版本",
+      "protocolModern": "無狀態",
+      "protocolLegacy": "initialize 握手",
+      "protocolHint": "MCP Gate 最近一次與此伺服器溝通的方式（{{when}}）。只保存在記憶體：MCP Gate 啟動後，第一次健康檢查、掃描或重新整理工具之後才會顯示。",
       "scopesTitle": "允許的 scope",
       "scopesAll": "不限制,任何已註冊的 scope 都可簽發。",
       "ownScopesTitle": "此伺服器宣告的 scope",
       "ownScopesSubtitle": "只存在於這台伺服器,與全域註冊表並行;簽給其他伺服器的 token 不會帶有這些 scope。名稱不可與全域 scope 重複。",
       "ownScopesEmpty": "此伺服器尚未宣告自己的 scope",
       "integrationTitle": "接入設定",
-      "integrationSubtitle": "Server 端(FastMCP)與 MCP client 端可直接複製的設定。",
+      "integrationSubtitle": "Server 端（FastMCP）可直接複製的程式碼。用戶端設定請見「連接用戶端」。",
       "snippetsUnavailable": "目前無法取得接入範例。",
       "issuerLabel": "Issuer",
       "issuePat": "簽發 Personal Token",
@@ -634,8 +651,6 @@
       "tokensHint": "簽發 Personal Access Token,或連接 OAuth client",
       "viewAllTokens": "查看全部",
       "snippetFamily": {
-        "claudeCode": "Claude Code",
-        "mcpJson": "mcp.json",
         "fastmcp": "FastMCP"
       },
       "snippetVariant": {
@@ -668,6 +683,103 @@
       "unreachable": "無法連線到伺服器",
       "timeout": "健康檢查逾時",
       "failed": "健康檢查失敗"
+    },
+    "toolPin": {
+      "state": {
+        "approved": "已核准",
+        "pending": "待核准",
+        "rejected": "已拒絕",
+        "removed": "已不再列出"
+      },
+      "hashLabel": "SHA-256",
+      "versionCount_other": "{{count}} 個版本",
+      "approve": "核准",
+      "reject": "拒絕",
+      "withdraw": "撤回核准",
+      "field": {
+        "title": "標題",
+        "description": "說明",
+        "inputSchema": "輸入 schema",
+        "outputSchema": "輸出 schema",
+        "annotations": "Annotations"
+      },
+      "changed": "已變更",
+      "newTool": "新 tool",
+      "changedHint": "定義與 {{date}} 核准的版本不同，請檢查變更內容。",
+      "newHint": "Server 列出了一個從未核准過的 tool，請檢查完整定義。",
+      "noFieldChanges": "只有名稱或雜湊值不同。",
+      "approvedToast": "已核准 {{name}}",
+      "rejectedToast": "已拒絕 {{name}}",
+      "decideFailed": "無法儲存決定：{{message}}",
+      "approvedAllToast_other": "已核准 {{count}} 個 tools",
+      "pendingBadge_other": "{{count}} 個 tools 待核准",
+      "reviewTitle_other": "{{count}} 個 tools 等待核准",
+      "approveAll_other": "全部核准（{{count}}）",
+      "reviewFirstHint": "這是此 server 的第一份 tool 清單。請閱讀定義後逐一核准，或一次全部核准。之後的變更需逐一審核。",
+      "reviewHint": "新的或變更過的 tool 定義會以雜湊值釘選，在管理員核准前維持未核准。已核准的版本會保留以供比對。",
+      "removedSection_other": "已不再列出（{{count}}）",
+      "refreshedWithPending_other": "已重新整理 {{n}} 個 tools，其中 {{count}} 個等待核准",
+      "source": {
+        "reported": "由 server 回報",
+        "scan": "重新整理時發現"
+      },
+      "sourceReportedHint": "Server 的釘選 middleware 在列出此定義時回報給 MCP Gate；核准前 clients 看不到這個 tool。",
+      "enforcedHint": "此 server 會執行核准：待核准與已拒絕的 tools 不會列給 clients，也無法呼叫。",
+      "notEnforcedHint": "此 server 尚未執行核准：clients 仍看得到並可呼叫待核准的 tools。加入 MCPGateToolPinning middleware 即可隱藏它們。"
+    },
+    "toolScan": {
+      "title": "Poisoning 掃描",
+      "notBlocking": "只做標示；是否核准仍由你決定。",
+      "severity": {
+        "high": "高",
+        "warning": "警告",
+        "info": "資訊"
+      },
+      "rule": {
+        "invisible-characters": {
+          "label": "不可見字元",
+          "explain": "零寬、方向控制或 Unicode tag 字元：你在這裡看不到，但模型讀得到。下方以方框標示。"
+        },
+        "instruction-phrase": {
+          "label": "對模型下指令",
+          "explain": "內容在對模型說話而不是描述 tool：要求忽略先前的指示、對使用者隱瞞、<IMPORTANT> 或 <system> 標記、隱藏註解。"
+        },
+        "tool-mention": {
+          "label": "提到其他 tool",
+          "explain": "提到這裡登記的其他 tool。點名另一個 server 的 tool，正是一個 server 改變模型使用另一個 server 的手法（shadowing）。"
+        },
+        "sensitive-data": {
+          "label": "機密或私人檔案",
+          "explain": "提到 SSH 金鑰、.env 檔、雲端憑證或其他機密；若要求讀取或傳送則更嚴重。"
+        },
+        "url": {
+          "label": "網址",
+          "explain": "定義中有連結；若是 IP 位址、未加密的 http、短網址、出現在預設值，或在「傳送…到」之後，則更嚴重。"
+        },
+        "encoded-blob": {
+          "label": "編碼資料",
+          "explain": "很長的 base64 或 hex 字串；若能解碼成可讀文字則更嚴重。"
+        },
+        "long-text": {
+          "label": "文字異常地長",
+          "explain": "說明超過 4,000 字元，或 schema 文字超過 1,000 字元：有空間藏指令。"
+        },
+        "scan-truncated": {
+          "label": "未完整掃描",
+          "explain": "定義太大，無法完整掃描；只檢查了前面一部分。"
+        }
+      },
+      "flagged_other": "{{count}} 項發現",
+      "notes_other": "{{count}} 項提示",
+      "countsHint": "Poisoning 掃描：高 {{high}}、警告 {{warning}}、資訊 {{info}}",
+      "more_other": "…還有 {{count}} 項",
+      "showInfo_other": "顯示 {{count}} 項資訊",
+      "hideInfo": "隱藏資訊項目",
+      "pendingFlagged_other": "其中 {{count}} 個被 poisoning 掃描標示：核准前請先看它的發現。",
+      "flaggedBadge_other": "{{count}} 個待核准 tools 被 poisoning 掃描標示",
+      "confirmTitle_other": "要核准掃描評為高風險的 {{count}} 個 tools 嗎？",
+      "confirmMessage": "Clients 會依此定義看到並呼叫它。Poisoning 掃描發現：",
+      "confirmApprove": "仍要核准"
     }
   },
   "clients": {
@@ -687,6 +799,8 @@
       "pending": "待核准",
       "revoked": "已撤銷"
     },
+    "dcrNotice_other": "有 {{count}} 個用戶端是透過動態用戶端註冊（DCR）註冊的；MCP 2026-07-28 已將 DCR 列為棄用，改用 Client ID Metadata Document（以 https 網址作為 client id）。這些用戶端仍可正常使用；新版 MCP 用戶端會自動改用 metadata document。",
+    "dcrBadgeHint": "MCP 2026-07-28 已將動態用戶端註冊列為棄用；舊版用戶端仍可使用。",
     "via": {
       "dcr": "動態註冊",
       "cimd": "中繼資料文件",
@@ -1034,6 +1148,10 @@
       "oauth_code_replay": "授權碼重複使用",
       "oauth_refresh_replay": "Refresh Token 重複使用",
       "refresh_tools": "重新整理 Tools",
+      "tool_approve": "核准 Tool",
+      "tool_reject": "拒絕 Tool",
+      "tool_approve_all": "全部核准 Tools",
+      "tool_report": "Server 回報 Tools",
       "scan_services": "網路掃描",
       "admin_setup": "初始設定",
       "create_service": "建立服務",
@@ -1179,6 +1297,11 @@
       "serverError": "發生未預期的錯誤,請稍後再試",
       "networkError": "網路錯誤,請檢查您的連線",
       "requestFailed": "請求失敗"
+    },
+    "client_config": {
+      "no_url": "這台伺服器還沒有位址或 audience，用戶端無法連線。",
+      "unknown_client": "未知的用戶端：請選擇 Claude Code、Cursor、VS Code 或 Codex。",
+      "unknown_variant": "未知的方式：請選擇登入或個人 token。"
     }
   },
   "components": {
@@ -1259,6 +1382,58 @@
       "mcp_resources_read": "讀取 resources",
       "mcp_prompts_read": "讀取 prompts",
       "offline_access": "要求 refresh token"
+    }
+  },
+  "clientConfig": {
+    "title": "連接用戶端",
+    "subtitle": "Claude Code、Cursor、VS Code 與 Codex 的設定。每個人用自己的 MCP Gate 帳號登入。",
+    "connect": "連接用戶端",
+    "connectAll": "連接用戶端",
+    "allTitle": "把用戶端連到所有伺服器",
+    "allSubtitle": "一個設定檔，包含這裡列出的所有啟用中 MCP 伺服器。",
+    "loadFailed": "無法載入用戶端設定",
+    "variant": {
+      "oauth": "登入",
+      "pat": "個人 token"
+    },
+    "oauthIntro": "用戶端會自行找到 MCP Gate（OAuth discovery）、自行註冊，並開啟瀏覽器讓你登入。設定檔裡不會有token。",
+    "patTitle": "給沒有瀏覽器的機器",
+    "patBody": "用在 CI 或遠端 shell。設定檔永遠不含token：它從環境變數讀取（VS Code 會詢問一次）。一個個人 token只適用於一台伺服器。",
+    "createPat": "建立個人 token",
+    "noServers": "還沒有任何伺服器有位址。",
+    "commandsTitle": "指令",
+    "addToCursor": "加入 Cursor",
+    "addToCursorNamed": "將 {{name}} 加入 Cursor",
+    "docs": "{{client}} 文件",
+    "download": "下載 {{filename}}",
+    "dcrReview": "這個 MCP Gate 的新 OAuth 用戶端需要管理員審核。第一次嘗試登入後，到「OAuth 用戶端」核准它，再登入一次。",
+    "skipped": "未包含（尚無位址）：{{names}}",
+    "steps": {
+      "createPat": "為這台伺服器建立個人 token（上方連結）並複製。",
+      "setEnv": "在用戶端啟動的環境設定它，例如在 shell 設定檔加入 export {{env}}='<YOUR_PAT>'。不要貼進設定檔。",
+      "claudeCode": {
+        "runCommands": "執行下方指令。加上 --scope user 可在所有專案使用這台伺服器。",
+        "login": "claude mcp login 會在瀏覽器中登入（或在 Claude Code 執行 /mcp 並選擇 Authenticate）。",
+        "runPatCommands": "執行下方指令。Claude Code 連線時才展開標頭裡的 ${VAR}；單引號讓 shell 不會先展開它。",
+        "orFile": "或分享給整個專案：把 JSON 放到專案根目錄的 {{path}}。"
+      },
+      "cursor": {
+        "installLink": "點下方的「加入 Cursor」。",
+        "orFile": "或把 JSON 合併到 {{path}}（所有專案）或 .cursor/mcp.json（單一專案）。",
+        "login": "在 Cursor 設定 → MCP，伺服器會顯示「Needs login」：點它並在瀏覽器登入。"
+      },
+      "vscode": {
+        "runCommands": "執行下方指令，把伺服器加入你的使用者設定檔。",
+        "orFile": "或把 JSON 合併到工作區的 {{path}}。",
+        "login": "啟動伺服器：VS Code 會開啟瀏覽器讓你用 MCP Gate 登入。",
+        "patFile": "把 JSON 合併到工作區的 {{path}}。",
+        "patPrompt": "伺服器啟動時，VS Code 會詢問一次token，並存在它的秘密儲存區。"
+      },
+      "codex": {
+        "runCommands": "執行下方指令：codex mcp login 會開啟瀏覽器登入。",
+        "orFile": "或把 TOML 附加到 {{path}}。是加進檔案，不要取代整個檔案。",
+        "patFile": "把 TOML 附加到 {{path}}。是加進檔案，不要取代整個檔案。"
+      }
     }
   }
 }

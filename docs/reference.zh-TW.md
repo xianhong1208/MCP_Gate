@@ -111,6 +111,24 @@ MCP 授權規範(2026-07-28)把動態註冊列為過時,改建議 [Client ID Met
 
 進階:`SERVER_HOST` / `SERVER_PORT` 可覆寫 bind 位址,只在它必須和 issuer 不同時使用(例如反向代理後面只聽 `127.0.0.1`)。完整的反向代理與 HTTPS 步驟見[部署](deploy.md)。
 
+### 動態用戶端註冊(DCR)
+
+MCP 2026-07-28 把動態用戶端註冊(RFC 7591)列為棄用,改用 [Client ID Metadata Documents](#client-id-metadata-documents)。MCP Gate 的 `/oauth/register` 照常可用,也仍列在 metadata(`registration_endpoint`)裡,給還沒改用 metadata document 的 client;新版 client 看到 server 宣告 `client_id_metadata_document_supported`(MCP Gate 有宣告)就會優先用 metadata document。啟動後第一個經由 DCR 註冊的 client 會留下一行警告說明此事,**OAuth Clients** 頁也會顯示有多少個啟用中的 client 是這樣註冊的。
+
+- **`application_type`。** 規範要求 client 註冊時送出 `application_type`(桌面 app、CLI 和 loopback redirect 用 `native`;遠端瀏覽器 app 用 `web`),因為 OpenID provider 會依它限制 redirect URI。MCP Gate 不是 OpenID provider:註冊與 metadata document 中的 `native`、`web` 都接受,其他值以 `invalid_client_metadata`(metadata document 則是 `invalid_client`)拒絕,不對 redirect URI 加任何額外規則。這個值不會被儲存。
+
+### MCP 協定版本
+
+MCP Gate 的掃描、健康檢查、*Refresh from server* 與 *Inspect as* 兩個世代的協定都會講:
+
+- **2026-07-28(無狀態)。** MCP Gate 先送 `server/discover`,協定版本、client 資訊與 capabilities 放在 `_meta`,並帶 `MCP-Protocol-Version` / `Mcp-Method` header。會回答它的 server 就不需要握手也沒有 session:每次重新整理只送一個 `tools/list`。
+- **2024-11-05 到 2025-11-25(`initialize` 握手)。** 其他任何回應 —— 像「missing session id」的 `400`、`404`、`405`、JSON-RPC「method not found」—— 依規範的向下相容規則都代表舊版 server:MCP Gate 改用 `initialize`(提出 2025-11-25,由 server 選版本),之後的請求帶 session id 與協商出的 `MCP-Protocol-Version`。
+- 新世代的錯誤(`-32022` 不支援的版本、`-32020` header 不一致、`-32021` 缺少 capability)絕不會讓它退回舊流程:不支援的版本會改用 server 列出的版本重試,否則回報「沒有共同的協定版本」。
+- MCP Gate 執行期間會依 server URL 記住它屬於哪個世代,失效時再重新探測,所以升級到 2026-07-28(或退回舊版)的 server 會在下一次檢查時被發現。
+- Server 頁面會顯示它最近一次回應所用的協定(例如 *MCP 版本 2026-07-28 · 無狀態*),MCP Gate 啟動後第一次健康檢查、掃描或重新整理之後才會出現;只保存在記憶體。`POST /api/services/{id}/health-check`、`GET /api/services/{id}`(`health.protocol_version`、`health.protocol_era`、`health.protocol_seen_at`)與 `POST /api/discovery/verify` 也會回報。
+
+你自己的 FastMCP server 不需要改:FastMCP 4 在同一個 endpoint 同時提供兩個世代,`MCPGateVerifier` 與 `MCPGateToolPinning` 在兩者下都能運作,`stateless_http=True` 也一樣。
+
 ### 撤銷清單
 
 MCP server 是離線驗證 token,單靠自己的話,被撤銷的 token 會一直有效到過期為止:access token 是 15 分鐘,PAT 則是它的整個效期。改為定期拉撤銷清單的 server,會在一個拉取間隔內拒絕它:
@@ -121,12 +139,82 @@ MCP server 是離線驗證 token,單靠自己的話,被撤銷的 token 會一直
 
 自己的 FastMCP server 可以用 [`examples/mcp_gate_hooks.py`](../examples/mcp_gate_hooks.py) 裡的 `MCPGateVerifier` 來拉。[Folio](https://github.com/xianhong1208/folio-rag) 與 [Morphyard](https://github.com/xianhong1208/morphyard) 已內建,設定方式見各自的 README。
 
+### Tool 釘選與核准
+
+server 列出的每個 tool 都以其定義的 SHA-256 釘選;新的或變更過的定義要等管理員核准,才算已核准。
+
+- **雜湊的範圍。** 取 `tools/list` 回傳的 tool 物件,只留 `name`、`title`、`description`、`inputSchema`、`outputSchema` 與 `annotations`(`_meta`、`icons` 等其他欄位不算)。缺少或為 `null` 的欄位直接略過,所以兩者雜湊相同;空字串或空物件則算是值。其餘部分序列化為 JSON:每一層的 key 排序、不含空白、非 ASCII 字元以 UTF-8 原樣寫出(不轉成 `\uXXXX`),再以 UTF-8 編碼取雜湊。定義在 `src/tool_pinning/hashing.py`;`tests/fixtures/tool_hash_vectors.json` 有一組標準向量,其他實作都必須算出相同結果。
+- **狀態。** tool 的每一份定義都保留為一個版本,帶有雜湊與狀態:*已核准*、*待核准* 或 *已拒絕*。重新整理(*從 Server 重新整理*、掃描)時,新 tool 或定義變更會新增一個待核准版本,舊版本全部保留,管理台因此能拿變更與已核准的版本比對。server 不再列出的 tool 會標為 *已不再列出*,不會刪除;之後再出現時歷史仍在。用 *Inspect as* 以其他身分重新整理也一樣:該身分看不到的 tool 只會被標記,不會失去核准。
+- **第一次核准。** 升級到 1.5 時,所有已存的 tool 都會被核准為基準(`decided_by: upgrade`)。這些資料當初沒有存 `title`、`outputSchema` 與 `annotations`,所以升級後第一次重新整理列出該 tool 時,只要 `name`、`description` 與 `inputSchema` 沒變,就以完整定義補齊基準;這三者有變則和其他變更一樣待核准。之後才登記的 server,所有 tool 一開始都是待核准,管理台只在這第一份清單上提供 **全部核准**。之後每個新的或變更的 tool 都在自己的卡片上核准或拒絕,卡片會列出每個變更欄位的逐行差異(新 tool 則列出完整定義)。
+- **決定。** 核准與拒絕都以雜湊指定版本,管理員決定的就是畫面上那一份定義。已拒絕的版本之後仍可核准,已核准的也可以用拒絕撤回。每次核准、拒絕與 *全部核准* 都記在稽核日誌(`tool_approve`、`tool_reject`、`tool_approve_all`)。儀表板與服務列表會顯示有幾個 tool 在等。
+- **API。** `GET /api/services/{id}/tools` 列出 tool,含 `state`、`hash`、`removed_at`、`versions` 與 `approved_version`(待核准變更要比對的版本),另有 `pending_count` 與 `first_review`。`POST /api/services/{id}/tools/{tool_id}/approve` 與 `…/reject` 接受 `{"hash": "<64 位十六進位>"}`;`POST /api/services/{id}/tools/approve-all` 接受 `{"hashes": [...]}`,一旦該服務有任何東西被核准過,就回 `409 tools.approve_all_not_first`。
+
+MCP Gate 只記錄這些決定;它不在 client 與 server 之間,所以單靠它無法隱藏未核准的 tool。執行釘選 middleware 的 server 會隱藏(見下一節);其他 server 只會在管理台顯示狀態,client 仍看得到所有 tool。
+
+### Poisoning 掃描
+
+呼叫 tool 的模型會讀它的說明與 schema,所以 server 可以把指令藏在裡面。每一份釘選的定義也會經過內建規則檢查(不用模型、不連網;`src/tool_pinning/scan.py`),結果顯示在核准卡片上,以及已核准 tool 的旁邊。**發現永遠不會擋下任何東西**:未核准的 tool 本來就會被隱藏(在執行 middleware 的 server 上),決定仍由管理員做。
+
+- **掃描範圍。** 雜湊欄位(`name`、`title`、`description`、`inputSchema`、`outputSchema`、`annotations`)裡的每個字串與物件 key,遞迴進去,所以藏在參數說明或 `default` 裡的指令也找得到。工作量有上限:每份定義 2,000 個字串、200,000 字元、32 層、200 項發現;超過時會有一項 `scan-truncated`。比對前先做 NFKC 正規化(全形字母變成 ASCII)、把常見的西里爾與希臘相似字母換成拉丁字母、大小寫折疊,並去掉不可見字元,所以 `ig<U+200B>nore` 仍會讀成 `ignore`。位移量指向原始文字。
+- **規則**(嚴重度 `high`、`warning` 或 `info`):
+
+  | 規則 | 標示什麼 | 嚴重度 |
+  |---|---|---|
+  | `invisible-characters` | 零寬字元、雙向控制字元(U+202A–U+202E、U+2066–U+2069)、Unicode tag 字元(U+E0000–U+E007F,會解碼並顯示為 *hidden text*)、補充變體選擇符、韓文填充字元。兩個非 ASCII 字元之間的單一 joiner(emoji 序列、印度與阿拉伯文字)不算。 | 雙向控制、tag、變體選擇符、連續 3 個以上,或夾在大部分字母之間(合併為一項)為 high;其餘 warning |
+  | `instruction-phrase` | 「ignore / disregard previous instructions」、「do not tell the user」、「without telling the user」、`<IMPORTANT>`、`<system>`、`[INST]`、chat template 標記,以及中文變體(忽略之前的指示、不要告訴使用者、对用户保密 …) | high |
+  | | 「before using this tool」、HTML 註解、「do not mention that」、「new instructions:」、「system prompt:」、「you are now a …」、使用這個工具之前 | warning |
+  | | 「you must」、「very important」、你必須 | info |
+  | `tool-mention` | 提到 MCP Gate 裡登記的 tool 名稱(任何 server),但不是自己。只找含 `_`、`-`、`.` 或 camelCase 且至少 4 字元的名稱,所以單獨的「search」或「fetch」不會命中。 | 另一台 server 有這個 tool 時 warning(shadowing);只有自己這台有時 info |
+  | `sensitive-data` | `~/.ssh`、`id_rsa` 等金鑰檔、`.aws/credentials`、`/etc/passwd`、`.netrc`、`.npmrc`、`.git-credentials`、`.kube/config`、`.env`、`mcp.json`、`claude_desktop_config.json`、`.cursor/` | 附近有「read / send / include / pass …」時 high;否則 warning |
+  | | 「API key」、「private key」、「credentials」、「password」、私鑰、密碼 … 出現在「read / send / include / pass …」附近 | warning |
+  | `url` | 任何網址 | info;IP 位址、非 loopback 的 `http` / `ftp` / `ws`、短網址為 warning,參數名稱像目的地(webhook、callback、report、upload、backup …)的 `default` / `const` / `enum` / `examples` 裡的網址也是 warning;上述網址出現在這些值裡,或在「send / upload / post … to」之後為 high |
+  | `encoded-blob` | 60 字元以上的 base64(大小寫加數字混合)或 64 字元以上的 hex | 能解碼成可讀文字時 high(會顯示);否則 warning(base64)或 info(hex,例如 SHA-256) |
+  | `long-text` | 說明超過 4,000 字元(info),或 schema 字串超過 1,000 字元(warning) | info / warning |
+  | `scan-truncated` | 達到工作量上限 | info |
+
+- **被標示** 指至少有一項 `warning` 或 `high`;只有 `info` 算是提示。儀表板與服務列表會計算被標示的待核准 tool(「2 個待核准,1 個被標示」)。
+- **卡片上。** 發現依規則分組,附簡短說明與命中的文字(不可見字元以方框 `U+XXXX` 顯示),命中的文字在差異裡也會標亮。核准帶有 `high` 發現的定義時會跳出一次確認,列出發現;其他情況一鍵即可,拒絕也是。每次核准或拒絕的稽核紀錄都記下當時顯示的發現(`details.findings`:各嚴重度的數量與規則 id,另有 `scan_rules_version`);*全部核准* 則逐個 tool 記錄。
+- **不儲存。** 發現在讀取 tool 清單時才計算(每份定義在記憶體快取:第一次約 1 ms,之後幾微秒),所以規則改進後,舊版本也會重新檢查;API 的 `scan_rules_version` 標明是哪一版規則算的。
+- **API。** `GET /api/services/{id}/tools` 的每個版本都有 `findings`:`[{rule, severity, path, start, end, match, excerpt, detail}]`(`path` 指向正規化後的定義,例如 `inputSchema.properties.url.default`;`start` / `end` 是該字串中的 code point 位移;`excerpt` 把不可見字元寫成 `<U+XXXX>`)。每個 tool 另有目前定義的 `findings` 與 `flagged`;回應另加 `flagged_count` 與 `scan_rules_version`,服務的回應另加 `tools_flagged`。
+- **抓不到的。** 規則比對的是用字與字元,不是意圖:換句話說的指令、其他語言、拆在不同欄位的指令,或行為與說明不符的 tool 都會通過。見 [SECURITY.md](../SECURITY.md#known-limitations)。請閱讀定義;掃描只是指出該先看哪裡。
+
+### Server 上的 tool 核准
+
+[`examples/mcp_gate_hooks.py`](../examples/mcp_gate_hooks.py) 裡的 `MCPGateToolPinning` 是一個 FastMCP middleware,在 server 本身執行核准。它需要和撤銷清單相同的 resource server client(見上文),與 `MCPGateVerifier` 並用:`FastMCP(..., middleware=[MCPGateToolPinning(verifier)])`。完整的 server 見 [`examples/fastmcp_server_hooks.py`](../examples/fastmcp_server_hooks.py)。
+
+- **`tools/list`** 會為 server 的每個 tool 計算雜湊(定義同上;範例檔自帶一份實作,並能算出標準向量),只列出已核准的。**`tools/call`** 會為被呼叫的 tool 計算雜湊,未核准就拒絕,回覆 `Tool '<name>' is not available on this server.`,和不存在的 tool 一樣;原因只寫進 server 的 log。
+- **回報。** MCP Gate 還不認得的定義會立刻送到 `POST /oauth/tool-report`,不必等重新整理就會在管理台顯示為待核准(標示 *由 server 回報*)。所以說明一改,server 下一次 `tools/list` 就會隱藏它,幾秒後管理台就看得到待核准。
+- **Policy。** 每 `poll_interval` 秒(預設 15)讀一次 `POST /oauth/policy`。MCP Gate 自己的請求(重新整理、掃描、健康檢查、*Inspect as*)所用的短效 token 帶有 `mcp_gate_probe` claim;middleware 對它們列出所有 tool,不論是否核准,因此重新整理記錄的是真正的清單,不會把被隱藏的 tool 標成已不再列出。帶這種 token 的呼叫仍會被拒絕。
+- **連不到 MCP Gate 時**,繼續使用最後一次收到的清單。它也會寫進 `cache_file`(預設為工作目錄下的 `mcp_gate_policy.json`;以原子方式寫入、權限 600;設 `None` 則只放記憶體),所以 MCP Gate 停機時重啟 server 也還在。為其他 issuer、audience 或雜湊版本寫的快取會被忽略;有設 `max_cache_age` 時,超過該秒數的也一樣。MCP Gate 恢復回應後,它的清單會取代快取。
+- **從未收到清單**(第一次啟動時 MCP Gate 沒開、也沒有可用的快取):所有 tool 都隱藏且不能呼叫,並有一行 log 說明原因。設 `fail_open=True` 則在收到第一份清單前列出並執行所有 tool。
+- **管理台。** server 頁面有一列 *Tool approvals*,和撤銷清單那列一樣:由 server 執行(附最後一次輪詢時間)、已停止輪詢、從未輪詢,或未執行。待核准 tool 的審核卡片會說明這台 server 是否執行核准。
+
+給其他實作參考的 feed 與回報格式(form-encoded `POST`,驗證方式同 `/oauth/revoked`;只限呼叫者自己的 server):
+
+- `POST /oauth/policy`(可帶 `etag`)回應 `{"format": 1, "hash_version": 1, "audience", "service_id", "tools": {"approved": [...], "pending": [...], "rejected": [...]}, "rules": [], "unchanged": false, "etag", "now"}`,每個清單都是 64 位十六進位雜湊。其他雜湊都算未知:隱藏並回報。`rules` 保留給 1.6 的 tool 層級 policy,目前是空的;不認得的欄位請忽略。帶上手上的 `etag`,若沒有變化就只回 `{"unchanged": true, "etag", "now"}`。server 被停用或刪除時,所有清單都是空的。
+- `POST /oauth/tool-report`,`tools` 是 `tools/list` 回傳格式的 tool 物件 JSON 陣列(最多 200 個、body 最大 2 MiB、每個 client 每分鐘 30 次、每份定義最大 64 KiB)。MCP Gate 會自己為每份定義計算雜湊:一併送來的 `hash` 只拿來比對,不同的會列在 `hash_mismatch`。回應是 `{"recorded": [{"name", "hash", "state", "new"}], "invalid": [{"index", "name", "reason"}], "hash_mismatch": [...]}`。回報和重新整理走同一套規則,只是它沒提到的 tool 不受影響。新的定義會以 `tool_report` 記入稽核日誌,執行者是該 resource server。
+
+### 連接 MCP client
+
+每台 server 頁面上的 **連接用戶端** 面板(服務列表的插頭圖示也會帶到這裡;列表上方的 **連接用戶端** 則一次產生所有 server),提供 **Claude Code、Cursor、VS Code 與 Codex** 的現成設定:每個 client 一個分頁,client 有指令就給指令,還有它讀取的設定檔(可複製或下載)與步驟。每個片段裡的 server 網址都是那台 server 的 **audience**:client 會把它連線的網址當成 RFC 8707 的 `resource` 送出,而 MCP Gate 只接受已登記的 audience,同一台 server 換個寫法就會得到 `invalid_target`。audience 不是 `http(s)` 網址時,改用 server 自己的位址。
+
+| Client | 登入(預設) | 個人 token | 依據 |
+|---|---|---|---|
+| Claude Code | `claude mcp add --transport http <name> <url>`,再 `claude mcp login <name>`(或 `/mcp`);`.mcp.json` `{"mcpServers": {"<name>": {"type": "http", "url": …}}}` | `--header 'Authorization: Bearer ${MCP_GATE_PAT_<NAME>}'`;Claude Code 連線時才展開變數 | [Claude Code MCP](https://code.claude.com/docs/en/mcp) |
+| Cursor | **加入 Cursor** 安裝連結(`cursor://anysphere.cursor-deeplink/mcp/install`),或 `~/.cursor/mcp.json` `{"mcpServers": {"<name>": {"url": …}}}`;從 *Needs login* 登入 | `"headers": {"Authorization": "Bearer ${env:MCP_GATE_PAT_<NAME>}"}` | [Cursor MCP](https://cursor.com/docs/context/mcp)、[安裝連結](https://cursor.com/docs/context/mcp/install-links) |
+| VS Code | `code --add-mcp '{"name": …, "type": "http", "url": …}'`,或 `.vscode/mcp.json` `{"servers": {…}}` | `password: true` 的 `promptString` input,標頭裡用 `${input:mcp-gate-pat-<name>}`:VS Code 問一次,token 存在它的秘密儲存區 | [VS Code MCP 設定](https://code.visualstudio.com/docs/agents/reference/mcp-configuration) |
+| Codex | `codex mcp add <name> --url <url>`,再 `codex mcp login <name>`;`~/.codex/config.toml` `[mcp_servers.<name>]` `url = …` | `bearer_token_env_var = "MCP_GATE_PAT_<NAME>"` | [Codex MCP](https://learn.chatgpt.com/docs/extend/mcp?surface=cli) |
+
+**登入** 不需要事先做任何事:這些 client 都會讀 server 的 protected resource metadata、找到 MCP Gate、自行註冊(Client ID Metadata Document 或動態註冊),再開啟同意頁。片段不固定 scope;client 依 server 公告的去要,MCP Gate 給 server 允許的預設 scope。`dcr_auto_approve` 關閉時,新 client 要先等管理員在 *OAuth Clients* 核准,面板會提示。**個人 token** 給沒有瀏覽器的機器(CI、遠端 shell)。片段永遠不含 token:每個都引用以 server 命名的環境變數(或 VS Code 的密碼提示),而一張 personal access token 只適用於一台 server。
+
+`GET /api/services/{id}/client-config?client=claude-code|cursor|vscode|codex&variant=oauth|pat` 回傳 `file`(`format`、`path`、`filename`、`content`)、`commands`、`install_links`、`servers`(名稱、設定鍵、網址、接受的 scope、PAT 變數)、`docs_url`、`issuer`、`dcr_auto_approve`、`requires_auth`,`pat` 另有 `pat_page`;加 `&download=1` 只回傳設定檔附件。`GET /api/client-config` 對所有啟用中的 server 做同樣的事(依名稱排序),沒有位址的列在 `skipped`。兩者都需要管理台登入(與讀取 server 相同),錯誤為 `409 client_config.no_url` / `422 client_config.unknown_client` / `422 client_config.unknown_variant`。設定鍵是 server 名稱只留 `A–Z a–z 0–9 - _`(重複時加編號),每個值都依它落入的 shell、JSON 或 TOML 正確跳脫。
+
 ## 使用管理台
 
 | 頁面 | 在這裡做什麼 |
 |---|---|
 | **Dashboard** | 服務健康、token 活動、最近事件、系統狀態。 |
-| **Services** | 登記或掃描 MCP server、設定 audience 與允許的 scope、宣告 server 專屬 scope、更新 tools、執行健康檢查、複製接入片段。 |
+| **Services** | 登記或掃描 MCP server、設定 audience 與允許的 scope、宣告 server 專屬 scope、更新 tools 並核准新的或變更的 tool([Tool 釘選與核准](#tool-釘選與核准))、執行健康檢查、複製接入片段與用戶端設定([連接 MCP client](#連接-mcp-client))。 |
 | **Tokens · Issue Token** | MCP Gate 簽發過的所有 token——OAuth 授權與 PAT——含撤銷、到期與最後使用資訊。 |
 | **OAuth Clients** | 動態註冊、中繼資料文件與受信任的 client:核准、撤銷、刪除;scope 註冊表;簽章金鑰輪替。 |
 | **Marketplace** | 從 catalog 部署 MCP server,或自帶 `{command, args, env}`。 |
@@ -141,9 +229,9 @@ MCP server 是離線驗證 token,單靠自己的話,被撤銷的 token 會一直
 | 類別 | 端點 |
 |---|---|
 | OAuth(公開) | `GET /.well-known/oauth-authorization-server` · `GET /.well-known/openid-configuration` · `GET /.well-known/jwks.json` · `POST /oauth/register` · `GET /oauth/authorize` · `GET/POST /oauth/authorize/requests/{id}[/decision]`(同意頁)· `POST /oauth/token` · `POST /oauth/revoke` · `POST /oauth/introspect` |
-| Resource server | `POST /oauth/revoked`(撤銷清單)· `POST /oauth/usage`(使用回報);需綁定到該 server 的 confidential client,見[撤銷清單](#撤銷清單) |
+| Resource server | `POST /oauth/revoked`(撤銷清單)· `POST /oauth/usage`(使用回報)· `POST /oauth/policy`(tool policy feed)· `POST /oauth/tool-report`(tool 回報);需綁定到該 server 的 confidential client,見[撤銷清單](#撤銷清單)與 [Server 上的 tool 核准](#server-上的-tool-核准) |
 | 管理台 session | `GET /api/session/status` · `POST /api/session/setup` · `POST /api/session/login` · `POST /api/session/logout` · `GET /api/session/me` · `PUT /api/session/me/{profile,password}` · `GET /api/session/oauth/{github,google}/{start,callback}` |
-| 管理 API(需登入) | `/api/services*` · `/api/oauth/{clients,scopes,tokens,consents,keys,activity,overview,snippets}` · `/api/discovery/*` · `/api/marketplace*` · `/api/managed*` · `/api/byo-mcp*` · `/api/stats/*` · `/api/audit/*` · `/api/system/*` |
+| 管理 API(需登入) | `/api/services*` · `/api/client-config` · `/api/oauth/{clients,scopes,tokens,consents,keys,activity,overview,snippets}` · `/api/discovery/*` · `/api/marketplace*` · `/api/managed*` · `/api/byo-mcp*` · `/api/stats/*` · `/api/audit/*` · `/api/system/*` |
 | 維運 | `GET /health` · `WS /ws/services`(服務狀態即時推播) |
 
 用腳本呼叫管理 API 時,先 `POST /api/session/login`,之後每個請求都要帶 `mcp_session` cookie、以 `X-Session-Binding` 標頭帶上登入回應裡的 `session_binding` 值,寫入請求還要帶同源的 `Origin` 標頭。

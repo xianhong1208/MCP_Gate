@@ -2,8 +2,9 @@
 
 Features:
 - Port scanning (Python async socket)
-- MCP service verification (JSON-RPC initialize)
-- Tool list retrieval (tools/list)
+- MCP service verification: `server/discover` (MCP 2026-07-28 and later, stateless) with a fallback to the
+  `initialize` handshake for older servers
+- Tool list retrieval (tools/list) in either era
 - SSE format support
 """
 
@@ -12,21 +13,107 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any, Callable
 
 import aiohttp
 
 from src.utils.mcp_target import InvalidTargetError, build_mcp_url
+from src.version import __version__
 
 logger = logging.getLogger(__name__)
+
+# Protocol revisions the scanner speaks, oldest to newest. Modern revisions carry the version in every request's
+# _meta (no handshake, no session); handshake-era revisions negotiate it with `initialize`.
+HANDSHAKE_PROTOCOL_VERSIONS = ("2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25")
+MODERN_PROTOCOL_VERSIONS = ("2026-07-28",)
+LATEST_HANDSHAKE_VERSION = HANDSHAKE_PROTOCOL_VERSIONS[-1]
+LATEST_MODERN_VERSION = MODERN_PROTOCOL_VERSIONS[-1]
+ERA_MODERN = "modern"
+ERA_LEGACY = "legacy"
+# JSON-RPC errors only a modern server sends (2026-07-28 "Error codes"): HeaderMismatch,
+# MissingRequiredClientCapability, UnsupportedProtocolVersion. Any of them means "do not fall back to initialize".
+UNSUPPORTED_PROTOCOL_VERSION = -32022
+MODERN_ERROR_CODES = frozenset({-32020, -32021, UNSUPPORTED_PROTOCOL_VERSION})
+META_PROTOCOL_VERSION = "io.modelcontextprotocol/protocolVersion"
+META_CLIENT_INFO = "io.modelcontextprotocol/clientInfo"
+META_CLIENT_CAPABILITIES = "io.modelcontextprotocol/clientCapabilities"
+META_SERVER_INFO = "io.modelcontextprotocol/serverInfo"
+CLIENT_INFO = {"name": "mcp-gate-scanner", "version": __version__}
+
+
+@dataclass(frozen=True)
+class ProtocolSeen:
+    """How this process last talked to an MCP URL: the protocol version, the era, and when."""
+    version: Optional[str]
+    era: str
+    seen_at: datetime
+
+
+@dataclass
+class _Reply:
+    status: int
+    content_type: str
+    www_authenticate: Optional[str]
+    session_id: Optional[str]
+    body: Any
+
+
+def _base_headers(host: str, port: int, connect_host: str, auth_token: Optional[str]) -> Dict[str, str]:
+    headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
+    if connect_host != host:
+        headers["Host"] = f"{host}:{port}"
+    if auth_token:
+        headers["Authorization"] = f"Bearer {auth_token}"
+    return headers
+
+
+def _modern_headers(base: Dict[str, str], method: str, version: str) -> Dict[str, str]:
+    """Streamable HTTP request headers of the modern era: the version and the method mirrored from the body."""
+    return {**base, "MCP-Protocol-Version": version, "Mcp-Method": method}
+
+
+def _modern_request(method: str, request_id: int, version: str) -> Dict[str, Any]:
+    return {"jsonrpc": "2.0", "id": request_id, "method": method, "params": {"_meta": {
+        META_PROTOCOL_VERSION: version, META_CLIENT_INFO: CLIENT_INFO, META_CLIENT_CAPABILITIES: {},
+    }}}
+
+
+def _initialize_request(offer: Optional[str] = None) -> Dict[str, Any]:
+    """The legacy handshake. Offers the newest handshake-era version; the server answers with one it supports."""
+    return {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+        "protocolVersion": offer or LATEST_HANDSHAKE_VERSION, "capabilities": {}, "clientInfo": CLIENT_INFO,
+    }}
+
+
+def _pick_version(supported: List[str], requested: str) -> tuple:
+    """Choose from the versions a modern server listed: another modern one -> ("retry", v); a handshake-era one ->
+    ("legacy", v); none we know -> ("error", message)."""
+    modern = [v for v in MODERN_PROTOCOL_VERSIONS if v in supported and v != requested]
+    if modern:
+        return ("retry", modern[-1])
+    handshake = [v for v in HANDSHAKE_PROTOCOL_VERSIONS if v in supported]
+    if handshake:
+        return ("legacy", handshake[-1])
+    listed = ", ".join(str(v)[:32] for v in supported[:8]) or "none listed"
+    return ("error", f"No protocol version in common with the server (it supports: {listed})")
 
 
 @dataclass
 class MCPToolInfo:
-    """MCP tool information"""
+    """MCP tool information: the fields of a tools/list entry that are stored and pinned (#32)."""
     name: str
     description: Optional[str] = None
     input_schema: Optional[Dict[str, Any]] = None
+    title: Optional[str] = None
+    output_schema: Optional[Dict[str, Any]] = None
+    annotations: Optional[Dict[str, Any]] = None
+
+    def to_mcp(self) -> Dict[str, Any]:
+        """Back to the tools/list spelling, the form src/tool_pinning/hashing.py hashes."""
+        return {"name": self.name, "title": self.title, "description": self.description,
+                "inputSchema": self.input_schema, "outputSchema": self.output_schema,
+                "annotations": self.annotations}
 
 
 @dataclass
@@ -34,6 +121,7 @@ class MCPVerifyResult:
     """MCP service verification result"""
     success: bool
     protocol_version: Optional[str] = None
+    protocol_era: Optional[str] = None  # ERA_MODERN (server/discover, stateless) or ERA_LEGACY (initialize)
     server_name: Optional[str] = None
     server_version: Optional[str] = None
     server_description: Optional[str] = None  # Taken from serverInfo.description (if present)
@@ -229,6 +317,9 @@ class MCPScanner:
         self.rpc_timeout = rpc_timeout if rpc_timeout is not None else _default_rpc_timeout()
         self.max_concurrent = max_concurrent
         self._semaphore = asyncio.Semaphore(max_concurrent)
+        # MCP URL -> era that last worked, and what was seen there (see protocol_seen)
+        self._eras: Dict[str, str] = {}
+        self._seen: Dict[str, ProtocolSeen] = {}
 
     async def scan_ports(
         self,
@@ -318,6 +409,113 @@ class MCPScanner:
         except Exception:
             return None
 
+    # ---- protocol eras (MCP 2026-07-28, SEP-2575) -------------------------------------------------------------
+    # A modern server answers `server/discover`; a legacy one needs the `initialize` handshake. The era is a property
+    # of the server, so it is remembered per MCP URL (the spec's "cache per origin") and probed again when the
+    # remembered path stops working (a server upgraded, or replaced by an older one).
+
+    def protocol_seen(self, mcp_url: Optional[str]) -> Optional[ProtocolSeen]:
+        """The protocol version and era this process last talked to `mcp_url` with (None before the first check)."""
+        return self._seen.get(mcp_url) if mcp_url else None
+
+    def _remember(self, mcp_url: str, version: Optional[str], era: str) -> None:
+        self._eras[mcp_url] = era
+        self._seen[mcp_url] = ProtocolSeen(version=version, era=era, seen_at=datetime.now(timezone.utc))
+
+    def _forget(self, mcp_url: str) -> None:
+        self._eras.pop(mcp_url, None)
+
+    async def _post(self, session, url: str, payload: dict, headers: dict, timeout) -> _Reply:
+        """POST one JSON-RPC message and read the reply (JSON or the first SSE message) inside the request."""
+        async with session.post(
+            url, json=payload, headers=headers, timeout=timeout, ssl=False,
+            # A redirect hands the peer control over where we connect next (e.g. a 307 to
+            # http://169.254.169.254/), bypassing the address check: never follow one.
+            allow_redirects=False,
+        ) as response:
+            content_type = response.headers.get("Content-Type", "")
+            body = None
+            if "json" in content_type or "text/event-stream" in content_type:
+                try:
+                    body = await self._read_jsonrpc(response)
+                except Exception:
+                    body = None
+            else:
+                await response.read()
+            return _Reply(status=response.status, content_type=content_type,
+                          www_authenticate=response.headers.get("WWW-Authenticate"),
+                          session_id=response.headers.get("mcp-session-id"), body=body)
+
+    async def _discover(self, session, url: str, headers: dict, timeout, version: str = LATEST_MODERN_VERSION):
+        """Send `server/discover` and classify the answer.
+
+        Returns (reply, outcome) where outcome is one of
+        ("modern", version, result) -- a modern server; ("legacy", offer) -- not a modern server, use initialize
+        (offer = a handshake-era version the server named, or None); ("error", message) -- a modern server that
+        refused (no common version, header mismatch ...); ("auth", None) -- 401, the caller decides.
+        """
+        reply = await self._post(session, url, _modern_request("server/discover", 1, version),
+                                 _modern_headers(headers, "server/discover", version), timeout)
+        if reply.status == 401:
+            return reply, ("auth", None)
+        body = reply.body if isinstance(reply.body, dict) else None
+        result = body.get("result") if body else None
+        if reply.status == 200 and isinstance(result, dict) and isinstance(result.get("supportedVersions"), list):
+            supported = [v for v in result["supportedVersions"] if isinstance(v, str)]
+            if version in supported:
+                return reply, ("modern", version, result)
+            return reply, _pick_version(supported, version)
+        error = body.get("error") if body else None
+        if isinstance(error, dict) and error.get("code") in MODERN_ERROR_CODES:
+            # A recognised modern error identifies a modern server: never fall back to initialize on it
+            if error.get("code") == UNSUPPORTED_PROTOCOL_VERSION:
+                data = error.get("data") if isinstance(error.get("data"), dict) else {}
+                supported = [v for v in (data.get("supported") or []) if isinstance(v, str)]
+                return reply, _pick_version(supported, version)
+            return reply, ("error", str(error.get("message") or error))
+        # Anything else (400 "missing session id", 404/405, a JSON-RPC "method not found", HTML ...) = legacy
+        return reply, ("legacy", None)
+
+    async def _negotiate(self, session, url: str, headers: dict, timeout) -> tuple:
+        """Probe the era. Returns (reply, outcome) like `_discover`; a "modern" outcome for another version is
+        retried once with that version."""
+        reply, outcome = await self._discover(session, url, headers, timeout)
+        if outcome[0] == "retry":
+            reply, outcome = await self._discover(session, url, headers, timeout, version=outcome[1])
+            if outcome[0] == "retry":  # the server keeps moving the goalposts
+                outcome = ("error", "server/discover did not settle on a protocol version")
+        return reply, outcome
+
+    async def _unauthorized(self, reply: _Reply, *, elapsed_ms, public_url, auth_token, token_factory,
+                            retry) -> MCPVerifyResult:
+        """A 401 during verification. A 401 alone must not be taken as an MCP service (any protected HTTP endpoint
+        may return one). Two signals confirm MCP behind auth: a Bearer challenge (the MCP authorization spec) or a
+        JSON-RPC formatted 401 body."""
+        is_mcp_auth = _is_bearer_challenge(reply.www_authenticate) or (
+            isinstance(reply.body, dict) and ("jsonrpc" in reply.body or "error" in reply.body))
+        if not is_mcp_auth:
+            return MCPVerifyResult(
+                success=False, reachable=True,
+                error="HTTP 401 (not MCP - no Bearer challenge or JSON-RPC response)",
+                response_time_ms=elapsed_ms,
+            )
+        # MCP Gate is the authorization server: mint a token for this URL and look inside
+        if token_factory is not None and not auth_token:
+            minted = token_factory(public_url)
+            if minted:
+                result = await retry(minted)
+                if result.success:
+                    result.requires_auth = True
+                    result.auth_token = minted
+                    return result
+                logger.info(f"Self-minted scanner token rejected by {public_url}: {result.error}")
+        return MCPVerifyResult(
+            success=True, reachable=True, requires_auth=True,
+            server_name="(requires auth)",
+            error="Service requires authentication (401)",
+            response_time_ms=elapsed_ms,
+        )
+
     async def verify_mcp_service(
         self,
         host: str,
@@ -329,10 +527,11 @@ class MCPScanner:
     ) -> MCPVerifyResult:
         """Verify an MCP service.
 
-        Uses a JSON-RPC initialize request to check whether the service is a valid MCP service.
-        When the peer answers 401 with a Bearer challenge and `token_factory` is given, a token for the
-        peer's MCP URL is minted (MCP Gate is the authorization server) and the probe is retried once,
-        so servers protected by MCP Gate still report their real name, version and tools.
+        Speaks both protocol eras: `server/discover` (MCP 2026-07-28 and later, stateless) first, and the
+        `initialize` handshake for servers that do not answer it as a modern server would. When the peer answers
+        401 with a Bearer challenge and `token_factory` is given, a token for the peer's MCP URL is minted (MCP Gate
+        is the authorization server) and the probe is retried once, so servers protected by MCP Gate still report
+        their real name, version and tools.
         """
         start_time = time.time()
         # Protocol, host and path come from the operator: an '@' in the path or a URL in the protocol
@@ -350,144 +549,39 @@ class MCPScanner:
         except ScannerSSRFError as e:
             return MCPVerifyResult(success=False, error=str(e), response_time_ms=(time.time() - start_time) * 1000)
         url = build_mcp_url(protocol, connect_host, port, path)
+        headers = _base_headers(host, port, connect_host, auth_token)
 
-        headers = {
-            "Content-Type": "application/json",
-            "Accept": "application/json, text/event-stream"
-        }
-        if connect_host != host:
-            headers["Host"] = f"{host}:{port}"
-        if auth_token:
-            headers["Authorization"] = f"Bearer {auth_token}"
+        def elapsed() -> float:
+            return (time.time() - start_time) * 1000
 
-        payload = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {
-                "protocolVersion": "2024-11-05",
-                "capabilities": {},
-                "clientInfo": {
-                    "name": "mcp-gate-scanner",
-                    "version": "1.0.0"
-                }
-            }
-        }
+        async def retry(minted: str) -> MCPVerifyResult:
+            return await self.verify_mcp_service(host, port, path, protocol, minted)
 
         try:
             timeout = aiohttp.ClientTimeout(total=self.rpc_timeout)
             async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    url,
-                    json=payload,
-                    headers=headers,
-                    timeout=timeout,
-                    ssl=False,
-                    # A redirect hands the peer control over where we connect next (e.g. a 307 to
-                    # http://169.254.169.254/), bypassing the address check above: never follow one.
-                    allow_redirects=False,
-                ) as response:
-                    elapsed_ms = (time.time() - start_time) * 1000
-                    logger.info(f"MCP verify response: status={response.status}, content-type={response.headers.get('Content-Type', 'N/A')}")
-
-                    # Handle non-200 status codes
-                    # Note: a 401 alone must not be taken as an MCP service, since any protected HTTP
-                    # endpoint may return 401. Two signals confirm MCP behind auth: a Bearer challenge
-                    # (the MCP authorization spec) or a JSON-RPC formatted 401 body.
-                    if response.status == 401:
-                        is_mcp_auth = _is_bearer_challenge(response.headers.get("WWW-Authenticate"))
-                        if not is_mcp_auth:
-                            try:
-                                content_type = response.headers.get("Content-Type", "")
-                                if "application/json" in content_type or "text/event-stream" in content_type:
-                                    body = await self._read_jsonrpc(response)
-                                    is_mcp_auth = bool(body) and isinstance(body, dict) and \
-                                        ("jsonrpc" in body or "error" in body)
-                            except Exception:
-                                pass
-                        if not is_mcp_auth:
-                            return MCPVerifyResult(
-                                success=False, reachable=True,
-                                error="HTTP 401 (not MCP - no Bearer challenge or JSON-RPC response)",
-                                response_time_ms=elapsed_ms,
-                            )
-                        # MCP Gate is the authorization server: mint a token for this URL and look inside
-                        if token_factory is not None and not auth_token:
-                            minted = token_factory(public_url)
-                            if minted:
-                                retry = await self.verify_mcp_service(host, port, path, protocol, minted)
-                                if retry.success:
-                                    retry.requires_auth = True
-                                    retry.auth_token = minted
-                                    return retry
-                                logger.info(f"Self-minted scanner token rejected by {public_url}: {retry.error}")
-                        return MCPVerifyResult(
-                            success=True, reachable=True, requires_auth=True,
-                            server_name="(requires auth)",
-                            error="Service requires authentication (401)",
-                            response_time_ms=elapsed_ms,
-                        )
-
-                    if response.status != 200:
-                        return MCPVerifyResult(
-                            success=False, reachable=True,
-                            error=f"HTTP {response.status}",
-                            response_time_ms=elapsed_ms
-                        )
-
-                    # Handle the SSE or JSON response (SSE must be read incrementally -- see _read_sse_message)
-                    result = await self._read_jsonrpc(response)
-
-                    if not result:
-                        return MCPVerifyResult(
-                            success=False, reachable=True,
-                            error="Empty response",
-                            response_time_ms=elapsed_ms
-                        )
-
-                    if "error" in result:
-                        return MCPVerifyResult(
-                            success=False, reachable=True,
-                            error=result["error"].get("message", str(result["error"])),
-                            response_time_ms=elapsed_ms
-                        )
-
-                    if "result" in result:
-                        init_result = result["result"]
-
-                        # Verify that this is a valid MCP initialize response
-                        # An MCP response must contain protocolVersion and serverInfo
-                        protocol_version = init_result.get("protocolVersion")
-                        server_info = init_result.get("serverInfo", {})
-                        server_name = server_info.get("name")
-
-                        # At least protocolVersion or serverInfo.name is needed to confirm MCP
-                        if not protocol_version and not server_name:
-                            return MCPVerifyResult(
-                                success=False, reachable=True,
-                                error="Response missing MCP indicators (no protocolVersion or serverInfo.name)",
-                                response_time_ms=elapsed_ms
-                            )
-
-                        server_version = server_info.get("version")
-                        server_description = summarize_instructions(init_result.get("instructions")) \
-                            or server_info.get("description")
-                        logger.info(f"MCP service verified: name={server_name}, version={server_version}")
-                        return MCPVerifyResult(
-                            success=True, reachable=True,
-                            protocol_version=protocol_version,
-                            server_name=server_name,
-                            server_version=server_version,
-                            server_description=server_description,
-                            capabilities=init_result.get("capabilities"),
-                            response_time_ms=elapsed_ms
-                        )
-
-                    return MCPVerifyResult(
-                        success=False, reachable=True,
-                        error="Invalid response format",
-                        response_time_ms=elapsed_ms
-                    )
+                remembered = self._eras.get(public_url)
+                offer = None
+                if remembered != ERA_LEGACY:
+                    reply, outcome = await self._negotiate(session, url, headers, timeout)
+                    if outcome[0] == "auth":
+                        return await self._unauthorized(reply, elapsed_ms=elapsed(), public_url=public_url,
+                                                        auth_token=auth_token, token_factory=token_factory,
+                                                        retry=retry)
+                    if outcome[0] == "modern":
+                        return self._modern_verified(public_url, outcome[1], outcome[2], elapsed())
+                    if outcome[0] == "error":
+                        self._forget(public_url)
+                        return MCPVerifyResult(success=False, reachable=True, error=outcome[1],
+                                               response_time_ms=elapsed())
+                    offer = outcome[1]
+                result = await self._verify_legacy(session, url, headers, timeout, offer, public_url, elapsed,
+                                                   auth_token, token_factory, retry)
+                if not result.success and remembered == ERA_LEGACY:
+                    # The remembered handshake stopped working: the server may have moved to the modern era
+                    self._forget(public_url)
+                    return await self.verify_mcp_service(host, port, path, protocol, auth_token, token_factory)
+                return result
 
         except asyncio.TimeoutError:
             return MCPVerifyResult(
@@ -509,6 +603,72 @@ class MCPScanner:
                 response_time_ms=(time.time() - start_time) * 1000
             )
 
+    def _modern_verified(self, public_url: str, version: str, result: dict, elapsed_ms: float) -> MCPVerifyResult:
+        meta = result.get("_meta") if isinstance(result.get("_meta"), dict) else {}
+        server_info = meta.get(META_SERVER_INFO) if isinstance(meta.get(META_SERVER_INFO), dict) else {}
+        server_name = server_info.get("name") if isinstance(server_info.get("name"), str) else None
+        server_version = server_info.get("version") if isinstance(server_info.get("version"), str) else None
+        instructions = result.get("instructions") if isinstance(result.get("instructions"), str) else None
+        self._remember(public_url, version, ERA_MODERN)
+        logger.info(f"MCP service verified: name={server_name}, version={server_version}, protocol={version}")
+        return MCPVerifyResult(
+            success=True, reachable=True,
+            protocol_version=version, protocol_era=ERA_MODERN,
+            server_name=server_name, server_version=server_version,
+            server_description=summarize_instructions(instructions) or server_info.get("description"),
+            capabilities=result.get("capabilities") if isinstance(result.get("capabilities"), dict) else None,
+            response_time_ms=elapsed_ms,
+        )
+
+    async def _verify_legacy(self, session, url, headers, timeout, offer, public_url, elapsed, auth_token,
+                             token_factory, retry) -> MCPVerifyResult:
+        """The `initialize` handshake (protocol revisions up to 2025-11-25)."""
+        reply = await self._post(session, url, _initialize_request(offer), headers, timeout)
+        logger.info(f"MCP verify response: status={reply.status}, content-type={reply.content_type or 'N/A'}")
+        if reply.status == 401:
+            return await self._unauthorized(reply, elapsed_ms=elapsed(), public_url=public_url,
+                                            auth_token=auth_token, token_factory=token_factory, retry=retry)
+        if reply.status != 200:
+            return MCPVerifyResult(success=False, reachable=True, error=f"HTTP {reply.status}",
+                                   response_time_ms=elapsed())
+        result = reply.body
+        if not result:
+            return MCPVerifyResult(success=False, reachable=True, error="Empty response", response_time_ms=elapsed())
+        if not isinstance(result, dict):
+            return MCPVerifyResult(success=False, reachable=True, error="Invalid response format",
+                                   response_time_ms=elapsed())
+        if "error" in result:
+            error = result["error"]
+            return MCPVerifyResult(success=False, reachable=True,
+                                   error=error.get("message", str(error)) if isinstance(error, dict) else str(error),
+                                   response_time_ms=elapsed())
+        init_result = result.get("result")
+        if not isinstance(init_result, dict):
+            return MCPVerifyResult(success=False, reachable=True, error="Invalid response format",
+                                   response_time_ms=elapsed())
+        # An MCP initialize response carries protocolVersion and serverInfo; at least one confirms MCP
+        protocol_version = init_result.get("protocolVersion")
+        server_info = init_result.get("serverInfo") if isinstance(init_result.get("serverInfo"), dict) else {}
+        server_name = server_info.get("name")
+        if not protocol_version and not server_name:
+            return MCPVerifyResult(
+                success=False, reachable=True,
+                error="Response missing MCP indicators (no protocolVersion or serverInfo.name)",
+                response_time_ms=elapsed(),
+            )
+        server_version = server_info.get("version")
+        self._remember(public_url, protocol_version if isinstance(protocol_version, str) else None, ERA_LEGACY)
+        logger.info(f"MCP service verified: name={server_name}, version={server_version}, protocol={protocol_version}")
+        return MCPVerifyResult(
+            success=True, reachable=True,
+            protocol_version=protocol_version, protocol_era=ERA_LEGACY,
+            server_name=server_name,
+            server_version=server_version,
+            server_description=summarize_instructions(init_result.get("instructions")) or server_info.get("description"),
+            capabilities=init_result.get("capabilities"),
+            response_time_ms=elapsed(),
+        )
+
     async def get_tools_list(
         self,
         host: str,
@@ -517,121 +677,115 @@ class MCPScanner:
         protocol: str = "http",
         auth_token: Optional[str] = None
     ) -> List[MCPToolInfo]:
-        """Get the tool list of an MCP service (three-step flow: initialize -> initialized -> tools/list).
+        """Get the tool list of an MCP service.
+
+        Modern servers (MCP 2026-07-28 and later): one stateless `tools/list` carrying its protocol version in
+        `_meta` and the MCP-Protocol-Version / Mcp-Method headers. Legacy servers: initialize -> initialized ->
+        tools/list in one session. The era comes from `server/discover` (remembered per URL).
 
         Returns [] only when the server answered a valid tools/list with an empty `tools` array.
         Raises PermissionError on 401, InvalidTargetError for an unacceptable protocol / host / path,
         and ToolsListError on any other failure.
         """
-        build_mcp_url(protocol, host, port, path)  # reject a bad target before resolving anything
+        public_url = build_mcp_url(protocol, host, port, path)  # reject a bad target before resolving anything
         # SSRF protection (AUDIT-1): resolve and validate once, pin the connection to that IP (prevents
         # DNS rebinding), and keep the original Host header so vhost routing is unaffected. ScannerSSRFError
         # (blocked address or unresolvable host) propagates so the caller can say why.
         connect_host = _resolve_validated_ip(host)
         url = build_mcp_url(protocol, connect_host, port, path)
-
-        headers = {
-            "Content-Type": "application/json",
-            "Accept": "application/json, text/event-stream"
-        }
-        if connect_host != host:
-            headers["Host"] = f"{host}:{port}"
-        if auth_token:
-            headers["Authorization"] = f"Bearer {auth_token}"
+        headers = _base_headers(host, port, connect_host, auth_token)
 
         try:
             timeout = aiohttp.ClientTimeout(total=self.rpc_timeout)
             async with aiohttp.ClientSession() as session:
-                # Step 1: Initialize
-                init_request = {
-                    "jsonrpc": "2.0",
-                    "id": 1,
-                    "method": "initialize",
-                    "params": {
-                        "protocolVersion": "2024-11-05",
-                        "capabilities": {},
-                        "clientInfo": {"name": "mcp-gate-scanner", "version": "1.0.0"}
-                    }
-                }
-
-                async with session.post(
-                    url, json=init_request, headers=headers, timeout=timeout, ssl=False,
-                    allow_redirects=False,  # never follow a redirect (see verify_mcp_service)
-                ) as init_response:
-                    if init_response.status == 401:
-                        raise PermissionError("Service requires authentication. Please configure auth_token for this service.")
-                    if init_response.status != 200:
-                        raise ToolsListError(f"initialize failed: HTTP {init_response.status}")
-
-                    # Get the session ID (Streamable HTTP carries the session in this header)
-                    session_id = init_response.headers.get("mcp-session-id")
-
-                    # Read the initialize response. SSE must be read incrementally: a plain read() waits
-                    # for the stream to end and hangs forever (see the notes on _read_sse_message).
-                    init_data = await self._read_jsonrpc(init_response)
-                    if not isinstance(init_data, dict) or "result" not in init_data:
-                        raise ToolsListError(f"initialize failed: {_jsonrpc_error_text(init_data)}")
-
-                # Step 2: Send the initialized notification
-                initialized_notification = {
-                    "jsonrpc": "2.0",
-                    "method": "notifications/initialized",
-                    "params": {}
-                }
-
-                notify_headers = headers.copy()
-                if session_id:
-                    notify_headers["mcp-session-id"] = session_id
-
-                async with session.post(
-                    url, json=initialized_notification, headers=notify_headers, timeout=timeout, ssl=False,
-                    allow_redirects=False,
-                ) as notify_response:
-                    # Consume the response body (even though it is not needed, read it to avoid connection issues)
-                    await notify_response.read()
-
-                # Step 3: Fetch the tool list
-                tools_request = {
-                    "jsonrpc": "2.0",
-                    "id": 2,
-                    "method": "tools/list",
-                    "params": {}
-                }
-
-                tools_headers = headers.copy()
-                if session_id:
-                    tools_headers["mcp-session-id"] = session_id
-
-                async with session.post(
-                    url, json=tools_request, headers=tools_headers, timeout=timeout, ssl=False,
-                    allow_redirects=False,
-                ) as response:
-                    if response.status == 401:
-                        raise PermissionError("Service requires authentication. Please configure auth_token for this service.")
-
-                    if response.status != 200:
-                        raise ToolsListError(f"tools/list failed: HTTP {response.status}")
-
-                    data = await self._read_jsonrpc(response)
-                    result = data.get("result") if isinstance(data, dict) else None
-                    tools = result.get("tools") if isinstance(result, dict) else None
-                    if not isinstance(tools, list) or not all(isinstance(t, dict) for t in tools):
-                        raise ToolsListError(f"tools/list failed: {_jsonrpc_error_text(data)}")
-                    return [
-                        MCPToolInfo(
-                            name=t.get("name", ""),
-                            description=t.get("description"),
-                            input_schema=t.get("inputSchema")
-                        )
-                        for t in tools
-                    ]
-
+                remembered = self._eras.get(public_url)
+                try:
+                    return await self._tools_in_era(session, url, headers, timeout, public_url, remembered)
+                except ToolsListError:
+                    if remembered is None:
+                        raise
+                    # The remembered era stopped working: probe again once
+                    self._forget(public_url)
+                    return await self._tools_in_era(session, url, headers, timeout, public_url, None)
         except (PermissionError, ToolsListError):
             raise
         except asyncio.TimeoutError as e:
             raise ToolsListError("tools/list failed: connection timeout") from e
         except Exception as e:
             raise ToolsListError(f"tools/list failed: {e}") from e
+
+    async def _tools_in_era(self, session, url, headers, timeout, public_url, era) -> List[MCPToolInfo]:
+        offer = None
+        version = self._seen[public_url].version if era == ERA_MODERN and public_url in self._seen else None
+        if era is None:
+            reply, outcome = await self._negotiate(session, url, headers, timeout)
+            if outcome[0] == "auth":
+                raise PermissionError("Service requires authentication. Please configure auth_token for this service.")
+            if outcome[0] == "error":
+                raise ToolsListError(f"server/discover failed: {outcome[1]}")
+            if outcome[0] == "modern":
+                era, version = ERA_MODERN, outcome[1]
+            else:
+                era, offer = ERA_LEGACY, outcome[1]
+        if era == ERA_MODERN:
+            version = version or LATEST_MODERN_VERSION
+            reply = await self._post(session, url, _modern_request("tools/list", 2, version),
+                                     _modern_headers(headers, "tools/list", version), timeout)
+            tools = self._parse_tools(reply)
+            self._remember(public_url, version, ERA_MODERN)
+            return tools
+        return await self._legacy_tools(session, url, headers, timeout, public_url, offer)
+
+    async def _legacy_tools(self, session, url, headers, timeout, public_url, offer) -> List[MCPToolInfo]:
+        # Step 1: initialize. SSE is read incrementally: a plain read() would wait for the stream to end and hang
+        # forever (see the notes on _read_sse_message).
+        init = await self._post(session, url, _initialize_request(offer), headers, timeout)
+        if init.status == 401:
+            raise PermissionError("Service requires authentication. Please configure auth_token for this service.")
+        if init.status != 200:
+            raise ToolsListError(f"initialize failed: HTTP {init.status}")
+        if not isinstance(init.body, dict) or not isinstance(init.body.get("result"), dict):
+            raise ToolsListError(f"initialize failed: {_jsonrpc_error_text(init.body)}")
+        negotiated = init.body["result"].get("protocolVersion")
+        session_headers = dict(headers)
+        if init.session_id:  # Streamable HTTP carries the session in this header
+            session_headers["mcp-session-id"] = init.session_id
+        if isinstance(negotiated, str) and negotiated:
+            # Required on every request after initialize since 2025-06-18; older servers ignore it
+            session_headers["MCP-Protocol-Version"] = negotiated
+
+        # Step 2: the initialized notification (its reply carries nothing we need)
+        await self._post(session, url, {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}},
+                         session_headers, timeout)
+        # Step 3: the tool list
+        reply = await self._post(session, url, {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+                                 session_headers, timeout)
+        tools = self._parse_tools(reply)
+        self._remember(public_url, negotiated if isinstance(negotiated, str) else None, ERA_LEGACY)
+        return tools
+
+    @staticmethod
+    def _parse_tools(reply: _Reply) -> List[MCPToolInfo]:
+        if reply.status == 401:
+            raise PermissionError("Service requires authentication. Please configure auth_token for this service.")
+        if reply.status != 200:
+            raise ToolsListError(f"tools/list failed: HTTP {reply.status}")
+        data = reply.body
+        result = data.get("result") if isinstance(data, dict) else None
+        tools = result.get("tools") if isinstance(result, dict) else None
+        if not isinstance(tools, list) or not all(isinstance(t, dict) for t in tools):
+            raise ToolsListError(f"tools/list failed: {_jsonrpc_error_text(data)}")
+        return [
+            MCPToolInfo(
+                name=t.get("name", ""),
+                description=t.get("description"),
+                input_schema=t.get("inputSchema"),
+                title=t.get("title"),
+                output_schema=t.get("outputSchema"),
+                annotations=t.get("annotations"),
+            )
+            for t in tools
+        ]
 
     async def discover_services(
         self,

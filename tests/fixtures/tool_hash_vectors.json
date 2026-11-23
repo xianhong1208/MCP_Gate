@@ -1,0 +1,150 @@
+{
+  "version": 1,
+  "about": "Golden vectors for src/tool_pinning/hashing.py (hash definition version 1). Each tool is hashed as sha256(utf-8(canonical)). examples/ copies of the canonicalisation must reproduce every entry.",
+  "vectors": [
+    {
+      "label": "name only",
+      "tool": {
+        "name": "ping"
+      },
+      "canonical": "{\"name\":\"ping\"}",
+      "sha256": "3f1b5ce7170804143ea6c840825f11e1fce1aed30dba5b7f0d83220f84066889"
+    },
+    {
+      "label": "all six fields, keys out of order, extra fields ignored",
+      "tool": {
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "n": {
+              "type": "integer"
+            }
+          }
+        },
+        "_meta": {
+          "x": 1
+        },
+        "icons": [
+          {
+            "src": "a.png"
+          }
+        ],
+        "inputSchema": {
+          "type": "object",
+          "required": [
+            "q",
+            "a"
+          ],
+          "properties": {
+            "q": {
+              "type": "string"
+            },
+            "a": {
+              "type": "number",
+              "default": 1.5
+            }
+          }
+        },
+        "description": "Search the index.",
+        "title": "Search",
+        "name": "search"
+      },
+      "canonical": "{\"annotations\":{\"destructiveHint\":false,\"readOnlyHint\":true},\"description\":\"Search the index.\",\"inputSchema\":{\"properties\":{\"a\":{\"default\":1.5,\"type\":\"number\"},\"q\":{\"type\":\"string\"}},\"required\":[\"q\",\"a\"],\"type\":\"object\"},\"name\":\"search\",\"outputSchema\":{\"properties\":{\"n\":{\"type\":\"integer\"}},\"type\":\"object\"},\"title\":\"Search\"}",
+      "sha256": "d5b5537e898ac210eb78ee37286b35259821f54b283d685c434c88334c8f084b"
+    },
+    {
+      "label": "null optional fields hash like absent ones",
+      "tool": {
+        "name": "ping",
+        "title": null,
+        "description": null,
+        "inputSchema": null,
+        "outputSchema": null,
+        "annotations": null
+      },
+      "canonical": "{\"name\":\"ping\"}",
+      "sha256": "3f1b5ce7170804143ea6c840825f11e1fce1aed30dba5b7f0d83220f84066889"
+    },
+    {
+      "label": "empty string and empty object are values",
+      "tool": {
+        "name": "ping",
+        "description": "",
+        "inputSchema": {}
+      },
+      "canonical": "{\"description\":\"\",\"inputSchema\":{},\"name\":\"ping\"}",
+      "sha256": "35abed201f560ee252b2277201026c367e4db8c6a369b74784f040686dcfc3dc"
+    },
+    {
+      "label": "non-ASCII written as UTF-8, not escaped",
+      "tool": {
+        "name": "翻譯",
+        "description": "把文字翻成繁體中文 — café ✓ 😀",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "文字": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "canonical": "{\"description\":\"把文字翻成繁體中文 — café ✓ 😀\",\"inputSchema\":{\"properties\":{\"文字\":{\"type\":\"string\"}},\"type\":\"object\"},\"name\":\"翻譯\"}",
+      "sha256": "2776adc741171e7d8c5fcc87adfbc43cf673921cb2b5ec0409a3296ca870499d"
+    },
+    {
+      "label": "array order is kept",
+      "tool": {
+        "name": "pick",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "c": {
+              "enum": [
+                "b",
+                "a"
+              ]
+            }
+          }
+        }
+      },
+      "canonical": "{\"inputSchema\":{\"properties\":{\"c\":{\"enum\":[\"b\",\"a\"]}},\"type\":\"object\"},\"name\":\"pick\"}",
+      "sha256": "a4320341a867afa8e22bc92cc73a6e7ca3c4672bbfebc1a754eddd467a49ea96"
+    },
+    {
+      "label": "integers and floats differ",
+      "tool": {
+        "name": "n",
+        "inputSchema": {
+          "maximum": 1
+        }
+      },
+      "canonical": "{\"inputSchema\":{\"maximum\":1},\"name\":\"n\"}",
+      "sha256": "c57e0ccbdff3a455044e498b33d1e5143cf7d706ddd864f93e04d7c4083c81b2"
+    },
+    {
+      "label": "integers and floats differ (float)",
+      "tool": {
+        "name": "n",
+        "inputSchema": {
+          "maximum": 1.0
+        }
+      },
+      "canonical": "{\"inputSchema\":{\"maximum\":1.0},\"name\":\"n\"}",
+      "sha256": "dd64b78c47abe4ff44990890371cd373184d6a13a0ab0ceec87835492e099166"
+    },
+    {
+      "label": "quotes, backslashes and control characters are JSON-escaped",
+      "tool": {
+        "name": "q",
+        "description": "say \"hi\"\\n\tend\n"
+      },
+      "canonical": "{\"description\":\"say \\\"hi\\\"\\\\n\\tend\\n\",\"name\":\"q\"}",
+      "sha256": "ffc1a68bed717762de2a258b8c65aa71fc43d8c504ff8d21dc638621f5827540"
+    }
+  ]
+}

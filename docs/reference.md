@@ -111,6 +111,24 @@ Dynamic registration (`/oauth/register`) keeps working alongside; set `OAUTH_CIM
 
 Advanced: `SERVER_HOST` / `SERVER_PORT` override the bind address when it must differ from the issuer, for example listening on `127.0.0.1` behind a reverse proxy. See [Deploy](deploy.md) for the full reverse-proxy and HTTPS procedure.
 
+### Dynamic Client Registration
+
+MCP 2026-07-28 deprecates Dynamic Client Registration (RFC 7591) in favour of [Client ID Metadata Documents](#client-id-metadata-documents). MCP Gate keeps `/oauth/register` working and listed in its metadata (`registration_endpoint`) for clients that do not use metadata documents yet; current clients prefer a metadata document when the server advertises `client_id_metadata_document_supported`, which MCP Gate does. The first registration through DCR after a start logs one warning saying so, and **OAuth Clients** shows how many active clients came in that way.
+
+- **`application_type`.** The specification asks clients to send `application_type` (`native` for desktop apps, CLIs and loopback redirects; `web` for remote browser apps) when they register, because OpenID providers restrict redirect URIs by it. MCP Gate is not an OpenID provider: it accepts `native` and `web` from registrations and metadata documents, refuses any other value with `invalid_client_metadata` (or `invalid_client` for a document), and puts no extra rule on the redirect URIs. The value is not stored.
+
+### MCP protocol versions
+
+MCP Gate's scanner, health checks, *Refresh from server* and *Inspect as* speak both eras of the protocol:
+
+- **2026-07-28 (stateless).** MCP Gate first sends `server/discover` with the protocol version, its client info and capabilities in `_meta` and the `MCP-Protocol-Version` / `Mcp-Method` headers. A server that answers it is read without a handshake or a session: one `tools/list` per refresh.
+- **2024-11-05 to 2025-11-25 (`initialize` handshake).** Any other answer — a `400` such as "missing session id", `404`, `405`, a JSON-RPC "method not found" — means an older server, as the specification's backward-compatibility rules say: MCP Gate falls back to `initialize` (offering 2025-11-25; the server picks the version), then sends the session id and the negotiated `MCP-Protocol-Version` on the following requests.
+- A modern error (`-32022` unsupported version, `-32020` header mismatch, `-32021` missing capability) is never a reason to fall back: an unsupported version is retried with one the server lists, or reported as "no protocol version in common".
+- The era is remembered per server URL while MCP Gate runs and probed again when it stops working, so a server upgraded to 2026-07-28 (or rolled back) is picked up by the next check.
+- The server's page shows the protocol it last answered with (for example *MCP version 2026-07-28 · stateless*) after the first health check, scan or refresh since MCP Gate started; it is kept in memory only. `POST /api/services/{id}/health-check`, `GET /api/services/{id}` (`health.protocol_version`, `health.protocol_era`, `health.protocol_seen_at`) and `POST /api/discovery/verify` report it.
+
+Your own FastMCP server needs no change: FastMCP 4 serves both eras on one endpoint, and `MCPGateVerifier` and `MCPGateToolPinning` work in either, also with `stateless_http=True`.
+
 ### Revocation feed
 
 MCP servers verify tokens offline, so on its own a server keeps accepting a revoked token until it expires — 15 minutes for an access token, as long as its lifetime for a personal access token. A server that polls the revocation feed rejects it within one poll interval instead:
@@ -121,12 +139,82 @@ MCP servers verify tokens offline, so on its own a server keeps accepting a revo
 
 For your own FastMCP server, `MCPGateVerifier` in [`examples/mcp_gate_hooks.py`](../examples/mcp_gate_hooks.py) does the polling. [Folio](https://github.com/xianhong1208/folio-rag) and [Morphyard](https://github.com/xianhong1208/morphyard) have it built in; see their READMEs.
 
+### Tool pinning and approval
+
+Every tool a server lists is pinned by a SHA-256 of its definition, and a new or changed definition waits for an admin before it counts as approved.
+
+- **What is hashed.** The tool object as `tools/list` returns it, reduced to `name`, `title`, `description`, `inputSchema`, `outputSchema` and `annotations` (other fields such as `_meta` and `icons` are ignored). A field that is absent or `null` is left out, so the two hash the same; an empty string or object is a value. The rest is serialised as JSON with keys sorted at every depth, no whitespace, non-ASCII characters written as UTF-8 (not `\uXXXX`), then hashed as UTF-8. The definition is `src/tool_pinning/hashing.py`; `tests/fixtures/tool_hash_vectors.json` holds golden vectors that any other implementation must reproduce.
+- **States.** Each definition a tool has had is kept as a version with its hash and a state: *approved*, *pending* or *rejected*. A refresh (*Refresh from server*, a scan) adds a pending version for a new tool or a changed definition and keeps every earlier version, so the console compares the change with the approved one. A tool the server stops listing is marked *no longer listed*, not deleted; if it comes back it keeps its history. Refreshing with *Inspect as* another identity behaves the same: tools that identity does not see are marked, never lose their approval.
+- **First approval.** On the upgrade to 1.5 every tool already stored is approved as the baseline (`decided_by: upgrade`). Those were stored without `title`, `outputSchema` and `annotations`, so the first refresh that lists a tool again completes its baseline with the full definition when `name`, `description` and `inputSchema` are unchanged; a change there is pending like any other. A server registered later starts with every tool pending, and the console offers **Approve all** on that first list only. After that each new or changed tool is approved or rejected on its own card, which shows a line diff of each changed field (or the whole definition of a new tool).
+- **Decisions.** Approve and reject name the version by its hash, so the admin decides on exactly the definition shown. Rejected versions can be approved later, and an approval can be withdrawn by rejecting. Every approval, rejection and *Approve all* is in the audit log (`tool_approve`, `tool_reject`, `tool_approve_all`). The dashboard and the services list show how many tools wait.
+- **API.** `GET /api/services/{id}/tools` lists tools with `state`, `hash`, `removed_at`, `versions` and `approved_version` (the version a pending change is compared with), plus `pending_count` and `first_review`. `POST /api/services/{id}/tools/{tool_id}/approve` and `…/reject` take `{"hash": "<64 hex>"}`; `POST /api/services/{id}/tools/approve-all` takes `{"hashes": [...]}` and answers `409 tools.approve_all_not_first` once anything of that service was approved.
+
+MCP Gate records the decisions; it does not sit between clients and servers, so on its own it cannot hide an unapproved tool. A server that runs the pinning middleware does (next section); for any other server the console shows the state but clients still see every tool.
+
+### Poisoning scan
+
+A tool's description and schema are read by the model that calls it, so a server can hide instructions there. Every pinned definition is also checked by built-in rules (no model, no network; `src/tool_pinning/scan.py`), and what they find is shown on the approval card and next to an approved tool. **A finding never blocks anything**: an unapproved tool is hidden anyway (on a server that runs the middleware), and the decision stays the admin's.
+
+- **What is scanned.** Every string and object key of the hashed fields (`name`, `title`, `description`, `inputSchema`, `outputSchema`, `annotations`), recursively, so an instruction in a parameter description or a `default` is found too. The work is bounded: 2,000 strings, 200,000 characters, 32 levels and 200 findings per definition; beyond that a `scan-truncated` finding says so. Text is matched after NFKC normalisation (fullwidth letters become ASCII), with common Cyrillic and Greek look-alike letters mapped to Latin, case folded, and invisible characters removed, so `ig<U+200B>nore` still reads `ignore`. Offsets point into the original text.
+- **The rules** (severity `high`, `warning` or `info`):
+
+  | Rule | Flags | Severity |
+  |---|---|---|
+  | `invisible-characters` | Zero-width characters, bidirectional controls (U+202A–U+202E, U+2066–U+2069), Unicode tag characters (U+E0000–U+E007F, decoded and shown as *hidden text*), supplementary variation selectors, Hangul fillers. A single joiner between two non-ASCII characters (emoji sequences, Indic and Arabic scripts) is left alone. | high for bidi, tags, variation selectors, a run of 3+, or invisible characters between most letters (reported once); otherwise warning |
+  | `instruction-phrase` | "ignore / disregard previous instructions", "do not tell the user", "without telling the user", `<IMPORTANT>`, `<system>`, `[INST]`, chat-template tokens, and Chinese variants (忽略之前的指示, 不要告訴使用者, 对用户保密 …) | high |
+  | | "before using this tool", HTML comments, "do not mention that", "new instructions:", "system prompt:", "you are now a …", 使用這個工具之前 | warning |
+  | | "you must", "very important", 你必須 | info |
+  | `tool-mention` | A tool name registered in MCP Gate (any server) other than the tool's own. Only names with `_`, `-`, `.` or camelCase and at least 4 characters are looked for, so "search" or "fetch" alone never match. | warning when another server lists it (shadowing); info when only this server does |
+  | `sensitive-data` | `~/.ssh`, `id_rsa` and other key files, `.aws/credentials`, `/etc/passwd`, `.netrc`, `.npmrc`, `.git-credentials`, `.kube/config`, `.env`, `mcp.json`, `claude_desktop_config.json`, `.cursor/` | high when near "read / send / include / pass …"; otherwise warning |
+  | | "API key", "private key", "credentials", "password", 私鑰, 密碼 … near "read / send / include / pass …" | warning |
+  | `url` | Any URL | info; warning for a raw IP address, plain `http` / `ftp` / `ws` (not loopback) or a link shortener, and for a URL in a `default` / `const` / `enum` / `examples` of a parameter named like a destination (webhook, callback, report, upload, backup …); high for such a URL in a value slot, or after "send / upload / post … to" |
+  | `encoded-blob` | base64 of 60+ characters (mixed case and digits) or hex of 64+ | high when it decodes to readable text (shown); otherwise warning (base64) or info (hex, e.g. a SHA-256) |
+  | `long-text` | A description over 4,000 characters (info) or a schema string over 1,000 characters (warning) | info / warning |
+  | `scan-truncated` | The work bound was reached | info |
+
+- **Flagged** means at least one `warning` or `high` finding; `info` alone is a note. The dashboard and the services list count pending tools that are flagged ("2 pending, 1 flagged").
+- **On the card.** The findings are grouped by rule with a short explanation and the matched text (invisible characters shown as boxed `U+XXXX`), and the matched text is highlighted inside the diff. Approving a definition with a `high` finding asks for confirmation once, naming the findings; anything else is one click, and so is rejecting. The audit entry of every approval or rejection records the findings shown (`details.findings`: counts by severity and the rule ids, plus `scan_rules_version`); *Approve all* records them per tool.
+- **Stored nowhere.** Findings are computed when the tool list is read (cached in memory per definition: about 1 ms per definition the first time, microseconds after), so an improved rule re-checks every old version, and `scan_rules_version` in the API says which rule set produced them.
+- **API.** Every version in `GET /api/services/{id}/tools` carries `findings`: `[{rule, severity, path, start, end, match, excerpt, detail}]` (`path` into the canonical definition, e.g. `inputSchema.properties.url.default`; `start` / `end` are code-point offsets in that string; `excerpt` writes invisible characters as `<U+XXXX>`). Each tool also has `findings` and `flagged` for its current definition; the response adds `flagged_count` and `scan_rules_version`, and service responses add `tools_flagged`.
+- **What it does not catch.** Rules match wording and characters, not intent: a paraphrased instruction, another language, an instruction split across fields, or a tool that behaves differently from its description passes. See [SECURITY.md](../SECURITY.md#known-limitations). Read the definition; the scan only points at places to read first.
+
+### Tool approvals on the server
+
+`MCPGateToolPinning` in [`examples/mcp_gate_hooks.py`](../examples/mcp_gate_hooks.py) is a FastMCP middleware that enforces the approvals on the server itself. It needs the same resource-server client as the revocation feed (see above) and sits next to `MCPGateVerifier`: `FastMCP(..., middleware=[MCPGateToolPinning(verifier)])`. [`examples/fastmcp_server_hooks.py`](../examples/fastmcp_server_hooks.py) is a complete server.
+
+- **`tools/list`** hashes each of the server's tools (the definition above; the example carries its own copy and reproduces the golden vectors) and lists only approved ones. **`tools/call`** hashes the tool being called and refuses it unless approved, with `Tool '<name>' is not available on this server.`, the same answer as for a tool that does not exist; the reason goes to the server's log.
+- **Reports.** A definition MCP Gate does not know yet is sent at once to `POST /oauth/tool-report`, so it appears as pending in the console (marked *Reported by the server*) without waiting for a refresh. A changed description is therefore hidden on the server's next `tools/list` and waiting in the console seconds later.
+- **The policy.** Every `poll_interval` seconds (15 by default) it reads `POST /oauth/policy`. MCP Gate's own requests (refresh, scan, health check, *Inspect as*) carry a `mcp_gate_probe` claim in their short-lived token; the middleware shows them every tool, approved or not, so a refresh records the real list and never marks a hidden tool as removed. Calls with such a token are still refused.
+- **When MCP Gate cannot be reached** the last list received keeps being used. It is also written to `cache_file` (default `mcp_gate_policy.json` in the working directory; written atomically, mode 600; `None` keeps it in memory only), so a restart while MCP Gate is down keeps it. A cache written for another issuer, audience or hash version is ignored, and so is one older than `max_cache_age` seconds when that is set. Once MCP Gate answers again, its list replaces the cache.
+- **Never received a list** (MCP Gate down at the first start and no usable cache): every tool is hidden and not callable, and one log line says why. `fail_open=True` lists and runs every tool until the first list arrives instead.
+- **Console.** The server's page shows a *Tool approvals* row like the revocation feed's: enforced by the server (with the last poll time), stopped polling, never polled, or not enforced. The review card of a pending tool says whether the server enforces approvals.
+
+The feed and the report, for other implementations (form-encoded `POST`, authenticated like `/oauth/revoked`; only the caller's own server):
+
+- `POST /oauth/policy` (optional `etag`) answers `{"format": 1, "hash_version": 1, "audience", "service_id", "tools": {"approved": [...], "pending": [...], "rejected": [...]}, "rules": [], "unchanged": false, "etag", "now"}`, each list holding 64-hex hashes. Any other hash is unknown: hide it and report it. `rules` is reserved for tool-level policy in 1.6 and empty; ignore fields you do not know. Send back the `etag` you hold to get only `{"unchanged": true, "etag", "now"}` when nothing changed. When the server is disabled or deleted every list is empty.
+- `POST /oauth/tool-report` with `tools` = a JSON array of tool objects as `tools/list` returns them (at most 200, body up to 2 MiB, 30 reports a minute per client, each definition up to 64 KiB). MCP Gate hashes every definition itself: a `hash` sent along is only compared, and a difference is listed in `hash_mismatch`. The answer is `{"recorded": [{"name", "hash", "state", "new"}], "invalid": [{"index", "name", "reason"}], "hash_mismatch": [...]}`. A report goes through the same rules as a refresh, except that tools it does not mention are left alone. New definitions are audited as `tool_report`, with the resource server as the actor.
+
+### Connecting MCP clients
+
+Each server's page has a **Connect a client** panel (also reached from the plug icon on the services list, and **Connect clients** there for every server at once) with ready-made configuration for **Claude Code, Cursor, VS Code and Codex**: one tab per client, the commands where the client has them, the file it reads (copy or download), and the steps. The server URL in every snippet is the server's **audience**: a client sends the URL it connects to as the RFC 8707 `resource`, and MCP Gate only accepts a registered audience, so any other address for the same server fails with `invalid_target`. An audience that is not an `http(s)` URL falls back to the server's own address.
+
+| Client | Sign in (default) | Personal token | Follows |
+|---|---|---|---|
+| Claude Code | `claude mcp add --transport http <name> <url>`, then `claude mcp login <name>` (or `/mcp`); `.mcp.json` `{"mcpServers": {"<name>": {"type": "http", "url": …}}}` | `--header 'Authorization: Bearer ${MCP_GATE_PAT_<NAME>}'`; Claude Code expands the variable when it connects | [Claude Code MCP](https://code.claude.com/docs/en/mcp) |
+| Cursor | **Add to Cursor** install link (`cursor://anysphere.cursor-deeplink/mcp/install`), or `~/.cursor/mcp.json` `{"mcpServers": {"<name>": {"url": …}}}`; sign in from *Needs login* | `"headers": {"Authorization": "Bearer ${env:MCP_GATE_PAT_<NAME>}"}` | [Cursor MCP](https://cursor.com/docs/context/mcp), [install links](https://cursor.com/docs/context/mcp/install-links) |
+| VS Code | `code --add-mcp '{"name": …, "type": "http", "url": …}'`, or `.vscode/mcp.json` `{"servers": {…}}` | a `promptString` input with `password: true` and `${input:mcp-gate-pat-<name>}` in the header: VS Code asks once and keeps the token in its secret storage | [VS Code MCP configuration](https://code.visualstudio.com/docs/agents/reference/mcp-configuration) |
+| Codex | `codex mcp add <name> --url <url>`, then `codex mcp login <name>`; `~/.codex/config.toml` `[mcp_servers.<name>]` `url = …` | `bearer_token_env_var = "MCP_GATE_PAT_<NAME>"` | [Codex MCP](https://learn.chatgpt.com/docs/extend/mcp?surface=cli) |
+
+**Sign in** needs nothing up front: every one of these clients reads the server's protected resource metadata, finds MCP Gate, registers itself (a Client ID Metadata Document or dynamic client registration) and opens the consent screen. Scopes are not pinned in the snippets; the client asks for what the server advertises and MCP Gate grants the defaults the server allows. When `dcr_auto_approve` is off, a new client waits for an admin under *OAuth Clients* first, and the panel says so. **Personal token** is for machines without a browser (CI, remote shells). No snippet ever contains a token: each references an environment variable named after the server (or VS Code's password prompt), and a personal access token works for one server only.
+
+`GET /api/services/{id}/client-config?client=claude-code|cursor|vscode|codex&variant=oauth|pat` returns `file` (`format`, `path`, `filename`, `content`), `commands`, `install_links`, `servers` (name, config key, URL, accepted scopes, the PAT variable), `docs_url`, `issuer`, `dcr_auto_approve`, `requires_auth` and, for `pat`, `pat_page`; `&download=1` returns only the file as an attachment. `GET /api/client-config` does the same for every active server, sorted by name, and lists in `skipped` the ones without an address. Both need a console session, like reading a service, and answer `409 client_config.no_url` / `422 client_config.unknown_client` / `422 client_config.unknown_variant`. Config keys are the server name reduced to `A–Z a–z 0–9 - _` (numbered when two collide) and every value is quoted for the shell, JSON or TOML it lands in.
+
 ## Use the console
 
 | Page | What you do there |
 |---|---|
 | **Dashboard** | Service health, token activity, recent events, system status. |
-| **Services** | Register or scan MCP servers, set audience and allowed scopes, declare server-specific scopes, refresh tools, run health checks, copy integration snippets. |
+| **Services** | Register or scan MCP servers, set audience and allowed scopes, declare server-specific scopes, refresh tools and approve new or changed ones ([tool pinning](#tool-pinning-and-approval)), run health checks, copy integration snippets and client configuration ([Connecting MCP clients](#connecting-mcp-clients)). |
 | **Tokens · Issue Token** | Every token issued by MCP Gate — OAuth grants and PATs — with revoke, expiry and last-use information. |
 | **OAuth Clients** | Dynamically registered, metadata-document and trusted clients: approve, revoke, delete; scope registry; signing-key rotation. |
 | **Marketplace** | Deploy MCP servers from the catalog or bring your own `{command, args, env}`. |
@@ -141,9 +229,9 @@ The console is in English by default; the switcher in the top bar changes it to 
 | Group | Endpoints |
 |---|---|
 | OAuth (public) | `GET /.well-known/oauth-authorization-server` · `GET /.well-known/openid-configuration` · `GET /.well-known/jwks.json` · `POST /oauth/register` · `GET /oauth/authorize` · `GET/POST /oauth/authorize/requests/{id}[/decision]` (consent screen) · `POST /oauth/token` · `POST /oauth/revoke` · `POST /oauth/introspect` |
-| Resource servers | `POST /oauth/revoked` (revocation feed) · `POST /oauth/usage` (usage reports); a confidential client bound to the server, see [Revocation feed](#revocation-feed) |
+| Resource servers | `POST /oauth/revoked` (revocation feed) · `POST /oauth/usage` (usage reports) · `POST /oauth/policy` (tool policy feed) · `POST /oauth/tool-report` (tool reports); a confidential client bound to the server, see [Revocation feed](#revocation-feed) and [Tool approvals on the server](#tool-approvals-on-the-server) |
 | Console session | `GET /api/session/status` · `POST /api/session/setup` · `POST /api/session/login` · `POST /api/session/logout` · `GET /api/session/me` · `PUT /api/session/me/{profile,password}` · `GET /api/session/oauth/{github,google}/{start,callback}` |
-| Management (authenticated) | `/api/services*` · `/api/oauth/{clients,scopes,tokens,consents,keys,activity,overview,snippets}` · `/api/discovery/*` · `/api/marketplace*` · `/api/managed*` · `/api/byo-mcp*` · `/api/stats/*` · `/api/audit/*` · `/api/system/*` |
+| Management (authenticated) | `/api/services*` · `/api/client-config` · `/api/oauth/{clients,scopes,tokens,consents,keys,activity,overview,snippets}` · `/api/discovery/*` · `/api/marketplace*` · `/api/managed*` · `/api/byo-mcp*` · `/api/stats/*` · `/api/audit/*` · `/api/system/*` |
 | Operational | `GET /health` · `WS /ws/services` (live service status) |
 
 Scripts that call the management API sign in with `POST /api/session/login` and then send, on every request, the `mcp_session` cookie, the `session_binding` value from the login response as `X-Session-Binding`, and a same-origin `Origin` header on writes.

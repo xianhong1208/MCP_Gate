@@ -12,10 +12,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from db.models import (
-    AdminSession, AdminUser, AuditLog, ManagedMcpProcess, MCPTool, OAuthAuthorizationCode,
-    OAuthAuthorizationRequest, OAuthClient, OAuthConsent, OAuthScope, OAuthSigningKey,
-    OAuthToken, Service, ServiceScope, TokenUsage, UserMcpDefinition, local_now, utc_now,
+    TOOL_BASELINE_ACTOR, TOOL_SOURCE_SCAN, TOOL_STATE_APPROVED, TOOL_STATE_PENDING, AdminSession, AdminUser, AuditLog,
+    ManagedMcpProcess, MCPTool, MCPToolVersion, OAuthAuthorizationCode, OAuthAuthorizationRequest, OAuthClient,
+    OAuthConsent, OAuthScope, OAuthSigningKey, OAuthToken, Service, ServiceScope, TokenUsage, UserMcpDefinition,
+    local_now, utc_now,
 )
+from src.tool_pinning.hashing import canonical_json, tool_hash
 from src.utils.field_limits import clip, column_limit
 
 # Loopback aliases -> always stored / looked up as 127.0.0.1
@@ -131,7 +133,7 @@ class ServiceCRUD:
         source: Optional[str] = None, tag: Optional[str] = None, requires_auth: Optional[bool] = None,
     ) -> List[Service]:
         # Eager-load tools: the list page shows the tool count, so avoid one query per row (N+1)
-        query = db.query(Service).options(selectinload(Service.tools))
+        query = db.query(Service).options(selectinload(Service.tools).selectinload(MCPTool.versions))
         if not include_inactive:
             query = query.filter(Service.is_active.is_(True))
         if health_status:
@@ -224,45 +226,154 @@ class ServiceCRUD:
 
 
 class MCPToolCRUD:
+    """A service's tools and their pinned versions (#32). Business rules (which state changes are allowed, who may
+    make them, auditing) live in MCPToolAdapter."""
 
     @staticmethod
-    def create(db: Session, service_id: str, name: str, description: Optional[str] = None,
-               input_schema: Optional[str] = None) -> MCPTool:
-        tool = MCPTool(service_id=_uuid(service_id), name=name, description=description, input_schema=input_schema)
-        try:
-            db.add(tool)
-            db.commit()
-            db.refresh(tool)
-            return tool
-        except IntegrityError:
-            db.rollback()
-            raise ValueError(f"Tool '{name}' already exists for this service")
-
-    @staticmethod
-    def get_by_service(db: Session, service_id: str) -> List[MCPTool]:
-        return db.query(MCPTool).filter(MCPTool.service_id == _uuid(service_id)).all()
+    def get_by_service(db: Session, service_id: str, include_removed: bool = True) -> List[MCPTool]:
+        query = db.query(MCPTool).options(selectinload(MCPTool.versions)).filter(
+            MCPTool.service_id == _uuid(service_id))
+        if not include_removed:
+            query = query.filter(MCPTool.removed_at.is_(None))
+        return query.order_by(MCPTool.name).all()
 
     @staticmethod
     def get_by_name(db: Session, service_id: str, name: str) -> Optional[MCPTool]:
         return db.query(MCPTool).filter(MCPTool.service_id == _uuid(service_id), MCPTool.name == name).first()
 
     @staticmethod
+    def get_in_service(db: Session, service_id: str, tool_id: str) -> Optional[MCPTool]:
+        tid, sid = _uuid(tool_id), _uuid(service_id)
+        if tid is None or sid is None:
+            return None
+        return db.query(MCPTool).options(selectinload(MCPTool.versions)).filter(
+            MCPTool.id == tid, MCPTool.service_id == sid).first()
+
+    @staticmethod
+    def has_approved_version(db: Session, service_id: str) -> bool:
+        """Whether any tool of the service has ever had a version approved (and still has one)."""
+        return db.query(MCPToolVersion.id).join(MCPTool).filter(
+            MCPTool.service_id == _uuid(service_id), MCPToolVersion.state == TOOL_STATE_APPROVED,
+        ).first() is not None
+
+    @staticmethod
+    def registry(db: Session) -> dict:
+        """Every tool name a service currently lists, with the services that list it: {name: {service_id: service
+        name}}. The poisoning scan (#34) looks for these names in other tools' definitions."""
+        rows = db.query(MCPTool.name, Service.id, Service.name).join(Service, Service.id == MCPTool.service_id).filter(
+            MCPTool.removed_at.is_(None)).all()
+        names: dict = {}
+        for tool_name, service_id, service_name in rows:
+            names.setdefault(tool_name, {})[str(service_id)] = service_name
+        return names
+
+    @staticmethod
     def sync_tools(db: Session, service_id: str, tools: List[dict]) -> List[MCPTool]:
+        """Record a complete tools/list result from a refresh or scan (see record_tools). Returns the listed tools."""
+        return MCPToolCRUD.record_tools(db, service_id, tools)[0]
+
+    @staticmethod
+    def record_tools(db: Session, service_id: str, tools: List[dict], *, complete: bool = True,
+                     source: str = TOOL_SOURCE_SCAN) -> tuple:
+        """Record tool definitions (MCP field names, already sanitised) without losing any approval.
+
+        The one code path for every way MCP Gate learns a definition: a refresh or scan lists every tool
+        (``complete``); a server's pinning middleware reports only the definitions it has not seen approved
+        (``complete=False``, ``source`` "reported", #33), so tools it did not mention are left alone.
+
+        - a tool listed for the first time gets a row and a pending version;
+        - a known tool whose definition hash is new gets a new pending version; earlier versions (and their
+          approvals) are kept, so the console can compare the change with what was approved;
+        - a known hash is only marked as seen again;
+        - a tool no longer listed is marked removed (removed_at), never deleted; listing it again clears that
+          (complete lists only).
+
+        A new version records ``source``; a known one keeps how it was first seen.
+
+        Returns (the service's listed tools, the (tool, version) pair of every definition in ``tools``, with a flag
+        telling whether the version was created now).
+
+        Upgrade baseline: before pinning, only name, description and inputSchema were stored, so the baseline the
+        migration approved cannot cover title, outputSchema or annotations. The first refresh that lists such a tool
+        completes it: if name, description and inputSchema are still exactly the approved baseline, the full
+        definition is approved as the baseline too. Either way that refresh ends the baseline's special status.
+        """
         sid = _uuid(service_id)
-        db.query(MCPTool).filter(MCPTool.service_id == sid).delete()
-        result = []
-        for tool_data in tools:
-            schema = tool_data.get("input_schema")
-            tool = MCPTool(
-                service_id=sid, name=tool_data["name"], description=tool_data.get("description"),
-                input_schema=json.dumps(schema) if schema else None,
-            )
-            db.add(tool)
-            result.append(tool)
+        now = local_now()
+        existing = {t.name: t for t in db.query(MCPTool).options(selectinload(MCPTool.versions)).filter(
+            MCPTool.service_id == sid).all()}
+        listed = set()
+        recorded = []
+        for data in tools:
+            name = data["name"]
+            listed.add(name)
+            digest = tool_hash(data)
+            tool = existing.get(name)
+            if tool is None:
+                tool = MCPTool(service_id=sid, name=name, created_at=now)
+                db.add(tool)
+                existing[name] = tool
+            version = next((v for v in tool.versions if v.hash == digest), None)
+            created = version is None
+            if version is None:
+                version = MCPToolVersion(hash=digest, definition=canonical_json(data), state=TOOL_STATE_PENDING,
+                                         first_seen_at=now, last_seen_at=now, source=source)
+                baseline = next((v for v in tool.versions if v.legacy_baseline
+                                 and v.state == TOOL_STATE_APPROVED), None)
+                if baseline is not None and _legacy_view(json.loads(baseline.definition)) == _legacy_view(data):
+                    version.state = TOOL_STATE_APPROVED
+                    version.decided_at = now
+                    version.decided_by = TOOL_BASELINE_ACTOR
+                tool.versions.append(version)
+            else:
+                version.last_seen_at = now
+            for v in tool.versions:
+                v.legacy_baseline = False
+            tool.title = data.get("title")
+            tool.description = data.get("description")
+            tool.input_schema = _dump_json(data.get("inputSchema"))
+            tool.output_schema = _dump_json(data.get("outputSchema"))
+            tool.annotations = _dump_json(data.get("annotations"))
+            tool.current_hash = digest
+            tool.last_seen_at = now
+            tool.removed_at = None
+            recorded.append((tool, version, created))
+        if complete:
+            for name, tool in existing.items():
+                if name not in listed and tool.removed_at is None:
+                    tool.removed_at = now
         db.commit()
-        for tool in result:
-            db.refresh(tool)
-        return result
+        return MCPToolCRUD.get_by_service(db, service_id, include_removed=False), recorded
+
+    @staticmethod
+    def set_version_state(db: Session, version: MCPToolVersion, state: str, actor: str) -> MCPToolVersion:
+        version.state = state
+        version.decided_at = local_now()
+        version.decided_by = actor
+        version.legacy_baseline = False
+        db.commit()
+        db.refresh(version)
+        return version
+
+    @staticmethod
+    def set_states(db: Session, versions: List[MCPToolVersion], state: str, actor: str) -> int:
+        """Several versions in one transaction (Approve all)."""
+        now = local_now()
+        for version in versions:
+            version.state = state
+            version.decided_at = now
+            version.decided_by = actor
+        db.commit()
+        return len(versions)
+
+
+def _dump_json(value) -> Optional[str]:
+    return json.dumps(value, ensure_ascii=False) if value is not None else None
+
+
+def _legacy_view(tool: dict) -> tuple:
+    """The fields stored before pinning, the way they were stored (an empty inputSchema was saved as none)."""
+    return tool.get("name"), tool.get("description"), tool.get("inputSchema") or None
 
 
 # ==================== Token events / statistics ====================
@@ -704,6 +815,14 @@ class OAuthClientCRUD:
         now = local_now()
         if client.revocation_polled_at is None or now - client.revocation_polled_at >= min_interval:
             client.revocation_polled_at = now
+            db.commit()
+
+    @staticmethod
+    def mark_policy_polled(db: Session, client: OAuthClient, min_interval: timedelta = timedelta(seconds=30)) -> None:
+        """Record a tool-policy-feed poll (#33), at most once per ``min_interval`` like mark_feed_polled."""
+        now = local_now()
+        if client.policy_polled_at is None or now - client.policy_polled_at >= min_interval:
+            client.policy_polled_at = now
             db.commit()
 
     @staticmethod

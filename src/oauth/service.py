@@ -35,6 +35,7 @@ from src.adapters import (
     OAuthTokenAdapter, ServiceAdapter, TokenUsageAdapter, normalize_audience,
 )
 from src.config import Config
+from src.logging import get_logger
 from src.oauth import client_assertion, client_metadata, signing_keys
 from src.oauth.consent_policy import should_skip_consent
 from src.oauth.errors import OAuthError
@@ -55,6 +56,9 @@ DEFAULT_SCANNER_SCOPES = "mcp:tools:read mcp:tools:invoke mcp:resources:read mcp
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
+logger = get_logger("oauth")
+
+
 def issuer() -> str:
     return Config.get_oauth_config().issuer.rstrip("/")
 
@@ -116,6 +120,40 @@ def _loopback_only(redirect_uris: list) -> bool:
         except ValueError:
             return False
     return bool(hosts) and all(web and host in LOOPBACK_HOSTS for web, host in hosts)
+
+
+# OpenID Connect Dynamic Client Registration's application_type (MCP 2026-07-28, SEP-837: clients MUST send it in
+# DCR). MCP Gate is not an OpenID provider, so it puts no redirect-URI constraints on the value -- the spec says
+# non-OIDC servers safely ignore it -- but a value outside OIDC's two is refused so a broken client finds out.
+APPLICATION_TYPES = ("native", "web")
+
+
+def check_application_type(value) -> Optional[str]:
+    """None when absent; the value when it is "native" or "web"; otherwise OAuthError(invalid_client_metadata)."""
+    if value is None:
+        return None
+    if not isinstance(value, str) or value not in APPLICATION_TYPES:
+        raise OAuthError("invalid_client_metadata", 'application_type must be "native" or "web"')
+    return value
+
+
+# MCP 2026-07-28 deprecates Dynamic Client Registration in favour of Client ID Metadata Documents. MCP Gate keeps
+# it for older clients and says so once per process when one registers.
+DCR_DEPRECATION_NOTICE = (
+    "Dynamic Client Registration is deprecated by MCP 2026-07-28 in favour of Client ID Metadata Documents; "
+    "it keeps working for older clients (see docs/reference.md, 'Dynamic Client Registration')."
+)
+_dcr_notice_logged = False
+
+
+def log_dcr_deprecation_once() -> bool:
+    """Log DCR_DEPRECATION_NOTICE the first time a client registers through DCR. True when it was logged now."""
+    global _dcr_notice_logged
+    if _dcr_notice_logged:
+        return False
+    _dcr_notice_logged = True
+    logger.warning(DCR_DEPRECATION_NOTICE)
+    return True
 
 
 def redirect_with(base: str, params: dict) -> str:
@@ -217,6 +255,8 @@ def register_client(
         if value is not None and value != "" and not _valid_info_uri(value):
             raise OAuthError("invalid_client_metadata",
                              f"{field} must be an https URL (http only for localhost / loopback)")
+
+    check_application_type(metadata.get("application_type"))
 
     if is_approved is None:
         is_approved = True if created_via != "dcr" else Config.get_oauth_config().dcr_auto_approve
@@ -685,7 +725,7 @@ def issue_access_token(
     db: Session, *, sub: str, client_id: str, scope: str, audience: Optional[str],
     service: Optional[Service] = None, user: Optional[AdminUser] = None, kind: str = "access",
     ttl_seconds: Optional[int] = None, label: Optional[str] = None, parent_jti: Optional[str] = None,
-    record: bool = True, commit: bool = True,
+    record: bool = True, commit: bool = True, extra_claims: Optional[dict] = None,
 ) -> tuple[str, int, Optional[OAuthToken]]:
     cfg = Config.get_oauth_config()
     now = _now_ts()
@@ -700,6 +740,8 @@ def issue_access_token(
     if user:
         payload["email"] = user.email
         payload["name"] = user.username
+    if extra_claims:
+        payload.update(extra_claims)
     token, kid = _sign(db, payload, typ="at+jwt", may_commit=commit, record_expiry=record)
     rec = None
     if record:
@@ -1085,9 +1127,15 @@ def revocation_feed_status(db: Session, audience: Optional[str]) -> dict:
     - ``not_wired``: nothing is bound; a server verifying offline accepts revoked tokens until they expire
       (a server that introspects every token is not affected, but MCP Gate cannot tell)
     """
+    return feed_status(db, audience, "revocation_polled_at")
+
+
+def feed_status(db: Session, audience: Optional[str], polled_attr: str) -> dict:
+    """How the resource servers bound to ``audience`` read one feed, from the poll time stored in ``polled_attr``
+    (revocation_feed_status describes the states)."""
     aud = normalize_audience(audience) if audience else None
     clients = OAuthClientAdapter.list_resource_servers(db, aud) if aud else []
-    polls = [c.revocation_polled_at for c in clients if c.revocation_polled_at]
+    polls = [getattr(c, polled_attr) for c in clients if getattr(c, polled_attr)]
     last = max(polls) if polls else None
     if last is not None:
         state = "active" if local_now() - last <= FEED_STALE_AFTER else "stale"
@@ -1099,7 +1147,7 @@ def revocation_feed_status(db: Session, audience: Optional[str]) -> dict:
         "last_poll": format_datetime(last) if last else None,
         "stale_after_minutes": int(FEED_STALE_AFTER.total_seconds() // 60),
         "resource_servers": [{"client_id": c.client_id, "client_name": c.client_name,
-                              "last_poll": format_datetime(c.revocation_polled_at)} for c in clients],
+                              "last_poll": format_datetime(getattr(c, polled_attr))} for c in clients],
     }
 
 
@@ -1192,6 +1240,12 @@ def mint_personal_token(db: Session, *, user: AdminUser, service: Service, scope
     return token, rec
 
 
+# Marks the short-lived tokens MCP Gate signs for its own tools/list requests (scanner, health checks, "Inspect
+# as"). A server's pinning middleware (#33) lists every tool to such a token, approved or not, so a refresh records
+# the server's real tool list (and never marks a hidden tool as removed); tools/call stays refused.
+PROBE_CLAIM = "mcp_gate_probe"
+
+
 def mint_probe_token_like(db: Session, *, record: OAuthToken, service: Service) -> str:
     """A short-lived copy of an issued token's claims (sub, client_id, scope, aud, email/name and the same jti),
     signed now, for inspecting a server that shows different tools per caller. The stored token itself cannot
@@ -1208,7 +1262,7 @@ def mint_probe_token_like(db: Session, *, record: OAuthToken, service: Service) 
     payload = {
         "iss": issuer(), "sub": record.sub, "client_id": record.client_id, "scope": record.scope or "",
         "iat": now, "exp": now + SCANNER_TOKEN_TTL_SECONDS, "jti": record.jti, "token_use": "access",
-        "aud": audience,
+        "aud": audience, PROBE_CLAIM: True,
     }
     if record.user:
         payload["email"] = record.user.email
@@ -1226,7 +1280,7 @@ def mint_scanner_token(db: Session, service: Service) -> Optional[str]:
         else resolve_scope(db, None, None, service)
     token, _, _ = issue_access_token(
         db, sub=SCANNER_CLIENT_ID, client_id=SCANNER_CLIENT_ID, scope=scope, audience=audience,
-        service=service, ttl_seconds=SCANNER_TOKEN_TTL_SECONDS, record=False,
+        service=service, ttl_seconds=SCANNER_TOKEN_TTL_SECONDS, record=False, extra_claims={PROBE_CLAIM: True},
     )
     return token
 
@@ -1291,5 +1345,7 @@ def build_metadata(db: Session) -> dict:
         # MCP Gate extensions for servers that verify tokens offline (see examples/mcp_gate_hooks.py)
         "revoked_tokens_endpoint": f"{base}/oauth/revoked",
         "usage_report_endpoint": f"{base}/oauth/usage",
+        "tool_policy_endpoint": f"{base}/oauth/policy",
+        "tool_report_endpoint": f"{base}/oauth/tool-report",
         "service_documentation": f"{base}/docs",
     }

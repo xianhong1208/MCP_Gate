@@ -1,0 +1,40 @@
+{
+  "client": "codex",
+  "variant": "pat",
+  "issuer": "https://gate.example.com",
+  "docs_url": "https://learn.chatgpt.com/docs/extend/mcp?surface=cli",
+  "servers": [
+    {
+      "name": "Folio",
+      "key": "Folio",
+      "url": "https://folio.example.com/mcp",
+      "scopes": [
+        "rag:read"
+      ],
+      "pat_env": "MCP_GATE_PAT_FOLIO"
+    },
+    {
+      "name": "Morph yard",
+      "key": "Morph-yard",
+      "url": "http://127.0.0.1:5055/mcp",
+      "scopes": [],
+      "pat_env": "MCP_GATE_PAT_MORPH_YARD"
+    },
+    {
+      "name": "Folio",
+      "key": "Folio-2",
+      "url": "https://other.example.com/mcp",
+      "scopes": [],
+      "pat_env": "MCP_GATE_PAT_FOLIO_2"
+    }
+  ],
+  "file": {
+    "format": "toml",
+    "filename": "config.toml",
+    "path": "~/.codex/config.toml",
+    "content": "[mcp_servers.Folio]\nurl = \"https://folio.example.com/mcp\"\nbearer_token_env_var = \"MCP_GATE_PAT_FOLIO\"\n\n[mcp_servers.Morph-yard]\nurl = \"http://127.0.0.1:5055/mcp\"\nbearer_token_env_var = \"MCP_GATE_PAT_MORPH_YARD\"\n\n[mcp_servers.Folio-2]\nurl = \"https://other.example.com/mcp\"\nbearer_token_env_var = \"MCP_GATE_PAT_FOLIO_2\"\n"
+  },
+  "commands": [],
+  "install_links": [],
+  "pat_page": "https://gate.example.com/tokens/create"
+}

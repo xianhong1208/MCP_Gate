@@ -5,13 +5,22 @@ responsible for "calling db.crud + business logic". Covers Managed MCP processes
 discovered MCP Tools.
 """
 
+from sqlalchemy.exc import IntegrityError
+
 from db.crud import ManagedMcpProcessCRUD, MCPToolCRUD, UserMcpDefinitionCRUD
-from db.models import MCPTool, UserMcpDefinition
+from db.models import (
+    TOOL_SOURCE_REPORTED, TOOL_STATE_APPROVED, TOOL_STATE_PENDING, TOOL_STATE_REJECTED, MCPTool, UserMcpDefinition,
+)
 from src.adapters.exceptions import ConflictError, NotFoundError, ValidationFailedError
 from src.logging import get_logger
+from src.tool_pinning.hashing import canonical_json, tool_hash
 from src.utils.field_limits import FieldTooLongError, check_max_length, column_limit
 
 logger = get_logger("adapters.managed")
+
+
+# The value type each hashed MCP tool field must have when present (None is always allowed: it means absent)
+_TOOL_FIELD_TYPES = {"title": str, "description": str, "inputSchema": dict, "outputSchema": dict, "annotations": dict}
 
 
 def sanitize_tools(tools: list[dict]) -> list[dict]:
@@ -20,7 +29,8 @@ def sanitize_tools(tools: list[dict]) -> list[dict]:
     The list comes from the remote server and is not trusted: a tool whose name is missing, blank or longer
     than the column (MCP limits tool names to 128 characters) is dropped, and a repeated name keeps only its
     first entry. One malformed tool must not cost the rest of the list -- or, on PostgreSQL, fail the whole
-    refresh or scan with a 500.
+    refresh or scan with a 500. A tool whose hashed fields have the wrong JSON type (or cannot be hashed) is
+    dropped too: it could never be approved, and a server using the pinning hooks hides it anyway.
     """
     limit = column_limit(MCPTool.name)
     kept, seen = [], set()
@@ -33,18 +43,126 @@ def sanitize_tools(tools: list[dict]) -> list[dict]:
         if name in seen:
             logger.warning(f"Skipping duplicate remote tool {name!r}")
             continue
+        bad = [k for k, kind in _TOOL_FIELD_TYPES.items() if tool.get(k) is not None and not isinstance(tool[k], kind)]
+        if bad:
+            logger.warning(f"Skipping remote tool {name!r}: wrong type for {', '.join(bad)}")
+            continue
+        cleaned = {**tool, "name": name}
+        try:
+            tool_hash(cleaned)
+        except (TypeError, ValueError) as e:
+            logger.warning(f"Skipping remote tool {name!r}: its definition cannot be hashed ({e})")
+            continue
         seen.add(name)
-        kept.append({**tool, "name": name})
+        kept.append(cleaned)
     return kept
 
 
+# A reported definition larger than this (its canonical JSON, UTF-8) is refused: nothing legitimate comes close, and
+# every version is stored and shown in the console
+MAX_TOOL_DEFINITION_BYTES = 64 * 1024
+
+
+def check_reported_tool(tool) -> tuple[str | None, str | None]:
+    """Validate one tool definition a server reported (#33). Returns (its hash, None) or (None, the reason it is
+    refused). Unlike sanitize_tools nothing is repaired (a name is not stripped): the hash must be the one the server
+    computed over exactly what it lists, so a definition that cannot be stored as sent is refused as a whole."""
+    if not isinstance(tool, dict):
+        return None, "not_an_object"
+    name = tool.get("name")
+    if not isinstance(name, str) or not name or name != name.strip() or len(name) > column_limit(MCPTool.name):
+        return None, "invalid_name"
+    bad = [k for k, kind in _TOOL_FIELD_TYPES.items() if tool.get(k) is not None and not isinstance(tool[k], kind)]
+    if bad:
+        return None, "wrong_type:" + ",".join(bad)
+    try:
+        text = canonical_json(tool)
+    except (TypeError, ValueError):
+        return None, "not_hashable"
+    if len(text.encode("utf-8")) > MAX_TOOL_DEFINITION_BYTES:
+        return None, "too_large"
+    return tool_hash(tool), None
+
+
+# Which approval state each decision may move a version out of (#32). Rejected can be approved later, and an
+# approval can be withdrawn by rejecting.
+_ALLOWED_FROM = {
+    TOOL_STATE_APPROVED: (TOOL_STATE_PENDING, TOOL_STATE_REJECTED),
+    TOOL_STATE_REJECTED: (TOOL_STATE_PENDING, TOOL_STATE_APPROVED),
+}
+
+
 class MCPToolAdapter(MCPToolCRUD):
-    """MCP Tool adapter."""
+    """MCP Tool adapter: the tool list of a service and the approval of each pinned tool version (#32)."""
 
     @classmethod
     def sync_tools(cls, db, service_id, tools):
-        """Replace a service's tool list with the remote list, minus tools that cannot be stored."""
+        """Record the remote list (MCP field names), minus tools that cannot be stored. New and changed tools
+        become pending versions; nothing is deleted (see MCPToolCRUD.sync_tools)."""
         return super().sync_tools(db, service_id, sanitize_tools(tools))
+
+    @classmethod
+    def record_reported(cls, db, service_id, tools):
+        """Record definitions a server's pinning middleware reported (#33), already checked with
+        check_reported_tool: the same path as a refresh (record_tools), but partial (tools not mentioned are left
+        alone) and with source "reported". Returns the (tool, version, created) triples.
+
+        Two reports of the same new tool can race (unique tool name / hash per service): the loser is retried once,
+        and then finds the winner's rows."""
+        for attempt in (1, 2):
+            try:
+                return cls.record_tools(db, service_id, tools, complete=False, source=TOOL_SOURCE_REPORTED)[1]
+            except IntegrityError:
+                db.rollback()
+                if attempt == 2:
+                    raise
+        return []  # pragma: no cover - the loop returns or raises
+
+    @classmethod
+    def get_existing(cls, db, service_id, tool_id):
+        tool = cls.get_in_service(db, service_id, tool_id)
+        if tool is None:
+            raise NotFoundError(code="tools.not_found", fallback="Tool not found on this service")
+        return tool
+
+    @classmethod
+    def decide(cls, db, service_id, tool_id, version_hash, state, actor):
+        """Approve or reject one version of a tool, named by its hash (so the admin decides on exactly the
+        definition they looked at). Returns (tool, version, previous_state)."""
+        if state not in _ALLOWED_FROM:
+            raise ValidationFailedError(code="tools.invalid_state", fallback=f"Unknown decision {state!r}")
+        tool = cls.get_existing(db, service_id, tool_id)
+        version = next((v for v in tool.versions if v.hash == version_hash), None)
+        if version is None:
+            raise NotFoundError(code="tools.version_not_found", params={"name": tool.name},
+                                fallback=f"Tool '{tool.name}' has no version with that hash")
+        previous = version.state
+        if previous not in _ALLOWED_FROM[state]:
+            raise ConflictError(code=f"tools.already_{previous}", params={"name": tool.name},
+                                fallback=f"This version of '{tool.name}' is already {previous}")
+        cls.set_version_state(db, version, state, actor)
+        return tool, version, previous
+
+    @classmethod
+    def approve_first_list(cls, db, service_id, hashes, actor):
+        """Approve all: only for a service's first tool list (no version of it was ever approved), and only the
+        pending current versions the admin was shown (their hashes). Later changes are approved one by one.
+        Returns the approved (tool, version) pairs."""
+        if cls.has_approved_version(db, service_id):
+            raise ConflictError(code="tools.approve_all_not_first",
+                                fallback="Approve all is only for a service's first tool list; "
+                                         "approve later changes one by one.")
+        wanted = set(hashes)
+        pairs = []
+        for tool in cls.get_by_service(db, service_id, include_removed=False):
+            version = tool.current_version
+            if version is not None and version.state == TOOL_STATE_PENDING and version.hash in wanted:
+                pairs.append((tool, version))
+        if not pairs:
+            raise ConflictError(code="tools.nothing_to_approve",
+                                fallback="None of these tool versions is pending on this service any more.")
+        cls.set_states(db, [v for _, v in pairs], TOOL_STATE_APPROVED, actor)
+        return pairs
 
 
 class ManagedMcpProcessAdapter(ManagedMcpProcessCRUD):
