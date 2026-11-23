@@ -175,7 +175,7 @@ curl -s https://mcp.example.com/.well-known/jwks.json | python -m json.tool
 
 ## Docker
 
-The official image is **`tonyhuang1101/mcp-gate`** on Docker Hub, for `linux/amd64` and `linux/arm64`, published from 1.4.0 on for every release as `<version>` (for example `1.4.0`), `<major>.<minor>` and `latest`. It is built from the repository's `Dockerfile`, which you can also build yourself (`docker build -t mcp-gate:local .`).
+The official image is **`tonyhuang1101/mcp-gate`** on Docker Hub, for `linux/amd64` and `linux/arm64`, published from 1.4.0 on for every release as `<version>` (for example `1.5.0`), `<major>.<minor>` and `latest`. It is built from the repository's `Dockerfile`, which you can also build yourself (`docker build -t mcp-gate:local .`).
 
 What is in it: Python 3.13 (slim) with the locked dependencies, including the PostgreSQL driver; MCP Gate runs as the unprivileged user `mcpgate` (uid 10001) and listens on port **4568** inside the container whatever `OAUTH_ISSUER` says; a `HEALTHCHECK` calls `/health`; migrations run at every start, as without Docker.
 
@@ -187,11 +187,11 @@ docker run -d --name mcp-gate --restart unless-stopped \
   -e OAUTH_ISSUER=http://localhost:4568 \
   -v mcp-gate-data:/app/data \
   -v mcp-gate-secrets:/app/secrets \
-  tonyhuang1101/mcp-gate:1.4.0
+  tonyhuang1101/mcp-gate:1.5.0
 docker logs mcp-gate | grep "Setup token"
 ```
 
-Or with Compose, using `docker-compose.yml` from the repository (it runs `tonyhuang1101/mcp-gate:latest`; `MCP_GATE_VERSION=1.4.0` in `.env` pins a release):
+Or with Compose, using `docker-compose.yml` from the repository (it runs `tonyhuang1101/mcp-gate:latest`; `MCP_GATE_VERSION=1.5.0` in `.env` pins a release):
 
 ```bash
 cp .env.example .env      # OAUTH_ISSUER, optionally ADMIN_EMAIL / ADMIN_PASSWORD

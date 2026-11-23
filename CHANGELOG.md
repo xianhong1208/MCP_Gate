@@ -4,6 +4,8 @@ All notable changes to MCP Gate (formerly MCP Center) are documented here. The f
 
 ## [Unreleased]
 
+## [1.5.0] — 2026-11-23
+
 ### Added
 - **Tool pinning and approval** (#32). Every tool a server lists is pinned by a SHA-256 over the canonical JSON of its `name`, `title`, `description`, `inputSchema`, `outputSchema` and `annotations` (keys sorted, no whitespace, UTF-8 without `\u` escapes, absent and `null` fields left out; `src/tool_pinning/hashing.py`, golden vectors in `tests/fixtures/tool_hash_vectors.json`). Each definition is kept as a version that is *approved*, *pending* or *rejected*. Refreshing or scanning no longer deletes and re-creates a server's tools: a new tool or a changed definition becomes a pending version next to the approved one, a known hash is only marked as seen, and a tool the server stops listing is marked *no longer listed* with its history kept (so *Inspect as* another identity never costs an approval). The service page shows each tool's state and an approval card per pending tool with a line diff of every changed field, and **Approve all** on a server's first tool list only; the dashboard and the services list show how many tools wait. New endpoints: `POST /api/services/{id}/tools/{tool_id}/approve` and `…/reject` (by hash) and `POST /api/services/{id}/tools/approve-all`; `GET /api/services/{id}/tools` and the service responses report states, versions and `tools_pending`. Decisions need a console session and are audited (`tool_approve`, `tool_reject`, `tool_approve_all`). The tool list also stores `title`, `outputSchema` and `annotations` now. See [Tool pinning and approval](docs/reference.md#tool-pinning-and-approval).
 

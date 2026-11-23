@@ -69,7 +69,7 @@ The official image is [`tonyhuang1101/mcp-gate`](https://hub.docker.com/r/tonyhu
 docker run -d --name mcp-gate -p 4568:4568 \
   -e OAUTH_ISSUER=http://localhost:4568 \
   -v mcp-gate-data:/app/data -v mcp-gate-secrets:/app/secrets \
-  tonyhuang1101/mcp-gate:1.4.0
+  tonyhuang1101/mcp-gate:1.5.0
 docker logs mcp-gate | grep "Setup token"
 ```
 
