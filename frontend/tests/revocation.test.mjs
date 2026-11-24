@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { feedTone, revocationNote, revocationReachesServer } from '../src/utils/revocation.js'
+import { accessRulesState, feedTone, revocationNote, revocationReachesServer } from '../src/utils/revocation.js'
 
 // A stand-in for i18next's t: key plus the interpolation values, so the assertions see what was chosen
 const t = (key, vars = {}) => `${key} ${JSON.stringify(vars)}`
@@ -24,5 +24,15 @@ assert.match(revocationNote(t, { state: 'not_wired', audience: 'http://h:1/mcp' 
 assert.equal(revocationNote(t, { state: 'not_wired' }, { ...pat, kind: 'refresh' }), null)
 assert.equal(revocationNote(t, null, pat), null)
 assert.equal(revocationNote(t, { state: 'not_wired' }, { ...pat, audience: null }), null)
+
+// access rules (#37): shown only once a resource server read the policy feed; a warning only when rules exist
+assert.equal(accessRulesState(null), null)
+assert.equal(accessRulesState({ state: 'never_polled', rules_enforced: null, has_access_policy: true }), null)
+assert.equal(accessRulesState({ state: 'active', rules_enforced: true, has_access_policy: true }), 'enforced')
+assert.equal(accessRulesState({ state: 'active', rules_enforced: true, has_access_policy: false }), 'enforced')
+assert.equal(accessRulesState({ state: 'active', rules_enforced: false, has_access_policy: false }), 'not_enforced')
+assert.equal(accessRulesState({ state: 'stale', rules_enforced: false, has_access_policy: true }), 'not_enforced_warn')
+// an older MCP Gate answer without the field says nothing
+assert.equal(accessRulesState({ state: 'active' }), null)
 
 console.log('revocation.test.mjs ALL PASS')

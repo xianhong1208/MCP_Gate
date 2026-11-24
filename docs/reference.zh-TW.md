@@ -187,23 +187,26 @@ MCP Gate 只記錄這些決定;它不在 client 與 server 之間,所以單靠�
 - **Policy。** 每 `poll_interval` 秒(預設 15)讀一次 `POST /oauth/policy`。MCP Gate 自己的請求(重新整理、掃描、健康檢查、*Inspect as*)所用的短效 token 帶有 `mcp_gate_probe` claim;middleware 對它們列出所有 tool,不論是否核准,因此重新整理記錄的是真正的清單,不會把被隱藏的 tool 標成已不再列出。帶這種 token 的呼叫仍會被拒絕。
 - **連不到 MCP Gate 時**,繼續使用最後一次收到的清單。它也會寫進 `cache_file`(預設為工作目錄下的 `mcp_gate_policy.json`;以原子方式寫入、權限 600;設 `None` 則只放記憶體),所以 MCP Gate 停機時重啟 server 也還在。為其他 issuer、audience 或雜湊版本寫的快取會被忽略;有設 `max_cache_age` 時,超過該秒數的也一樣。MCP Gate 恢復回應後,它的清單會取代快取。
 - **從未收到清單**(第一次啟動時 MCP Gate 沒開、也沒有可用的快取):所有 tool 都隱藏且不能呼叫,並有一行 log 說明原因。設 `fail_open=True` 則在收到第一份清單前列出並執行所有 tool。
-- **管理台。** server 頁面有一列 *Tool approvals*,和撤銷清單那列一樣:由 server 執行(附最後一次輪詢時間)、已停止輪詢、從未輪詢,或未執行。待核准 tool 的審核卡片會說明這台 server 是否執行核准。
+- **存取規則(1.6)。** middleware 輪詢時帶 `features=rules1`,MCP Gate 就會一併回傳這台 server 的 [tool 存取規則](#tool-存取規則)(格式 2);middleware 以自帶的評估器(`evaluate_access`,能算出標準向量)對呼叫者已驗證的 token(`jti`、`client_id`、`sub`、`scope` claim)檢查每個已核准的 tool。`tools/list` 時,這個 token 永遠不能呼叫的 tool(`hidden`:拒絕規則、不在限定規則內、server 要求 scope 而 tool 沒有)不會列出;多一個 scope 就能用的 tool(`needs_scope`)會列出。`tools/call` 時,隱藏的 tool 和不存在的 tool 一樣被拒絕;`needs_scope` 的 tool 則回覆 tool 錯誤 `Tool '<name>' requires the scope '<challenge>', which this access token does not carry. …`(HTTP `403 insufficient_scope` 的追加授權在 1.6 後續步驟才加入)。過期的規則到了 `expires_at` 就不再套用,不必等輪詢。MCP Gate 的 probe token 仍然看得到所有 tool。
+- **規則與快取。** 規則和核准清單一起保存與快取(快取格式 2),所以連不到 MCP Gate 時,最後收到的規則會繼續套用,重啟後也一樣;從未收到則如上所述全部隱藏。為其他規則版本寫的快取會被忽略;1.5 middleware 寫的格式 1 快取只當作核准清單讀取。無法完整套用的回應(其他格式或規則版本、格式錯誤的 policy)會整份拒絕,繼續沿用先前的 policy。比 1.6 舊的 MCP Gate 回應格式 1:此時只執行核准,啟動 log 會寫 "no access rules"。
+- **管理台。** server 頁面有一列 *Tool approvals*,和撤銷清單那列一樣:由 server 執行(附最後一次輪詢時間)、已停止輪詢、從未輪詢,或未執行。middleware 輪詢過之後,下方會顯示**存取規則已執行**,或是**存取規則未執行 — 請更新 middleware**:表示這台 server 有 resource server 上次輪詢時沒有宣告 `rules1`(1.5 的 middleware 不管規則,會把所有已核准的 tool 列給每個 token);若這台 server 有規則、有 scope 的 tool 或設了*必須有 scope*,會以警告樣式顯示。待核准 tool 的審核卡片會說明這台 server 是否執行核准。
 
 給其他實作參考的 feed 與回報格式(form-encoded `POST`,驗證方式同 `/oauth/revoked`;只限呼叫者自己的 server):
 
-- `POST /oauth/policy`(可帶 `etag`)回應 `{"format": 1, "hash_version": 1, "audience", "service_id", "tools": {"approved": [...], "pending": [...], "rejected": [...]}, "rules": [], "unchanged": false, "etag", "now"}`,每個清單都是 64 位十六進位雜湊。其他雜湊都算未知:隱藏並回報。`rules` 保留給 1.6 的 tool 層級 policy,目前是空的;不認得的欄位請忽略。帶上手上的 `etag`,若沒有變化就只回 `{"unchanged": true, "etag", "now"}`。server 被停用或刪除時,所有清單都是空的。
+- `POST /oauth/policy`(可帶 `etag` 與 `features`)回應 `{"format": 1, "hash_version": 1, "audience", "service_id", "tools": {"approved": [...], "pending": [...], "rejected": [...]}, "rules": [], "unchanged": false, "etag", "now"}`,每個清單都是 64 位十六進位雜湊。其他雜湊都算未知:隱藏並回報。不認得的欄位請忽略。帶上手上的 `etag`,若沒有變化就只回 `{"unchanged": true, "etag", "now"}`。server 被停用或刪除時,所有清單都是空的。
+- **格式 2。** `features` 是以空白或逗號分隔、說明你的實作會執行哪些功能的清單;MCP Gate 會存在 client 上(`policy_features`,小寫、已知的排前面、最多 64 字元),並顯示在管理台。帶 `rules1` 時回應格式 2:同樣的欄位再加上 `"rules_version": 1`、`"unscoped_tools": "allow" | "require"`、`"tool_scopes": {"<tool>": {"any_of": [...], "challenge": "<scope>"}}` 與 `"rules": [{"id", "effect", "subject": {"kind": "pat" | "client" | "user", "id"}, "tools": [...] | ["*"], "expires_at": <unix 秒> | null}]`:正是評估器的輸入(見 [Tool 存取規則](#tool-存取規則)),只含未過期的規則,群組已展開成 `user` 規則。etag 涵蓋這些內容,所以規則、tool 的 scope、*必須有 scope*、群組成員有任何變動或刪除 scope,都會在 server 下一次輪詢時送到;只有規則變動時,格式 1 的回應不會改變。沒有 `rules1` 就維持格式 1,和 1.5 相同。格式 2 的回應要嘛整份套用、要嘛完全不用:不認得的 `rules_version` 不得套用(沿用先前的 policy),不認得的規則 `effect` 視為拒絕它列出的 tool。
 - `POST /oauth/tool-report`,`tools` 是 `tools/list` 回傳格式的 tool 物件 JSON 陣列(最多 200 個、body 最大 2 MiB、每個 client 每分鐘 30 次、每份定義最大 64 KiB)。MCP Gate 會自己為每份定義計算雜湊:一併送來的 `hash` 只拿來比對,不同的會列在 `hash_mismatch`。回應是 `{"recorded": [{"name", "hash", "state", "new"}], "invalid": [{"index", "name", "reason"}], "hash_mismatch": [...]}`。回報和重新整理走同一套規則,只是它沒提到的 tool 不受影響。新的定義會以 `tool_report` 記入稽核日誌,執行者是該 resource server。
 
 ### Tool 存取規則
 
-*1.6 進行中。* 這個版本會儲存規則,並在 MCP Gate 裡評估;server 還收不到、也還不會執行它們(下一步由 policy feed 帶過去,並由 middleware 套用)。在那之前,規則不會改變 client 看到的任何東西。
+*1.6 進行中。* MCP Gate 儲存並評估規則;執行 1.6 版 `MCPGateToolPinning` middleware 的 server 會從 policy feed(格式 2)收到規則,並在一次輪詢內執行(見 [Server 上的 tool 核准](#server-上的-tool-核准))。沒有這個 middleware,或用的是 1.5 版的 server 不會執行,管理台的 server 頁面會說明。缺少 scope 時的 HTTP 追加授權會在後續步驟加入;在那之前,這樣的呼叫會以寫出所需 scope 的 tool 錯誤失敗。
 
 一個 token 能不能呼叫 server 的某個 tool,依下列順序決定,先符合者為準:
 
 1. **未核准**([tool 釘選](#tool-釘選與核准)):隱藏。
 2. 有針對這個 token 的**拒絕規則**列出這個 tool(或 `*`,即所有 tool):隱藏。
 3. 有針對這個 token 的**限定規則**,而 tool 不在其中某一條裡(多條取交集):隱藏。
-4. **Scope。** tool 可以放進 scope(server 可授予的全域 scope,或 server 自己的 scope)。token 持有其中**任一個**就能呼叫;否則 tool 仍會列出,但呼叫會被拒絕,並以追加授權(step-up)要求其中一個 scope。不在任何 scope 裡的 tool 預設允許,除非 server 設為**必須有 scope**(`unscoped_tools: require`),此時會隱藏。
+4. **Scope。** tool 可以放進 scope(server 可授予的全域 scope,或 server 自己的 scope)。token 持有其中**任一個**就能呼叫;否則 tool 仍會列出,但呼叫會被拒絕並寫出其中一個 scope(1.6 後續步驟會改為追加授權(step-up)要求)。不在任何 scope 裡的 tool 預設允許,除非 server 設為**必須有 scope**(`unscoped_tools: require`),此時會隱藏。
 5. 其餘允許。
 
 - **工具組合就是 scope。** 放了 tool 的 scope 就是一個工具組合;一個 tool 可以在多個組合裡,範圍較大的 scope 只是放了較多 tool。每個 tool 有一個**追加授權 scope**,也就是 step-up 時要求的那個:有標記就用標記的,否則用最窄的(tool 最少,再依名稱)。刪除 scope 時,所有 tool 都會移出。指派給 tool 的 scope 必須是 RFC 6749 scope-token(可列印 ASCII,不含空白、`"` 與 `\`),因為它會放進 `WWW-Authenticate: Bearer scope="…"`;新建的 scope 必須符合,舊名稱不符合的會在 1.6 migration 的 log 列出,且不能指派。scope 可以有顯示用的 `title`。

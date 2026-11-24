@@ -283,7 +283,7 @@ async def test_tpmw_013_a_valid_cache_is_used(hooks, tmp_path):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("change", [
     {"raw": "{not json"},
-    {"format": 2},
+    {"format": 3},
     {"hash_version": 2},
     {"audience": "http://127.0.0.1:9999/mcp"},
     {"issuer": "http://other-gate"},
@@ -347,7 +347,7 @@ async def test_tpmw_017_cache_file_is_private_and_replaced_atomically(hooks, tmp
     assert sorted(p.name for p in tmp_path.iterdir()) == ["policy.json"]
     before = cache.read_text()
     data = json.loads(before)
-    assert data["format"] == 1 and data["issuer"] == "http://testserver" and data["approved"] == approved
+    assert data["format"] == 2 and data["issuer"] == "http://testserver" and data["approved"] == approved
 
     # a write that fails half way leaves the previous file whole and no temporary file behind
     answer["tools"]["approved"], answer["etag"] = [], "2"

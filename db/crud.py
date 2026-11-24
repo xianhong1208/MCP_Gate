@@ -1018,10 +1018,16 @@ class OAuthClientCRUD:
             db.commit()
 
     @staticmethod
-    def mark_policy_polled(db: Session, client: OAuthClient, min_interval: timedelta = timedelta(seconds=30)) -> None:
-        """Record a tool-policy-feed poll (#33), at most once per ``min_interval`` like mark_feed_polled."""
+    def mark_policy_polled(db: Session, client: OAuthClient, features: Optional[str] = None,
+                           min_interval: timedelta = timedelta(seconds=30)) -> None:
+        """Record a tool-policy-feed poll (#33), at most once per ``min_interval`` like mark_feed_polled, and what
+        the server's middleware said it enforces (``features``, #37). A change of features is written at once: the
+        console must not keep saying "enforced" after a server went back to a middleware that ignores rules."""
         now = local_now()
-        if client.policy_polled_at is None or now - client.policy_polled_at >= min_interval:
+        changed = client.policy_features != features
+        if changed:
+            client.policy_features = features
+        if changed or client.policy_polled_at is None or now - client.policy_polled_at >= min_interval:
             client.policy_polled_at = now
             db.commit()
 

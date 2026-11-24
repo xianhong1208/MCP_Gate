@@ -40,6 +40,12 @@ console as pending. It reads ``POST <issuer>/oauth/policy`` with the verifier's 
     mcp = FastMCP(name="demo", auth=RemoteAuthProvider(token_verifier=verifier, ...),
                   middleware=[MCPGateToolPinning(verifier, cache_file="mcp_gate_policy.json")])
 
+The same middleware enforces the server's tool access rules (#37): it polls with ``features=rules1`` and MCP Gate
+answers with the policy as well (feed format 2): which scopes unlock each tool, and per-token / per-client /
+per-user "deny" and "only these tools" rules (groups already expanded to their members). On ``tools/list`` a tool
+the token may never call is hidden and one that more scope would unlock is listed; on ``tools/call`` the first is
+refused like an unknown tool and the second with an error naming the scope to ask for.
+
 Copy this single file next to your server; it needs only ``fastmcp`` and ``httpx`` (``pyjwt`` and
 ``cryptography`` as well when using ``private_key_pem``).
 """
@@ -241,9 +247,110 @@ def mcp_tool_dict(tool: Any) -> dict:
     return tool.to_mcp_tool(name=tool.name).model_dump(mode="json", by_alias=True, exclude_none=True)
 
 
+# ====================================================================== tool access rules (#37)
+# A copy of MCP Gate's evaluator (src/tool_policy/evaluate.py, rules version 1), so this file needs nothing from MCP
+# Gate's package. It must give the same verdict for every input; MCP Gate's tests check it against the golden vectors
+# (tests/fixtures/tool_policy_vectors.json) and against MCP Gate's own function on generated policies.
+#
+# Precedence, first match decides: not approved -> hidden; a "deny" rule matching the token names the tool -> hidden;
+# "only" rules match the token and one of them leaves the tool out -> hidden; the tool has scopes and the token holds
+# none -> needs_scope (listed, call refused naming the challenge scope); the tool has no scope and the server
+# requires one -> hidden; otherwise allowed. A rule with an unknown effect denies the tools it names (every tool when
+# it names none); a rule with an unknown subject kind matches every token (both fail closed).
+RULES_VERSION = 1
+FEATURES = "rules1"  # sent with every poll: MCP Gate then answers with the access policy (feed format 2)
+
+ACCESS_ALLOWED = "allowed"
+ACCESS_HIDDEN = "hidden"
+ACCESS_NEEDS_SCOPE = "needs_scope"
+
+_ALL_TOOLS = "*"
+_KNOWN_EFFECTS = ("deny", "only")
+_CLAIM_OF_KIND = {"pat": "jti", "client": "client_id", "user": "sub"}
+
+
+def _token_scopes(token: Mapping[str, Any]) -> set:
+    raw = token.get("scope")
+    if isinstance(raw, str):
+        return set(raw.split())
+    if isinstance(raw, (list, tuple)):
+        return {s for s in raw if isinstance(s, str)}
+    return set()
+
+
+def subject_matches(subject: Any, token: Mapping[str, Any]) -> bool:
+    if not isinstance(subject, dict):
+        return True
+    claim = _CLAIM_OF_KIND.get(subject.get("kind"))
+    if claim is None:
+        return True
+    value = token.get(claim)
+    return isinstance(value, str) and value != "" and value == subject.get("id")
+
+
+def _rule_names(rule: dict) -> list:
+    tools = rule.get("tools")
+    return [t for t in tools if isinstance(t, str)] if isinstance(tools, list) else []
+
+
+def _rule_names_tool(rule: dict, tool: str) -> bool:
+    names = _rule_names(rule)
+    return _ALL_TOOLS in names or tool in names
+
+
+def _rule_active(rule: dict, now: Optional[float]) -> bool:
+    expires = rule.get("expires_at")
+    if expires is None or now is None:
+        return True
+    try:
+        return float(expires) > float(now)
+    except (TypeError, ValueError):
+        return True
+
+
+def _access_verdict(decision: str, reason: str, *, rule_ids=(), scopes=(), challenge: Optional[str] = None) -> dict:
+    return {"decision": decision, "reason": reason, "rule_ids": sorted({str(r) for r in rule_ids}),
+            "scopes": sorted(set(scopes)), "challenge": challenge}
+
+
+def evaluate_access(policy: Mapping[str, Any], token: Mapping[str, Any], tool: str, *, approved: bool = True,
+                    now: Optional[float] = None) -> dict:
+    """The verdict for one tool and one token: ``{"decision", "reason", "rule_ids", "scopes", "challenge"}``."""
+    if not approved:
+        return _access_verdict(ACCESS_HIDDEN, "not_approved")
+    rules = [r for r in (policy.get("rules") or []) if isinstance(r, dict) and _rule_active(r, now)
+             and subject_matches(r.get("subject"), token)]
+    denying = []
+    for rule in rules:
+        effect = rule.get("effect")
+        if effect == "deny" and _rule_names_tool(rule, tool):
+            denying.append(rule.get("id"))
+        elif effect not in _KNOWN_EFFECTS and (not _rule_names(rule) or _rule_names_tool(rule, tool)):
+            denying.append(rule.get("id"))
+    if denying:
+        return _access_verdict(ACCESS_HIDDEN, "denied_by_rule", rule_ids=denying)
+    outside = [r.get("id") for r in rules if r.get("effect") == "only" and not _rule_names_tool(r, tool)]
+    if outside:
+        return _access_verdict(ACCESS_HIDDEN, "outside_only_rule", rule_ids=outside)
+    entry = (policy.get("tool_scopes") or {}).get(tool) or {}
+    any_of = sorted({s for s in (entry.get("any_of") or []) if isinstance(s, str) and s})
+    if any_of:
+        if _token_scopes(token) & set(any_of):
+            return _access_verdict(ACCESS_ALLOWED, "ok", scopes=any_of)
+        challenge = entry.get("challenge")
+        if challenge not in any_of:
+            challenge = any_of[0]
+        return _access_verdict(ACCESS_NEEDS_SCOPE, "missing_scope", scopes=any_of, challenge=challenge)
+    if policy.get("unscoped_tools") == "require":
+        return _access_verdict(ACCESS_HIDDEN, "unscoped_tool_requires_scope")
+    return _access_verdict(ACCESS_ALLOWED, "ok")
+
+
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
-CACHE_FORMAT = 1
+CACHE_FORMAT = 2  # 2 (1.6) adds the access policy; a format 1 cache (1.5) is still read, as approvals only
 NOT_AVAILABLE = "Tool {name!r} is not available on this server."
+NEEDS_SCOPE = ("Tool {name!r} requires the scope {scope!r}, which this access token does not carry. Sign in again "
+               "asking for that scope, or use a personal access token issued with it.")
 PROBE_CLAIM = "mcp_gate_probe"  # set by MCP Gate on the tokens of its own tools/list requests
 
 try:  # which version of a versioned tool a call asks for (FastMCP's own helper; absent in other releases)
@@ -282,6 +389,14 @@ class MCPGateToolPinning(Middleware):
     Before any list was received (no answer from the feed yet, no usable cache) every tool is hidden: closed by
     default, with one log line saying why. ``fail_open=True`` lists and runs every tool until the first list
     arrives instead.
+
+    Tool access rules (#37): each poll says ``features=rules1``, and MCP Gate answers with the server's access
+    policy too (format 2). Every approved tool is then checked against the caller's token (``evaluate_access``):
+    a tool the token may never call (a deny rule, outside an "only" rule, no scope where the server requires one)
+    is hidden and refused like an unknown tool; a tool that more scope would unlock is listed, and its call is
+    refused with an error naming the scope. The policy is kept and cached with the approvals, so the last rules
+    received keep applying while MCP Gate is unreachable. An MCP Gate older than 1.6 answers format 1 (no rules):
+    only approvals are enforced then. MCP Gate's own probe tokens still see every approved and unapproved tool.
     """
 
     def __init__(
@@ -301,7 +416,8 @@ class MCPGateToolPinning(Middleware):
         self.poll_interval = poll_interval
         self.max_cache_age = max_cache_age
         self.report_enabled = report
-        self._policy: Optional[dict] = None       # {"approved", "pending", "rejected": set, "etag", "received_at"}
+        # {"approved", "pending", "rejected": set, "access": dict | None, "etag", "received_at"}
+        self._policy: Optional[dict] = None
         self._policy_source: Optional[str] = None  # "feed" | "cache"
         self._to_report: dict[str, dict] = {}     # hash -> definition, waiting to be sent
         self._reported: set[str] = set()          # hashes MCP Gate already acknowledged
@@ -319,6 +435,18 @@ class MCPGateToolPinning(Middleware):
         if self._policy is not None:
             return self._policy_source or "feed"
         return "open" if self.fail_open else "closed"
+
+    @property
+    def access_policy(self) -> Optional[dict]:
+        """The tool access policy in use (#37), or None when MCP Gate sent none (no list yet, or MCP Gate < 1.6)."""
+        return self._policy.get("access") if self._policy is not None else None
+
+    def access(self, tool: str, claims: Optional[Mapping[str, Any]]) -> dict:
+        """The access verdict for an approved tool and the caller's token claims (allowed without a policy)."""
+        policy = self.access_policy
+        if policy is None:
+            return _access_verdict(ACCESS_ALLOWED, "ok")
+        return evaluate_access(policy, claims or {}, tool, approved=True, now=time.time())
 
     def is_allowed(self, digest: str) -> bool:
         if self._policy is None:
@@ -356,21 +484,28 @@ class MCPGateToolPinning(Middleware):
 
     # ------------------------------------------------------------------ middleware hooks
     @staticmethod
-    def _is_mcp_gate_probe() -> bool:
-        """A short-lived token MCP Gate signed for its own tools/list (scanner, refresh, "Inspect as"): it is shown
-        every tool, approved or not, so the console records the server's real list. Calls stay refused."""
+    def _token_claims() -> Optional[dict]:
+        """The verified access token's claims for the current request (None without one)."""
         try:
             from fastmcp.server.dependencies import get_access_token
 
             token = get_access_token()
         except Exception:
-            return False
-        return bool(token is not None and (token.claims or {}).get(PROBE_CLAIM) is True)
+            return None
+        return dict(token.claims or {}) if token is not None else None
+
+    def _is_mcp_gate_probe(self, claims: Optional[dict] = None) -> bool:
+        """A short-lived token MCP Gate signed for its own tools/list (scanner, refresh, "Inspect as"): it is shown
+        every tool, approved or not and whatever the access rules, so the console records the server's real list.
+        Calls stay refused."""
+        claims = self._token_claims() if claims is None else claims
+        return bool(claims and claims.get(PROBE_CLAIM) is True)
 
     async def on_list_tools(self, context, call_next):
         tools = await call_next(context)
         await self._ensure_started()
-        if self._is_mcp_gate_probe():
+        claims = self._token_claims()
+        if self._is_mcp_gate_probe(claims):
             for tool in tools:
                 self._note(tool)
             return tools
@@ -378,7 +513,8 @@ class MCPGateToolPinning(Middleware):
         visible = []
         for tool in tools:
             digest = self._note(tool)
-            if digest is not None and self.is_allowed(digest):
+            if digest is not None and self.is_allowed(digest) and \
+                    self.access(tool.name, claims)["decision"] != ACCESS_HIDDEN:
                 visible.append(tool)
         return visible
 
@@ -404,6 +540,16 @@ class MCPGateToolPinning(Middleware):
             logger.warning("Refused a call to tool %r: its definition (%s) is not approved in MCP Gate (%s)",
                            name, (digest or "unhashable")[:12], self.state)
             raise ToolError(NOT_AVAILABLE.format(name=name))
+        claims = self._token_claims()
+        verdict = self.access(name, claims)
+        if verdict["decision"] == ACCESS_HIDDEN:
+            logger.warning("Refused a call to tool %r for client %s: %s %s", name, (claims or {}).get("client_id"),
+                           verdict["reason"], ", ".join(verdict["rule_ids"]))
+            raise ToolError(NOT_AVAILABLE.format(name=name))
+        if verdict["decision"] == ACCESS_NEEDS_SCOPE:
+            logger.info("Refused a call to tool %r for client %s: needs scope %r", name,
+                        (claims or {}).get("client_id"), verdict["challenge"])
+            raise ToolError(NEEDS_SCOPE.format(name=name, scope=verdict["challenge"]))
         return await call_next(context)
 
     # ------------------------------------------------------------------ background sync
@@ -452,7 +598,9 @@ class MCPGateToolPinning(Middleware):
         await self.poll_policy()
 
     async def poll_policy(self) -> None:
-        form = {"etag": self._policy["etag"]} if self._policy is not None and self._policy_source == "feed" else {}
+        form = {"features": FEATURES}
+        if self._policy is not None and self._policy_source == "feed":
+            form["etag"] = self._policy["etag"]
         data = await self.verifier._post("/oauth/policy", form)
         if data.get("unchanged") and self._policy is not None and self._policy_source == "feed":
             return
@@ -462,7 +610,8 @@ class MCPGateToolPinning(Middleware):
         self._reported -= policy["approved"] | policy["pending"] | policy["rejected"]
         if was_closed:
             self._closed_logged = False
-            logger.info("MCP Gate tool policy received: %d approved definition(s)", len(policy["approved"]))
+            logger.info("MCP Gate tool policy received: %d approved definition(s), %s", len(policy["approved"]),
+                        _describe_access(policy["access"]))
         self._write_cache()
 
     async def flush_reports(self) -> None:
@@ -498,10 +647,37 @@ class MCPGateToolPinning(Middleware):
             if not isinstance(values, list) or not all(isinstance(v, str) and _HEX64.match(v) for v in values):
                 raise PolicyUnavailable(f"{origin}: {key} is not a list of hashes")
             lists[key] = set(values)
+        access = self._parse_access(data.get("access") if origin == "cache" else data, origin=origin)
         etag = data.get("etag")
         received = data.get("received_at") if origin == "cache" else time.time()
-        return {**lists, "etag": etag if isinstance(etag, str) else None,
+        return {**lists, "access": access, "etag": etag if isinstance(etag, str) else None,
                 "received_at": float(received) if isinstance(received, (int, float)) else 0.0}
+
+    @staticmethod
+    def _parse_access(data: Any, *, origin: str) -> Optional[dict]:
+        """The access policy of a feed answer (format 2) or of the cache's ``access`` entry; None for a format 1
+        answer (MCP Gate < 1.6) or a cache without one. Anything else this file cannot apply exactly is refused,
+        so the previous policy (or none: closed) stays in force rather than a partial one."""
+        if origin == "feed":
+            fmt = data.get("format", 1)
+            if fmt == 1:
+                return None
+            if fmt != 2:
+                raise PolicyUnavailable(f"feed: format {fmt!r}; update mcp_gate_hooks.py")
+        elif data is None:
+            return None
+        if not isinstance(data, dict):
+            raise PolicyUnavailable(f"{origin}: access policy is not an object")
+        if data.get("rules_version") != RULES_VERSION:
+            raise PolicyUnavailable(f"{origin}: rules version {data.get('rules_version')!r}, this file applies "
+                                    f"version {RULES_VERSION}; update mcp_gate_hooks.py")
+        unscoped, tool_scopes, rules = data.get("unscoped_tools"), data.get("tool_scopes"), data.get("rules")
+        if not isinstance(unscoped, str) or not isinstance(tool_scopes, dict) or not isinstance(rules, list) or \
+                not all(isinstance(v, dict) for v in tool_scopes.values()) or \
+                not all(isinstance(r, dict) for r in rules):
+            raise PolicyUnavailable(f"{origin}: malformed access policy")
+        return {"rules_version": RULES_VERSION, "unscoped_tools": unscoped, "tool_scopes": tool_scopes,
+                "rules": rules}
 
     def _load_cache(self) -> None:
         if not self.cache_file or not os.path.exists(self.cache_file):
@@ -509,7 +685,7 @@ class MCPGateToolPinning(Middleware):
         try:
             with open(self.cache_file, encoding="utf-8") as f:
                 data = json.load(f)
-            if not isinstance(data, dict) or data.get("format") != CACHE_FORMAT:
+            if not isinstance(data, dict) or data.get("format") not in (1, CACHE_FORMAT):
                 raise PolicyUnavailable("cache: unknown format")
             if str(data.get("issuer", "")).rstrip("/") != self.verifier.center:
                 raise PolicyUnavailable(f"cache: written for issuer {data.get('issuer')!r}")
@@ -521,8 +697,8 @@ class MCPGateToolPinning(Middleware):
             return
         self._policy, self._policy_source = policy, "cache"
         self._policy["etag"] = None  # never send a cached etag: the feed answers in full once
-        logger.info("MCP Gate tool policy loaded from %s: %d approved definition(s)", self.cache_file,
-                    len(policy["approved"]))
+        logger.info("MCP Gate tool policy loaded from %s: %d approved definition(s), %s", self.cache_file,
+                    len(policy["approved"]), _describe_access(policy["access"]))
 
     def _write_cache(self) -> None:
         """Replace the cache file atomically: write a private temporary file in the same directory, fsync, rename."""
@@ -532,7 +708,7 @@ class MCPGateToolPinning(Middleware):
         data = {"format": CACHE_FORMAT, "hash_version": HASH_VERSION, "issuer": self.verifier.center,
                 "audience": self.audience, "etag": policy["etag"], "received_at": policy["received_at"],
                 "approved": sorted(policy["approved"]), "pending": sorted(policy["pending"]),
-                "rejected": sorted(policy["rejected"])}
+                "rejected": sorted(policy["rejected"]), "access": policy["access"]}
         directory = os.path.dirname(os.path.abspath(self.cache_file))
         fd, tmp = tempfile.mkstemp(prefix=".mcp_gate_policy.", suffix=".tmp", dir=directory)  # mode 600
         try:
@@ -548,3 +724,9 @@ class MCPGateToolPinning(Middleware):
                 os.unlink(tmp)
             except OSError:
                 pass
+
+
+def _describe_access(access: Optional[dict]) -> str:
+    if access is None:
+        return "no access rules (MCP Gate sent none: older than 1.6)"
+    return f"{len(access['rules'])} access rule(s), {len(access['tool_scopes'])} scoped tool(s)"

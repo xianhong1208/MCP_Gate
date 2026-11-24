@@ -152,3 +152,40 @@ async def test_tpint_001_hidden_until_approved_then_hidden_again_on_change(gate,
     await _wait_for(lambda: add["hash"] in pinned_server["pinning"]._policy["approved"], timeout=10)
     assert await _list(url, pat) == ["add", "hello"]
     assert pinned_server["cache"].exists()
+
+
+def _jti(token: str) -> str:
+    import base64
+    import json
+
+    payload = token.split(".")[1]
+    return json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))["jti"]
+
+
+async def test_tpint_002_access_rules_follow_the_real_token(gate, pinned_server):
+    """#37: the middleware evaluates the rules against the verified token's own claims (jti, sub, scope)."""
+    service_id = pinned_server["service"]["id"]
+    url = pinned_server["url"]
+    pinning = pinned_server["pinning"]
+    pat, other = _mint_pat(gate, service_id), _mint_pat(gate, service_id)
+    assert await _list(url, pat) == []
+    listed = await _wait_for(lambda: _tools_when(gate, service_id, pending=2))
+    with _console(gate) as c:
+        assert c.post(f"/api/services/{service_id}/tools/approve-all",
+                      json={"hashes": [t["hash"] for t in listed["tools"]]}).status_code == 200
+        r = c.post(f"/api/services/{service_id}/access-rules",
+                   json={"effect": "deny", "subject": {"kind": "pat", "id": _jti(pat)}, "tools": ["hello"]})
+        assert r.status_code == 201, r.text
+        assert c.put("/api/oauth/scopes/calc:write", json={}).status_code == 200
+        add_id = next(t["id"] for t in listed["tools"] if t["name"] == "add")
+        assert c.put(f"/api/services/{service_id}/tools/{add_id}/scopes",
+                     json={"scopes": ["calc:write"]}).status_code == 200
+    await _wait_for(lambda: (pinning.access_policy or {}).get("tool_scopes"), timeout=10)
+    assert await _list(url, pat) == ["add"]
+    assert await _list(url, other) == ["add", "hello"]
+    assert (await _call(url, other, "add", {"a": 1, "b": 1})).startswith(
+        "ERROR: Tool 'add' requires the scope 'calc:write'")
+    assert await _call(url, other, "hello", {"name": "G"}) == "Hello, G!"
+    with _console(gate) as c:
+        status = c.get(f"/api/oauth/services/{service_id}/policy-feed").json()
+    assert status["rules_enforced"] is True and status["has_access_policy"] is True
