@@ -144,6 +144,7 @@ def create_app() -> FastAPI:
     register_exception_handlers(app)
 
     from src.api import router
+    from src.api.access_routes import router as access_router
     from src.api.client_config_routes import router as client_config_router
     from src.api.discovery_routes import router as discovery_router, ws_router as discovery_ws_router
     from src.api.managed_routes import router as managed_router
@@ -155,6 +156,7 @@ def create_app() -> FastAPI:
     app.include_router(session_router)
     app.include_router(router)
     app.include_router(client_config_router)
+    app.include_router(access_router)
     app.include_router(oauth_admin_router)
     app.include_router(discovery_router)
     app.include_router(discovery_ws_router)

@@ -4,6 +4,14 @@ All notable changes to MCP Gate (formerly MCP Center) are documented here. The f
 
 ## [Unreleased]
 
+### Added
+- **Tool access rules: data model, evaluator and API** (#37, 1.6 part 1; servers do not enforce them yet). Tools can be put in **scopes** (a scope with tools is a bundle; a token may call a tool when it holds any of its scopes, and each tool names one scope for a step-up challenge, marked or else the narrowest), and per-server **rules** can **deny** tools or allow **only** some to a personal access token (jti), an OAuth client, a user (`sub`) or a **group** of users. Precedence: not approved, then deny, then only, then scope; a tool in no scope stays allowed unless the server is set to require one (`unscoped_tools`). Groups are named sets of console accounts, expanded to their members' `sub`s before rules leave MCP Gate. One pure, stdlib-only evaluator (`src/tool_policy/evaluate.py`) with golden vectors (`tests/fixtures/tool_policy_vectors.json`) that the server middleware will have to reproduce, and the policy MCP Gate builds per server (`GET /api/services/{id}/access` → `policy`). New endpoints: `GET/PUT /api/services/{id}/access`, `GET/PUT /api/services/{id}/tools/{tool_id}/scopes`, `/api/services/{id}/access-rules[/{rule_id}]`, `/api/groups[/{id}[/members/{user_id}]]` and `GET /api/users`; console session, audited (`tool_scope_set`, `tool_rule_create/update/delete`, `service_unscoped_tools_set`, `group_create/update/delete`, `group_member_add/remove`), with per-server limits (2,000 rules and 64 KiB after group expansion). Deleting a scope takes its tools out of it (the audit entry lists them). Scopes gain an optional `title`. See [Tool access rules](docs/reference.md#tool-access-rules).
+
+### Changed
+- **New scopes must be RFC 6749 scope-tokens** (no space, `"` or `\`), so any scope can be named in a `WWW-Authenticate` challenge. Existing scopes keep their names; one that does not qualify cannot be assigned to a tool, and the migration logs it.
+- **Longer scope strings.** The `scope` columns of clients, authorization requests and codes, tokens and consents are `TEXT` (were `VARCHAR(512)`, enforced by PostgreSQL), and a `scope` parameter or registered client scope may be 4,096 characters (was 1,024 / 512).
+- **Upgrade.** Migration `b5d7f9a1c3e6` adds `tool_scopes`, `tool_access_rules`, `user_groups`, `user_group_members`, `services.unscoped_tools` (`allow` for every existing server), `oauth_clients.policy_features`, `title` on `oauth_scopes` / `service_scopes`, and widens the scope columns. Nothing is backfilled, so nothing changes until an admin assigns a scope or adds a rule. Downgrading on PostgreSQL fails if a scope string longer than 512 characters was stored since.
+
 ## [1.5.0] — 2026-11-23
 
 ### Added

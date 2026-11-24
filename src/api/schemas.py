@@ -146,6 +146,7 @@ class ServiceInfo(BaseModel):
     oauth_audience: Optional[str] = None
     effective_audience: Optional[str] = None
     oauth_scopes: List[str] = []
+    unscoped_tools: str = "allow"           # tools in no scope: allow | require (#37)
     health: Optional[ServiceHealthInfo] = None
     tools: Optional[List[MCPToolInfo]] = None
     tools_count: int = 0                    # tools the server still lists

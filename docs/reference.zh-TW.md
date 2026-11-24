@@ -194,6 +194,30 @@ MCP Gate 只記錄這些決定;它不在 client 與 server 之間,所以單靠�
 - `POST /oauth/policy`(可帶 `etag`)回應 `{"format": 1, "hash_version": 1, "audience", "service_id", "tools": {"approved": [...], "pending": [...], "rejected": [...]}, "rules": [], "unchanged": false, "etag", "now"}`,每個清單都是 64 位十六進位雜湊。其他雜湊都算未知:隱藏並回報。`rules` 保留給 1.6 的 tool 層級 policy,目前是空的;不認得的欄位請忽略。帶上手上的 `etag`,若沒有變化就只回 `{"unchanged": true, "etag", "now"}`。server 被停用或刪除時,所有清單都是空的。
 - `POST /oauth/tool-report`,`tools` 是 `tools/list` 回傳格式的 tool 物件 JSON 陣列(最多 200 個、body 最大 2 MiB、每個 client 每分鐘 30 次、每份定義最大 64 KiB)。MCP Gate 會自己為每份定義計算雜湊:一併送來的 `hash` 只拿來比對,不同的會列在 `hash_mismatch`。回應是 `{"recorded": [{"name", "hash", "state", "new"}], "invalid": [{"index", "name", "reason"}], "hash_mismatch": [...]}`。回報和重新整理走同一套規則,只是它沒提到的 tool 不受影響。新的定義會以 `tool_report` 記入稽核日誌,執行者是該 resource server。
 
+### Tool 存取規則
+
+*1.6 進行中。* 這個版本會儲存規則,並在 MCP Gate 裡評估;server 還收不到、也還不會執行它們(下一步由 policy feed 帶過去,並由 middleware 套用)。在那之前,規則不會改變 client 看到的任何東西。
+
+一個 token 能不能呼叫 server 的某個 tool,依下列順序決定,先符合者為準:
+
+1. **未核准**([tool 釘選](#tool-釘選與核准)):隱藏。
+2. 有針對這個 token 的**拒絕規則**列出這個 tool(或 `*`,即所有 tool):隱藏。
+3. 有針對這個 token 的**限定規則**,而 tool 不在其中某一條裡(多條取交集):隱藏。
+4. **Scope。** tool 可以放進 scope(server 可授予的全域 scope,或 server 自己的 scope)。token 持有其中**任一個**就能呼叫;否則 tool 仍會列出,但呼叫會被拒絕,並以追加授權(step-up)要求其中一個 scope。不在任何 scope 裡的 tool 預設允許,除非 server 設為**必須有 scope**(`unscoped_tools: require`),此時會隱藏。
+5. 其餘允許。
+
+- **工具組合就是 scope。** 放了 tool 的 scope 就是一個工具組合;一個 tool 可以在多個組合裡,範圍較大的 scope 只是放了較多 tool。每個 tool 有一個**追加授權 scope**,也就是 step-up 時要求的那個:有標記就用標記的,否則用最窄的(tool 最少,再依名稱)。刪除 scope 時,所有 tool 都會移出。指派給 tool 的 scope 必須是 RFC 6749 scope-token(可列印 ASCII,不含空白、`"` 與 `\`),因為它會放進 `WWW-Authenticate: Bearer scope="…"`;新建的 scope 必須符合,舊名稱不符合的會在 1.6 migration 的 log 列出,且不能指派。scope 可以有顯示用的 `title`。
+- **規則對象。** `pat`(這個 server 的個人存取 token,以 jti 指定;OAuth access token 無法單獨指定,因為每次 refresh 的 jti 都會變)、`client`(OAuth client id;所有 PAT 共用 `mcp-gate-console`)、`user`(管理台帳號的 id,也就是其 token 的 `sub`;`client_credentials` token 的 `sub` 是它的 client id)與 `group`。規則以名稱指定 tool(必須是這個 server 的 tool,目前有沒有列出都可以),或 `["*"]`(僅限拒絕);可以有 `note` 與 `expires_at`(UTC),過期後不再套用。
+- **群組**是有名稱的管理台帳號集合。規則可以指定群組;MCP Gate 會在 server 收到之前把它展開成每個成員一條規則,所以 server 只比對 token 的 claim(`jti`、`client_id`、`sub`),成員變動會在下一次輪詢生效。被規則指定的群組不能刪除(否則它的拒絕會失效);帳號刪除時,其成員資格也會一併移除。
+- **上限。** 每個 tool 32 個 scope、每條規則 500 個 tool;每個 server 在群組展開後最多 2,000 條規則、64 KiB 的規則 JSON(`409 access.rules_limit` / `access.rules_too_large`,加入成員會超過時也一樣)。過期的規則不計入。
+- **評估器**是一個純函式 `src/tool_policy/evaluate.py`(只用標準函式庫,方便 server 端 middleware 帶一份),由 `tests/fixtures/tool_policy_vectors.json` 的標準向量釘住,其他實作必須算出相同結果(`rules_version` 1)。輸入:`{"unscoped_tools", "tool_scopes": {"<tool>": {"any_of": [...], "challenge"}}, "rules": [{"id", "effect", "subject": {"kind", "id"}, "tools", "expires_at": <unix 秒> | null}]}`、token 的 claim、tool 名稱、是否已核准與目前時間。輸出:`{"decision": "allowed" | "hidden" | "needs_scope", "reason": "ok" | "not_approved" | "denied_by_rule" | "outside_only_rule" | "missing_scope" | "unscoped_tool_requires_scope", "rule_ids", "scopes", "challenge"}`。效果不明的規則視為拒絕它列出的 tool(沒列出就是全部);對象種類不明的規則對所有 token 都成立。
+- **API**(需管理台 session;寫入會記入稽核,並和 `/api` 其他端點一樣檢查來源):
+  - `GET /api/services/{id}/access`:`unscoped_tools`、每個 tool 的 scope 與追加授權 scope、規則(含對象名稱與 `expired`)、tool 可放入的 scope(`challenge_safe`),以及 `policy`,也就是這個 server 的評估器輸入,群組已展開。`PUT /api/services/{id}/access` `{"unscoped_tools": "allow" | "require"}`(`service_unscoped_tools_set`)。
+  - `GET/PUT /api/services/{id}/tools/{tool_id}/scopes` `{"scopes": [...], "challenge": null | "<其中之一>"}` 取代 tool 的 scope(`tool_scope_set`,記錄前後)。錯誤:`400 access.unknown_scope`、`access.scope_not_permitted`(server 的允許 scope 排除的全域 scope)、`access.scope_name_unsafe`、`access.challenge_not_in_scopes`、`access.too_many_scopes`。
+  - `GET/POST /api/services/{id}/access-rules`、`GET/PUT/DELETE /api/services/{id}/access-rules/{rule_id}`,內容為 `{"effect": "deny" | "only", "subject": {"kind", "id"}, "tools": [...], "note", "expires_at"}`(`tool_rule_create`、`tool_rule_update`、`tool_rule_delete`)。錯誤:`400 access.invalid_effect`、`access.invalid_subject_kind`、`access.subject_not_found`、`access.pat_other_service`、`access.no_tools`、`access.unknown_tool`、`access.wildcard_not_alone`、`access.only_all_tools`、`access.too_many_tools`、`access.expires_in_past`;`404 access.rule_not_found`。
+  - `GET/POST /api/groups`、`GET/PUT/DELETE /api/groups/{id}`、`PUT/DELETE /api/groups/{id}/members/{user_id}`(`group_create`、`group_update`、`group_delete`、`group_member_add`、`group_member_remove`);`409 groups.name_taken`(名稱不分大小寫不得重複)、`409 groups.in_use`、`404 groups.not_found` / `groups.member_not_found`。`GET /api/users` 列出可選的管理台帳號。
+- **升級到 1.6。** Migration `b5d7f9a1c3e6` 新增資料表 `tool_scopes`、`tool_access_rules`、`user_groups`、`user_group_members`,新增欄位 `services.unscoped_tools`(既有 server 皆為 `allow`)、`oauth_clients.policy_features` 與兩個 scope 資料表的 `title`,並把 client、授權請求與授權碼、token、同意紀錄的 `scope` 欄位改為 `TEXT`(帶很多組合 scope 的 token 在 PostgreSQL 上會超過 `VARCHAR(512)`);`scope` 參數現在最長 4,096 字元。不回填任何資料,所以在管理員指派 scope 或新增規則之前,一切照舊。在 PostgreSQL 上,若之後存過超過 512 字元的 scope,降版會失敗。
+
 ### 連接 MCP client
 
 每台 server 頁面上的 **連接用戶端** 面板(服務列表的插頭圖示也會帶到這裡;列表上方的 **連接用戶端** 則一次產生所有 server),提供 **Claude Code、Cursor、VS Code 與 Codex** 的現成設定:每個 client 一個分頁,client 有指令就給指令,還有它讀取的設定檔(可複製或下載)與步驟。每個片段裡的 server 網址都是那台 server 的 **audience**:client 會把它連線的網址當成 RFC 8707 的 `resource` 送出,而 MCP Gate 只接受已登記的 audience,同一台 server 換個寫法就會得到 `invalid_target`。audience 不是 `http(s)` 網址時,改用 server 自己的位址。
@@ -231,7 +255,7 @@ MCP Gate 只記錄這些決定;它不在 client 與 server 之間,所以單靠�
 | OAuth(公開) | `GET /.well-known/oauth-authorization-server` · `GET /.well-known/openid-configuration` · `GET /.well-known/jwks.json` · `POST /oauth/register` · `GET /oauth/authorize` · `GET/POST /oauth/authorize/requests/{id}[/decision]`(同意頁)· `POST /oauth/token` · `POST /oauth/revoke` · `POST /oauth/introspect` |
 | Resource server | `POST /oauth/revoked`(撤銷清單)· `POST /oauth/usage`(使用回報)· `POST /oauth/policy`(tool policy feed)· `POST /oauth/tool-report`(tool 回報);需綁定到該 server 的 confidential client,見[撤銷清單](#撤銷清單)與 [Server 上的 tool 核准](#server-上的-tool-核准) |
 | 管理台 session | `GET /api/session/status` · `POST /api/session/setup` · `POST /api/session/login` · `POST /api/session/logout` · `GET /api/session/me` · `PUT /api/session/me/{profile,password}` · `GET /api/session/oauth/{github,google}/{start,callback}` |
-| 管理 API(需登入) | `/api/services*` · `/api/client-config` · `/api/oauth/{clients,scopes,tokens,consents,keys,activity,overview,snippets}` · `/api/discovery/*` · `/api/marketplace*` · `/api/managed*` · `/api/byo-mcp*` · `/api/stats/*` · `/api/audit/*` · `/api/system/*` |
+| 管理 API(需登入) | `/api/services*`(含 `/api/services/{id}/access`、`…/access-rules*`、`…/tools/{tool_id}/scopes`,見 [Tool 存取規則](#tool-存取規則))· `/api/groups*` · `/api/users` · `/api/client-config` · `/api/oauth/{clients,scopes,tokens,consents,keys,activity,overview,snippets}` · `/api/discovery/*` · `/api/marketplace*` · `/api/managed*` · `/api/byo-mcp*` · `/api/stats/*` · `/api/audit/*` · `/api/system/*` |
 | 維運 | `GET /health` · `WS /ws/services`(服務狀態即時推播) |
 
 用腳本呼叫管理 API 時,先 `POST /api/session/login`,之後每個請求都要帶 `mcp_session` cookie、以 `X-Session-Binding` 標頭帶上登入回應裡的 `session_binding` 值,寫入請求還要帶同源的 `Origin` 標頭。

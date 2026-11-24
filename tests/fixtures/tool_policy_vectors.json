@@ -1,0 +1,2324 @@
+{
+  "description": "Golden vectors of the tool access evaluator (src/tool_policy/evaluate.py). The server-side middleware must reproduce every entry of `vectors`; `expansions` are MCP Gate's group expansion (servers never see groups).",
+  "rules_version": 1,
+  "vectors": [
+    {
+      "label": "not approved hides even an allowed tool",
+      "policy": {
+        "unscoped_tools": "allow",
+        "tool_scopes": {
+          "delete_file": {
+            "any_of": [
+              "files:admin",
+              "files:write"
+            ],
+            "challenge": "files:write"
+          },
+          "read_file": {
+            "any_of": [
+              "files:read"
+            ],
+            "challenge": "files:read"
+          }
+        },
+        "rules": []
+      },
+      "token": {
+        "jti": "pat-1",
+        "client_id": "mcp-gate-console",
+        "sub": "user-a",
+        "scope": "files:read"
+      },
+      "tool": "search",
+      "approved": false,
+      "now": null,
+      "expect": {
+        "decision": "hidden",
+        "reason": "not_approved",
+        "rule_ids": [],
+        "scopes": [],
+        "challenge": null
+      }
+    },
+    {
+      "label": "not approved beats a deny rule",
+      "policy": {
+        "unscoped_tools": "allow",
+        "tool_scopes": {
+          "delete_file": {
+            "any_of": [
+              "files:admin",
+              "files:write"
+            ],
+            "challenge": "files:write"
+          },
+          "read_file": {
+            "any_of": [
+              "files:read"
+            ],
+            "challenge": "files:read"
+          }
+        },
+        "rules": [
+          {
+            "id": "r1",
+            "effect": "deny",
+            "subject": {
+              "kind": "pat",
+              "id": "pat-1"
+            },
+            "tools": [
+              "search"
+            ],
+            "expires_at": null
+          }
+        ]
+      },
+      "token": {
+        "jti": "pat-1",
+        "client_id": "mcp-gate-console",
+        "sub": "user-a",
+        "scope": "files:read"
+      },
+      "tool": "search",
+      "approved": false,
+      "now": null,
+      "expect": {
+        "decision": "hidden",
+        "reason": "not_approved",
+        "rule_ids": [],
+        "scopes": [],
+        "challenge": null
+      }
+    },
+    {
+      "label": "unscoped tool, server allows",
+      "policy": {
+        "unscoped_tools": "allow",
+        "tool_scopes": {
+          "delete_file": {
+            "any_of": [
+              "files:admin",
+              "files:write"
+            ],
+            "challenge": "files:write"
+          },
+          "read_file": {
+            "any_of": [
+              "files:read"
+            ],
+            "challenge": "files:read"
+          }
+        },
+        "rules": []
+      },
+      "token": {
+        "jti": "pat-1",
+        "client_id": "mcp-gate-console",
+        "sub": "user-a",
+        "scope": "files:read"
+      },
+      "tool": "search",
+      "approved": true,
+      "now": null,
+      "expect": {
+        "decision": "allowed",
+        "reason": "ok",
+        "rule_ids": [],
+        "scopes": [],
+        "challenge": null
+      }
+    },
+    {
+      "label": "unscoped tool, server requires a scope",
+      "policy": {
+        "unscoped_tools": "require",
+        "tool_scopes": {
+          "delete_file": {
+            "any_of": [
+              "files:admin",
+              "files:write"
+            ],
+            "challenge": "files:write"
+          },
+          "read_file": {
+            "any_of": [
+              "files:read"
+            ],
+            "challenge": "files:read"
+          }
+        },
+        "rules": []
+      },
+      "token": {
+        "jti": "pat-1",
+        "client_id": "mcp-gate-console",
+        "sub": "user-a",
+        "scope": "files:read"
+      },
+      "tool": "search",
+      "approved": true,
+      "now": null,
+      "expect": {
+        "decision": "hidden",
+        "reason": "unscoped_tool_requires_scope",
+        "rule_ids": [],
+        "scopes": [],
+        "challenge": null
+      }
+    },
+    {
+      "label": "scoped tool, token holds its scope",
+      "policy": {
+        "unscoped_tools": "allow",
+        "tool_scopes": {
+          "delete_file": {
+            "any_of": [
+              "files:admin",
+              "files:write"
+            ],
+            "challenge": "files:write"
+          },
+          "read_file": {
+            "any_of": [
+              "files:read"
+            ],
+            "challenge": "files:read"
+          }
+        },
+        "rules": []
+      },
+      "token": {
+        "jti": "pat-1",
+        "client_id": "mcp-gate-console",
+        "sub": "user-a",
+        "scope": "files:read"
+      },
+      "tool": "read_file",
+      "approved": true,
+      "now": null,
+      "expect": {
+        "decision": "allowed",
+        "reason": "ok",
+        "rule_ids": [],
+        "scopes": [
+          "files:read"
+        ],
+        "challenge": null
+      }
+    },
+    {
+      "label": "scoped tool, require mode does not matter",
+      "policy": {
+        "unscoped_tools": "require",
+        "tool_scopes": {
+          "delete_file": {
+            "any_of": [
+              "files:admin",
+              "files:write"
+            ],
+            "challenge": "files:write"
+          },
+          "read_file": {
+            "any_of": [
+              "files:read"
+            ],
+            "challenge": "files:read"
+          }
+        },
+        "rules": []
+      },
+      "token": {
+        "jti": "pat-1",
+        "client_id": "mcp-gate-console",
+        "sub": "user-a",
+        "scope": "files:read"
+      },
+      "tool": "read_file",
+      "approved": true,
+      "now": null,
+      "expect": {
+        "decision": "allowed",
+        "reason": "ok",
+        "rule_ids": [],
+        "scopes": [
+          "files:read"
+        ],
+        "challenge": null
+      }
+    },
+    {
+      "label": "scoped tool, token lacks every scope -> step-up with the challenge",
+      "policy": {
+        "unscoped_tools": "allow",
+        "tool_scopes": {
+          "delete_file": {
+            "any_of": [
+              "files:admin",
+              "files:write"
+            ],
+            "challenge": "files:write"
+          },
+          "read_file": {
+            "any_of": [
+              "files:read"
+            ],
+            "challenge": "files:read"
+          }
+        },
+        "rules": []
+      },
+      "token": {
+        "jti": "pat-1",
+        "client_id": "mcp-gate-console",
+        "sub": "user-a",
+        "scope": "files:read"
+      },
+      "tool": "delete_file",
+      "approved": true,
+      "now": null,
+      "expect": {
+        "decision": "needs_scope",
+        "reason": "missing_scope",
+        "rule_ids": [],
+        "scopes": [
+          "files:admin",
+          "files:write"
+        ],
+        "challenge": "files:write"
+      }
+    },
+    {
+      "label": "any one of the tool's scopes is enough",
+      "policy": {
+        "unscoped_tools": "allow",
+        "tool_scopes": {
+          "delete_file": {
+            "any_of": [
+              "files:admin",
+              "files:write"
+            ],
+            "challenge": "files:write"
+          },
+          "read_file": {
+            "any_of": [
+              "files:read"
+            ],
+            "challenge": "files:read"
+          }
+        },
+        "rules": []
+      },
+      "token": {
+        "jti": "jti-3",
+        "client_id": "ci-bot",
+        "sub": "ci-bot",
+        "scope": "files:admin"
+      },
+      "tool": "delete_file",
+      "approved": true,
+      "now": null,
+      "expect": {
+        "decision": "allowed",
+        "reason": "ok",
+        "rule_ids": [],
+        "scopes": [
+          "files:admin",
+          "files:write"
+        ],
+        "challenge": null
+      }
+    },
+    {
+      "label": "scope match is exact (no prefix)",
+      "policy": {
+        "unscoped_tools": "allow",
+        "tool_scopes": {
+          "t": {
+            "any_of": [
+              "files:read"
+            ],
+            "challenge": "files:read"
+          }
+        },
+        "rules": []
+      },
+      "token": {
+        "jti": "pat-1",
+        "client_id": "mcp-gate-console",
+        "sub": "user-a",
+        "scope": "files"
+      },
+      "tool": "t",
+      "approved": true,
+      "now": null,
+      "expect": {
+        "decision": "needs_scope",
+        "reason": "missing_scope",
+        "rule_ids": [],
+        "scopes": [
+          "files:read"
+        ],
+        "challenge": "files:read"
+      }
+    },
+    {
+      "label": "no challenge given -> first scope by name",
+      "policy": {
+        "unscoped_tools": "allow",
+        "tool_scopes": {
+          "t": {
+            "any_of": [
+              "z:scope",
+              "a:scope"
+            ]
+          }
+        },
+        "rules": []
+      },
+      "token": {
+        "jti": "pat-1",
+        "client_id": "mcp-gate-console",
+        "sub": "user-a",
+        "scope": "files:read"
+      },
+      "tool": "t",
+      "approved": true,
+      "now": null,
+      "expect": {
+        "decision": "needs_scope",
+        "reason": "missing_scope",
+        "rule_ids": [],
+        "scopes": [
+          "a:scope",
+          "z:scope"
+        ],
+        "challenge": "a:scope"
+      }
+    },
+    {
+      "label": "challenge not among the scopes -> first scope by name",
+      "policy": {
+        "unscoped_tools": "allow",
+        "tool_scopes": {
+          "t": {
+            "any_of": [
+              "z:scope",
+              "b:scope"
+            ],
+            "challenge": "other"
+          }
+        },
+        "rules": []
+      },
+      "token": {
+        "jti": "pat-1",
+        "client_id": "mcp-gate-console",
+        "sub": "user-a",
+        "scope": "files:read"
+      },
+      "tool": "t",
+      "approved": true,
+      "now": null,
+      "expect": {
+        "decision": "needs_scope",
+        "reason": "missing_scope",
+        "rule_ids": [],
+        "scopes": [
+          "b:scope",
+          "z:scope"
+        ],
+        "challenge": "b:scope"
+      }
+    },
+    {
+      "label": "empty scope list counts as no scope",
+      "policy": {
+        "unscoped_tools": "require",
+        "tool_scopes": {
+          "t": {
+            "any_of": []
+          }
+        },
+        "rules": []
+      },
+      "token": {
+        "jti": "pat-1",
+        "client_id": "mcp-gate-console",
+        "sub": "user-a",
+        "scope": "files:read"
+      },
+      "tool": "t",
+      "approved": true,
+      "now": null,
+      "expect": {
+        "decision": "hidden",
+        "reason": "unscoped_tool_requires_scope",
+        "rule_ids": [],
+        "scopes": [],
+        "challenge": null
+      }
+    },
+    {
+      "label": "token without a scope claim",
+      "policy": {
+        "unscoped_tools": "allow",
+        "tool_scopes": {
+          "delete_file": {
+            "any_of": [
+              "files:admin",
+              "files:write"
+            ],
+            "challenge": "files:write"
+          },
+          "read_file": {
+            "any_of": [
+              "files:read"
+            ],
+            "challenge": "files:read"
+          }
+        },
+        "rules": []
+      },
+      "token": {
+        "jti": "jti-2",
+        "client_id": "https://client.example/meta.json",
+        "sub": "user-b"
+      },
+      "tool": "read_file",
+      "approved": true,
+      "now": null,
+      "expect": {
+        "decision": "needs_scope",
+        "reason": "missing_scope",
+        "rule_ids": [],
+        "scopes": [
+          "files:read"
+        ],
+        "challenge": "files:read"
+      }
+    },
+    {
+      "label": "deny by personal access token (jti)",
+      "policy": {
+        "unscoped_tools": "allow",
+        "tool_scopes": {
+          "delete_file": {
+            "any_of": [
+              "files:admin",
+              "files:write"
+            ],
+            "challenge": "files:write"
+          },
+          "read_file": {
+            "any_of": [
+              "files:read"
+            ],
+            "challenge": "files:read"
+          }
+        },
+        "rules": [
+          {
+            "id": "r1",
+            "effect": "deny",
+            "subject": {
+              "kind": "pat",
+              "id": "pat-1"
+            },
+            "tools": [
+              "search"
+            ],
+            "expires_at": null
+          }
+        ]
+      },
+      "token": {
+        "jti": "pat-1",
+        "client_id": "mcp-gate-console",
+        "sub": "user-a",
+        "scope": "files:read"
+      },
+      "tool": "search",
+      "approved": true,
+      "now": null,
+      "expect": {
+        "decision": "hidden",
+        "reason": "denied_by_rule",
+        "rule_ids": [
+          "r1"
+        ],
+        "scopes": [],
+        "challenge": null
+      }
+    },
+    {
+      "label": "deny by jti also matches a pre-1.4 PAT (old client_id)",
+      "policy": {
+        "unscoped_tools": "allow",
+        "tool_scopes": {
+          "delete_file": {
+            "any_of": [
+              "files:admin",
+              "files:write"
+            ],
+            "challenge": "files:write"
+          },
+          "read_file": {
+            "any_of": [
+              "files:read"
+            ],
+            "challenge": "files:read"
+          }
+        },
+        "rules": [
+          {
+            "id": "r1",
+            "effect": "deny",
+            "subject": {
+              "kind": "pat",
+              "id": "pat-old"
+            },
+            "tools": [
+              "search"
+            ],
+            "expires_at": null
+          }
+        ]
+      },
+      "token": {
+        "jti": "pat-old",
+        "client_id": "mcp-center-console",
+        "sub": "user-a",
+        "scope": ""
+      },
+      "tool": "search",
+      "approved": true,
+      "now": null,
+      "expect": {
+        "decision": "hidden",
+        "reason": "denied_by_rule",
+        "rule_ids": [
+          "r1"
+        ],
+        "scopes": [],
+        "challenge": null
+      }
+    },
+    {
+      "label": "deny of another tool does not apply",
+      "policy": {
+        "unscoped_tools": "allow",
+        "tool_scopes": {
+          "delete_file": {
+            "any_of": [
+              "files:admin",
+              "files:write"
+            ],
+            "challenge": "files:write"
+          },
+          "read_file": {
+            "any_of": [
+              "files:read"
+            ],
+            "challenge": "files:read"
+          }
+        },
+        "rules": [
+          {
+            "id": "r1",
+            "effect": "deny",
+            "subject": {
+              "kind": "pat",
+              "id": "pat-1"
+            },
+            "tools": [
+              "other"
+            ],
+            "expires_at": null
+          }
+        ]
+      },
+      "token": {
+        "jti": "pat-1",
+        "client_id": "mcp-gate-console",
+        "sub": "user-a",
+        "scope": "files:read"
+      },
+      "tool": "search",
+      "approved": true,
+      "now": null,
+      "expect": {
+        "decision": "allowed",
+        "reason": "ok",
+        "rule_ids": [],
+        "scopes": [],
+        "challenge": null
+      }
+    },
+    {
+      "label": "deny of every tool for a client",
+      "policy": {
+        "unscoped_tools": "allow",
+        "tool_scopes": {
+          "delete_file": {
+            "any_of": [
+              "files:admin",
+              "files:write"
+            ],
+            "challenge": "files:write"
+          },
+          "read_file": {
+            "any_of": [
+              "files:read"
+            ],
+            "challenge": "files:read"
+          }
+        },
+        "rules": [
+          {
+            "id": "r1",
+            "effect": "deny",
+            "subject": {
+              "kind": "client",
+              "id": "ci-bot"
+            },
+            "tools": [
+              "*"
+            ],
+            "expires_at": null
+          }
+        ]
+      },
+      "token": {
+        "jti": "jti-3",
+        "client_id": "ci-bot",
+        "sub": "ci-bot",
+        "scope": "files:admin"
+      },
+      "tool": "delete_file",
+      "approved": true,
+      "now": null,
+      "expect": {
+        "decision": "hidden",
+        "reason": "denied_by_rule",
+        "rule_ids": [
+          "r1"
+        ],
+        "scopes": [],
+        "challenge": null
+      }
+    },
+    {
+      "label": "deny for another client does not apply",
+      "policy": {
+        "unscoped_tools": "allow",
+        "tool_scopes": {
+          "delete_file": {
+            "any_of": [
+              "files:admin",
+              "files:write"
+            ],
+            "challenge": "files:write"
+          },
+          "read_file": {
+            "any_of": [
+              "files:read"
+            ],
+            "challenge": "files:read"
+          }
+        },
+        "rules": [
+          {
+            "id": "r1",
+            "effect": "deny",
+            "subject": {
+              "kind": "client",
+              "id": "ci-bot"
+            },
+            "tools": [
+              "*"
+            ],
+            "expires_at": null
+          }
+        ]
+      },
+      "token": {
+        "jti": "jti-2",
+        "client_id": "https://client.example/meta.json",
+        "sub": "user-b",
+        "scope": "files:read files:write"
+      },
+      "tool": "read_file",
+      "approved": true,
+      "now": null,
+      "expect": {
+        "decision": "allowed",
+        "reason": "ok",
+        "rule_ids": [],
+        "scopes": [
+          "files:read"
+        ],
+        "challenge": null
+      }
+    },
+    {
+      "label": "deny by user (sub)",
+      "policy": {
+        "unscoped_tools": "allow",
+        "tool_scopes": {
+          "delete_file": {
+            "any_of": [
+              "files:admin",
+              "files:write"
+            ],
+            "challenge": "files:write"
+          },
+          "read_file": {
+            "any_of": [
+              "files:read"
+            ],
+            "challenge": "files:read"
+          }
+        },
+        "rules": [
+          {
+            "id": "r1",
+            "effect": "deny",
+            "subject": {
+              "kind": "user",
+              "id": "user-b"
+            },
+            "tools": [
+              "read_file"
+            ],
+            "expires_at": null
+          }
+        ]
+      },
+      "token": {
+        "jti": "jti-2",
+        "client_id": "https://client.example/meta.json",
+        "sub": "user-b",
+        "scope": "files:read files:write"
+      },
+      "tool": "read_file",
+      "approved": true,
+      "now": null,
+      "expect": {
+        "decision": "hidden",
+        "reason": "denied_by_rule",
+        "rule_ids": [
+          "r1"
+        ],
+        "scopes": [],
+        "challenge": null
+      }
+    },
+    {
+      "label": "a client id is not a sub",
+      "policy": {
+        "unscoped_tools": "allow",
+        "tool_scopes": {
+          "delete_file": {
+            "any_of": [
+              "files:admin",
+              "files:write"
+            ],
+            "challenge": "files:write"
+          },
+          "read_file": {
+            "any_of": [
+              "files:read"
+            ],
+            "challenge": "files:read"
+          }
+        },
+        "rules": [
+          {
+            "id": "r1",
+            "effect": "deny",
+            "subject": {
+              "kind": "user",
+              "id": "ci-bot"
+            },
+            "tools": [
+              "*"
+            ],
+            "expires_at": null
+          }
+        ]
+      },
+      "token": {
+        "jti": "jti-2",
+        "client_id": "https://client.example/meta.json",
+        "sub": "user-b",
+        "scope": "files:read files:write"
+      },
+      "tool": "read_file",
+      "approved": true,
+      "now": null,
+      "expect": {
+        "decision": "allowed",
+        "reason": "ok",
+        "rule_ids": [],
+        "scopes": [
+          "files:read"
+        ],
+        "challenge": null
+      }
+    },
+    {
+      "label": "a client_credentials token's sub is its client id",
+      "policy": {
+        "unscoped_tools": "allow",
+        "tool_scopes": {
+          "delete_file": {
+            "any_of": [
+              "files:admin",
+              "files:write"
+            ],
+            "challenge": "files:write"
+          },
+          "read_file": {
+            "any_of": [
+              "files:read"
+            ],
+            "challenge": "files:read"
+          }
+        },
+        "rules": [
+          {
+            "id": "r1",
+            "effect": "deny",
+            "subject": {
+              "kind": "user",
+              "id": "ci-bot"
+            },
+            "tools": [
+              "*"
+            ],
+            "expires_at": null
+          }
+        ]
+      },
+      "token": {
+        "jti": "jti-3",
+        "client_id": "ci-bot",
+        "sub": "ci-bot",
+        "scope": "files:admin"
+      },
+      "tool": "search",
+      "approved": true,
+      "now": null,
+      "expect": {
+        "decision": "hidden",
+        "reason": "denied_by_rule",
+        "rule_ids": [
+          "r1"
+        ],
+        "scopes": [],
+        "challenge": null
+      }
+    },
+    {
+      "label": "several denies are all reported, sorted",
+      "policy": {
+        "unscoped_tools": "allow",
+        "tool_scopes": {
+          "delete_file": {
+            "any_of": [
+              "files:admin",
+              "files:write"
+            ],
+            "challenge": "files:write"
+          },
+          "read_file": {
+            "any_of": [
+              "files:read"
+            ],
+            "challenge": "files:read"
+          }
+        },
+        "rules": [
+          {
+            "id": "r2",
+            "effect": "deny",
+            "subject": {
+              "kind": "user",
+              "id": "user-a"
+            },
+            "tools": [
+              "search"
+            ],
+            "expires_at": null
+          },
+          {
+            "id": "r1",
+            "effect": "deny",
+            "subject": {
+              "kind": "pat",
+              "id": "pat-1"
+            },
+            "tools": [
+              "*"
+            ],
+            "expires_at": null
+          }
+        ]
+      },
+      "token": {
+        "jti": "pat-1",
+        "client_id": "mcp-gate-console",
+        "sub": "user-a",
+        "scope": "files:read"
+      },
+      "tool": "search",
+      "approved": true,
+      "now": null,
+      "expect": {
+        "decision": "hidden",
+        "reason": "denied_by_rule",
+        "rule_ids": [
+          "r1",
+          "r2"
+        ],
+        "scopes": [],
+        "challenge": null
+      }
+    },
+    {
+      "label": "deny wins over only",
+      "policy": {
+        "unscoped_tools": "allow",
+        "tool_scopes": {
+          "delete_file": {
+            "any_of": [
+              "files:admin",
+              "files:write"
+            ],
+            "challenge": "files:write"
+          },
+          "read_file": {
+            "any_of": [
+              "files:read"
+            ],
+            "challenge": "files:read"
+          }
+        },
+        "rules": [
+          {
+            "id": "r1",
+            "effect": "only",
+            "subject": {
+              "kind": "pat",
+              "id": "pat-1"
+            },
+            "tools": [
+              "search"
+            ],
+            "expires_at": null
+          },
+          {
+            "id": "r2",
+            "effect": "deny",
+            "subject": {
+              "kind": "pat",
+              "id": "pat-1"
+            },
+            "tools": [
+              "search"
+            ],
+            "expires_at": null
+          }
+        ]
+      },
+      "token": {
+        "jti": "pat-1",
+        "client_id": "mcp-gate-console",
+        "sub": "user-a",
+        "scope": "files:read"
+      },
+      "tool": "search",
+      "approved": true,
+      "now": null,
+      "expect": {
+        "decision": "hidden",
+        "reason": "denied_by_rule",
+        "rule_ids": [
+          "r2"
+        ],
+        "scopes": [],
+        "challenge": null
+      }
+    },
+    {
+      "label": "deny wins over holding the scope",
+      "policy": {
+        "unscoped_tools": "allow",
+        "tool_scopes": {
+          "delete_file": {
+            "any_of": [
+              "files:admin",
+              "files:write"
+            ],
+            "challenge": "files:write"
+          },
+          "read_file": {
+            "any_of": [
+              "files:read"
+            ],
+            "challenge": "files:read"
+          }
+        },
+        "rules": [
+          {
+            "id": "r1",
+            "effect": "deny",
+            "subject": {
+              "kind": "pat",
+              "id": "pat-1"
+            },
+            "tools": [
+              "read_file"
+            ],
+            "expires_at": null
+          }
+        ]
+      },
+      "token": {
+        "jti": "pat-1",
+        "client_id": "mcp-gate-console",
+        "sub": "user-a",
+        "scope": "files:read"
+      },
+      "tool": "read_file",
+      "approved": true,
+      "now": null,
+      "expect": {
+        "decision": "hidden",
+        "reason": "denied_by_rule",
+        "rule_ids": [
+          "r1"
+        ],
+        "scopes": [],
+        "challenge": null
+      }
+    },
+    {
+      "label": "only: a tool outside it is hidden",
+      "policy": {
+        "unscoped_tools": "allow",
+        "tool_scopes": {
+          "delete_file": {
+            "any_of": [
+              "files:admin",
+              "files:write"
+            ],
+            "challenge": "files:write"
+          },
+          "read_file": {
+            "any_of": [
+              "files:read"
+            ],
+            "challenge": "files:read"
+          }
+        },
+        "rules": [
+          {
+            "id": "r1",
+            "effect": "only",
+            "subject": {
+              "kind": "pat",
+              "id": "pat-1"
+            },
+            "tools": [
+              "read_file"
+            ],
+            "expires_at": null
+          }
+        ]
+      },
+      "token": {
+        "jti": "pat-1",
+        "client_id": "mcp-gate-console",
+        "sub": "user-a",
+        "scope": "files:read"
+      },
+      "tool": "search",
+      "approved": true,
+      "now": null,
+      "expect": {
+        "decision": "hidden",
+        "reason": "outside_only_rule",
+        "rule_ids": [
+          "r1"
+        ],
+        "scopes": [],
+        "challenge": null
+      }
+    },
+    {
+      "label": "only: a tool inside it still needs its scope",
+      "policy": {
+        "unscoped_tools": "allow",
+        "tool_scopes": {
+          "delete_file": {
+            "any_of": [
+              "files:admin",
+              "files:write"
+            ],
+            "challenge": "files:write"
+          },
+          "read_file": {
+            "any_of": [
+              "files:read"
+            ],
+            "challenge": "files:read"
+          }
+        },
+        "rules": [
+          {
+            "id": "r1",
+            "effect": "only",
+            "subject": {
+              "kind": "pat",
+              "id": "pat-1"
+            },
+            "tools": [
+              "delete_file"
+            ],
+            "expires_at": null
+          }
+        ]
+      },
+      "token": {
+        "jti": "pat-1",
+        "client_id": "mcp-gate-console",
+        "sub": "user-a",
+        "scope": "files:read"
+      },
+      "tool": "delete_file",
+      "approved": true,
+      "now": null,
+      "expect": {
+        "decision": "needs_scope",
+        "reason": "missing_scope",
+        "rule_ids": [],
+        "scopes": [
+          "files:admin",
+          "files:write"
+        ],
+        "challenge": "files:write"
+      }
+    },
+    {
+      "label": "only: a tool inside it, unscoped, allowed",
+      "policy": {
+        "unscoped_tools": "allow",
+        "tool_scopes": {
+          "delete_file": {
+            "any_of": [
+              "files:admin",
+              "files:write"
+            ],
+            "challenge": "files:write"
+          },
+          "read_file": {
+            "any_of": [
+              "files:read"
+            ],
+            "challenge": "files:read"
+          }
+        },
+        "rules": [
+          {
+            "id": "r1",
+            "effect": "only",
+            "subject": {
+              "kind": "pat",
+              "id": "pat-1"
+            },
+            "tools": [
+              "search"
+            ],
+            "expires_at": null
+          }
+        ]
+      },
+      "token": {
+        "jti": "pat-1",
+        "client_id": "mcp-gate-console",
+        "sub": "user-a",
+        "scope": "files:read"
+      },
+      "tool": "search",
+      "approved": true,
+      "now": null,
+      "expect": {
+        "decision": "allowed",
+        "reason": "ok",
+        "rule_ids": [],
+        "scopes": [],
+        "challenge": null
+      }
+    },
+    {
+      "label": "only rules intersect: outside one of them is hidden",
+      "policy": {
+        "unscoped_tools": "allow",
+        "tool_scopes": {
+          "delete_file": {
+            "any_of": [
+              "files:admin",
+              "files:write"
+            ],
+            "challenge": "files:write"
+          },
+          "read_file": {
+            "any_of": [
+              "files:read"
+            ],
+            "challenge": "files:read"
+          }
+        },
+        "rules": [
+          {
+            "id": "r1",
+            "effect": "only",
+            "subject": {
+              "kind": "pat",
+              "id": "pat-1"
+            },
+            "tools": [
+              "search",
+              "read_file"
+            ],
+            "expires_at": null
+          },
+          {
+            "id": "r2",
+            "effect": "only",
+            "subject": {
+              "kind": "user",
+              "id": "user-a"
+            },
+            "tools": [
+              "read_file"
+            ],
+            "expires_at": null
+          }
+        ]
+      },
+      "token": {
+        "jti": "pat-1",
+        "client_id": "mcp-gate-console",
+        "sub": "user-a",
+        "scope": "files:read"
+      },
+      "tool": "search",
+      "approved": true,
+      "now": null,
+      "expect": {
+        "decision": "hidden",
+        "reason": "outside_only_rule",
+        "rule_ids": [
+          "r2"
+        ],
+        "scopes": [],
+        "challenge": null
+      }
+    },
+    {
+      "label": "only rules intersect: inside both passes",
+      "policy": {
+        "unscoped_tools": "allow",
+        "tool_scopes": {
+          "delete_file": {
+            "any_of": [
+              "files:admin",
+              "files:write"
+            ],
+            "challenge": "files:write"
+          },
+          "read_file": {
+            "any_of": [
+              "files:read"
+            ],
+            "challenge": "files:read"
+          }
+        },
+        "rules": [
+          {
+            "id": "r1",
+            "effect": "only",
+            "subject": {
+              "kind": "pat",
+              "id": "pat-1"
+            },
+            "tools": [
+              "search",
+              "read_file"
+            ],
+            "expires_at": null
+          },
+          {
+            "id": "r2",
+            "effect": "only",
+            "subject": {
+              "kind": "user",
+              "id": "user-a"
+            },
+            "tools": [
+              "read_file"
+            ],
+            "expires_at": null
+          }
+        ]
+      },
+      "token": {
+        "jti": "pat-1",
+        "client_id": "mcp-gate-console",
+        "sub": "user-a",
+        "scope": "files:read"
+      },
+      "tool": "read_file",
+      "approved": true,
+      "now": null,
+      "expect": {
+        "decision": "allowed",
+        "reason": "ok",
+        "rule_ids": [],
+        "scopes": [
+          "files:read"
+        ],
+        "challenge": null
+      }
+    },
+    {
+      "label": "only for another subject does not apply",
+      "policy": {
+        "unscoped_tools": "allow",
+        "tool_scopes": {
+          "delete_file": {
+            "any_of": [
+              "files:admin",
+              "files:write"
+            ],
+            "challenge": "files:write"
+          },
+          "read_file": {
+            "any_of": [
+              "files:read"
+            ],
+            "challenge": "files:read"
+          }
+        },
+        "rules": [
+          {
+            "id": "r1",
+            "effect": "only",
+            "subject": {
+              "kind": "client",
+              "id": "ci-bot"
+            },
+            "tools": [
+              "read_file"
+            ],
+            "expires_at": null
+          }
+        ]
+      },
+      "token": {
+        "jti": "pat-1",
+        "client_id": "mcp-gate-console",
+        "sub": "user-a",
+        "scope": "files:read"
+      },
+      "tool": "search",
+      "approved": true,
+      "now": null,
+      "expect": {
+        "decision": "allowed",
+        "reason": "ok",
+        "rule_ids": [],
+        "scopes": [],
+        "challenge": null
+      }
+    },
+    {
+      "label": "only wins over holding the scope",
+      "policy": {
+        "unscoped_tools": "allow",
+        "tool_scopes": {
+          "delete_file": {
+            "any_of": [
+              "files:admin",
+              "files:write"
+            ],
+            "challenge": "files:write"
+          },
+          "read_file": {
+            "any_of": [
+              "files:read"
+            ],
+            "challenge": "files:read"
+          }
+        },
+        "rules": [
+          {
+            "id": "r1",
+            "effect": "only",
+            "subject": {
+              "kind": "pat",
+              "id": "pat-1"
+            },
+            "tools": [
+              "search"
+            ],
+            "expires_at": null
+          }
+        ]
+      },
+      "token": {
+        "jti": "pat-1",
+        "client_id": "mcp-gate-console",
+        "sub": "user-a",
+        "scope": "files:read"
+      },
+      "tool": "read_file",
+      "approved": true,
+      "now": null,
+      "expect": {
+        "decision": "hidden",
+        "reason": "outside_only_rule",
+        "rule_ids": [
+          "r1"
+        ],
+        "scopes": [],
+        "challenge": null
+      }
+    },
+    {
+      "label": "an expired deny no longer applies",
+      "policy": {
+        "unscoped_tools": "allow",
+        "tool_scopes": {
+          "delete_file": {
+            "any_of": [
+              "files:admin",
+              "files:write"
+            ],
+            "challenge": "files:write"
+          },
+          "read_file": {
+            "any_of": [
+              "files:read"
+            ],
+            "challenge": "files:read"
+          }
+        },
+        "rules": [
+          {
+            "id": "r1",
+            "effect": "deny",
+            "subject": {
+              "kind": "pat",
+              "id": "pat-1"
+            },
+            "tools": [
+              "search"
+            ],
+            "expires_at": 1000
+          }
+        ]
+      },
+      "token": {
+        "jti": "pat-1",
+        "client_id": "mcp-gate-console",
+        "sub": "user-a",
+        "scope": "files:read"
+      },
+      "tool": "search",
+      "approved": true,
+      "now": 2000,
+      "expect": {
+        "decision": "allowed",
+        "reason": "ok",
+        "rule_ids": [],
+        "scopes": [],
+        "challenge": null
+      }
+    },
+    {
+      "label": "a deny expiring exactly now no longer applies",
+      "policy": {
+        "unscoped_tools": "allow",
+        "tool_scopes": {
+          "delete_file": {
+            "any_of": [
+              "files:admin",
+              "files:write"
+            ],
+            "challenge": "files:write"
+          },
+          "read_file": {
+            "any_of": [
+              "files:read"
+            ],
+            "challenge": "files:read"
+          }
+        },
+        "rules": [
+          {
+            "id": "r1",
+            "effect": "deny",
+            "subject": {
+              "kind": "pat",
+              "id": "pat-1"
+            },
+            "tools": [
+              "search"
+            ],
+            "expires_at": 2000
+          }
+        ]
+      },
+      "token": {
+        "jti": "pat-1",
+        "client_id": "mcp-gate-console",
+        "sub": "user-a",
+        "scope": "files:read"
+      },
+      "tool": "search",
+      "approved": true,
+      "now": 2000,
+      "expect": {
+        "decision": "allowed",
+        "reason": "ok",
+        "rule_ids": [],
+        "scopes": [],
+        "challenge": null
+      }
+    },
+    {
+      "label": "a deny expiring later applies",
+      "policy": {
+        "unscoped_tools": "allow",
+        "tool_scopes": {
+          "delete_file": {
+            "any_of": [
+              "files:admin",
+              "files:write"
+            ],
+            "challenge": "files:write"
+          },
+          "read_file": {
+            "any_of": [
+              "files:read"
+            ],
+            "challenge": "files:read"
+          }
+        },
+        "rules": [
+          {
+            "id": "r1",
+            "effect": "deny",
+            "subject": {
+              "kind": "pat",
+              "id": "pat-1"
+            },
+            "tools": [
+              "search"
+            ],
+            "expires_at": 3000
+          }
+        ]
+      },
+      "token": {
+        "jti": "pat-1",
+        "client_id": "mcp-gate-console",
+        "sub": "user-a",
+        "scope": "files:read"
+      },
+      "tool": "search",
+      "approved": true,
+      "now": 2000,
+      "expect": {
+        "decision": "hidden",
+        "reason": "denied_by_rule",
+        "rule_ids": [
+          "r1"
+        ],
+        "scopes": [],
+        "challenge": null
+      }
+    },
+    {
+      "label": "an expired only no longer applies",
+      "policy": {
+        "unscoped_tools": "allow",
+        "tool_scopes": {
+          "delete_file": {
+            "any_of": [
+              "files:admin",
+              "files:write"
+            ],
+            "challenge": "files:write"
+          },
+          "read_file": {
+            "any_of": [
+              "files:read"
+            ],
+            "challenge": "files:read"
+          }
+        },
+        "rules": [
+          {
+            "id": "r1",
+            "effect": "only",
+            "subject": {
+              "kind": "pat",
+              "id": "pat-1"
+            },
+            "tools": [
+              "read_file"
+            ],
+            "expires_at": 1000
+          }
+        ]
+      },
+      "token": {
+        "jti": "pat-1",
+        "client_id": "mcp-gate-console",
+        "sub": "user-a",
+        "scope": "files:read"
+      },
+      "tool": "search",
+      "approved": true,
+      "now": 2000,
+      "expect": {
+        "decision": "allowed",
+        "reason": "ok",
+        "rule_ids": [],
+        "scopes": [],
+        "challenge": null
+      }
+    },
+    {
+      "label": "without a clock, expiry is not checked",
+      "policy": {
+        "unscoped_tools": "allow",
+        "tool_scopes": {
+          "delete_file": {
+            "any_of": [
+              "files:admin",
+              "files:write"
+            ],
+            "challenge": "files:write"
+          },
+          "read_file": {
+            "any_of": [
+              "files:read"
+            ],
+            "challenge": "files:read"
+          }
+        },
+        "rules": [
+          {
+            "id": "r1",
+            "effect": "deny",
+            "subject": {
+              "kind": "pat",
+              "id": "pat-1"
+            },
+            "tools": [
+              "search"
+            ],
+            "expires_at": 1000
+          }
+        ]
+      },
+      "token": {
+        "jti": "pat-1",
+        "client_id": "mcp-gate-console",
+        "sub": "user-a",
+        "scope": "files:read"
+      },
+      "tool": "search",
+      "approved": true,
+      "now": null,
+      "expect": {
+        "decision": "hidden",
+        "reason": "denied_by_rule",
+        "rule_ids": [
+          "r1"
+        ],
+        "scopes": [],
+        "challenge": null
+      }
+    },
+    {
+      "label": "unknown effect = deny of the tools it names",
+      "policy": {
+        "unscoped_tools": "allow",
+        "tool_scopes": {
+          "delete_file": {
+            "any_of": [
+              "files:admin",
+              "files:write"
+            ],
+            "challenge": "files:write"
+          },
+          "read_file": {
+            "any_of": [
+              "files:read"
+            ],
+            "challenge": "files:read"
+          }
+        },
+        "rules": [
+          {
+            "id": "r1",
+            "effect": "quarantine",
+            "subject": {
+              "kind": "pat",
+              "id": "pat-1"
+            },
+            "tools": [
+              "search"
+            ],
+            "expires_at": null
+          }
+        ]
+      },
+      "token": {
+        "jti": "pat-1",
+        "client_id": "mcp-gate-console",
+        "sub": "user-a",
+        "scope": "files:read"
+      },
+      "tool": "search",
+      "approved": true,
+      "now": null,
+      "expect": {
+        "decision": "hidden",
+        "reason": "denied_by_rule",
+        "rule_ids": [
+          "r1"
+        ],
+        "scopes": [],
+        "challenge": null
+      }
+    },
+    {
+      "label": "unknown effect does not touch tools it does not name",
+      "policy": {
+        "unscoped_tools": "allow",
+        "tool_scopes": {
+          "delete_file": {
+            "any_of": [
+              "files:admin",
+              "files:write"
+            ],
+            "challenge": "files:write"
+          },
+          "read_file": {
+            "any_of": [
+              "files:read"
+            ],
+            "challenge": "files:read"
+          }
+        },
+        "rules": [
+          {
+            "id": "r1",
+            "effect": "quarantine",
+            "subject": {
+              "kind": "pat",
+              "id": "pat-1"
+            },
+            "tools": [
+              "other"
+            ],
+            "expires_at": null
+          }
+        ]
+      },
+      "token": {
+        "jti": "pat-1",
+        "client_id": "mcp-gate-console",
+        "sub": "user-a",
+        "scope": "files:read"
+      },
+      "tool": "search",
+      "approved": true,
+      "now": null,
+      "expect": {
+        "decision": "allowed",
+        "reason": "ok",
+        "rule_ids": [],
+        "scopes": [],
+        "challenge": null
+      }
+    },
+    {
+      "label": "unknown effect naming no tool = deny of every tool",
+      "policy": {
+        "unscoped_tools": "allow",
+        "tool_scopes": {
+          "delete_file": {
+            "any_of": [
+              "files:admin",
+              "files:write"
+            ],
+            "challenge": "files:write"
+          },
+          "read_file": {
+            "any_of": [
+              "files:read"
+            ],
+            "challenge": "files:read"
+          }
+        },
+        "rules": [
+          {
+            "id": "r1",
+            "effect": "quarantine",
+            "subject": {
+              "kind": "pat",
+              "id": "pat-1"
+            },
+            "tools": [],
+            "expires_at": null
+          }
+        ]
+      },
+      "token": {
+        "jti": "pat-1",
+        "client_id": "mcp-gate-console",
+        "sub": "user-a",
+        "scope": "files:read"
+      },
+      "tool": "search",
+      "approved": true,
+      "now": null,
+      "expect": {
+        "decision": "hidden",
+        "reason": "denied_by_rule",
+        "rule_ids": [
+          "r1"
+        ],
+        "scopes": [],
+        "challenge": null
+      }
+    },
+    {
+      "label": "unknown subject kind matches every token (a group never reaches a server)",
+      "policy": {
+        "unscoped_tools": "allow",
+        "tool_scopes": {
+          "delete_file": {
+            "any_of": [
+              "files:admin",
+              "files:write"
+            ],
+            "challenge": "files:write"
+          },
+          "read_file": {
+            "any_of": [
+              "files:read"
+            ],
+            "challenge": "files:read"
+          }
+        },
+        "rules": [
+          {
+            "id": "r1",
+            "effect": "deny",
+            "subject": {
+              "kind": "group",
+              "id": "g-1"
+            },
+            "tools": [
+              "search"
+            ],
+            "expires_at": null
+          }
+        ]
+      },
+      "token": {
+        "jti": "jti-2",
+        "client_id": "https://client.example/meta.json",
+        "sub": "user-b",
+        "scope": "files:read files:write"
+      },
+      "tool": "search",
+      "approved": true,
+      "now": null,
+      "expect": {
+        "decision": "hidden",
+        "reason": "denied_by_rule",
+        "rule_ids": [
+          "r1"
+        ],
+        "scopes": [],
+        "challenge": null
+      }
+    },
+    {
+      "label": "a subject never matches a missing claim",
+      "policy": {
+        "unscoped_tools": "allow",
+        "tool_scopes": {
+          "delete_file": {
+            "any_of": [
+              "files:admin",
+              "files:write"
+            ],
+            "challenge": "files:write"
+          },
+          "read_file": {
+            "any_of": [
+              "files:read"
+            ],
+            "challenge": "files:read"
+          }
+        },
+        "rules": [
+          {
+            "id": "r1",
+            "effect": "deny",
+            "subject": {
+              "kind": "pat",
+              "id": ""
+            },
+            "tools": [
+              "*"
+            ],
+            "expires_at": null
+          }
+        ]
+      },
+      "token": {
+        "client_id": "mcp-gate-console",
+        "sub": "user-a",
+        "scope": "files:read"
+      },
+      "tool": "search",
+      "approved": true,
+      "now": null,
+      "expect": {
+        "decision": "allowed",
+        "reason": "ok",
+        "rule_ids": [],
+        "scopes": [],
+        "challenge": null
+      }
+    },
+    {
+      "label": "a subject without an id never matches a token without the claim",
+      "policy": {
+        "unscoped_tools": "allow",
+        "tool_scopes": {
+          "delete_file": {
+            "any_of": [
+              "files:admin",
+              "files:write"
+            ],
+            "challenge": "files:write"
+          },
+          "read_file": {
+            "any_of": [
+              "files:read"
+            ],
+            "challenge": "files:read"
+          }
+        },
+        "rules": [
+          {
+            "id": "r1",
+            "effect": "deny",
+            "subject": {
+              "kind": "pat"
+            },
+            "tools": [
+              "*"
+            ],
+            "expires_at": null
+          }
+        ]
+      },
+      "token": {
+        "client_id": "mcp-gate-console",
+        "sub": "user-a",
+        "scope": "files:read"
+      },
+      "tool": "search",
+      "approved": true,
+      "now": null,
+      "expect": {
+        "decision": "allowed",
+        "reason": "ok",
+        "rule_ids": [],
+        "scopes": [],
+        "challenge": null
+      }
+    },
+    {
+      "label": "an empty claim never matches an empty subject id",
+      "policy": {
+        "unscoped_tools": "allow",
+        "tool_scopes": {
+          "delete_file": {
+            "any_of": [
+              "files:admin",
+              "files:write"
+            ],
+            "challenge": "files:write"
+          },
+          "read_file": {
+            "any_of": [
+              "files:read"
+            ],
+            "challenge": "files:read"
+          }
+        },
+        "rules": [
+          {
+            "id": "r1",
+            "effect": "deny",
+            "subject": {
+              "kind": "pat",
+              "id": ""
+            },
+            "tools": [
+              "*"
+            ],
+            "expires_at": null
+          }
+        ]
+      },
+      "token": {
+        "jti": "",
+        "client_id": "mcp-gate-console",
+        "sub": "user-a",
+        "scope": "files:read"
+      },
+      "tool": "search",
+      "approved": true,
+      "now": null,
+      "expect": {
+        "decision": "allowed",
+        "reason": "ok",
+        "rule_ids": [],
+        "scopes": [],
+        "challenge": null
+      }
+    }
+  ],
+  "expansions": [
+    {
+      "label": "a group rule becomes one user rule per member, members sorted, same id",
+      "rules": [
+        {
+          "id": "r1",
+          "effect": "deny",
+          "subject": {
+            "kind": "group",
+            "id": "g-1"
+          },
+          "tools": [
+            "search"
+          ],
+          "expires_at": null
+        }
+      ],
+      "members": {
+        "g-1": [
+          "u-2",
+          "u-1"
+        ]
+      },
+      "expect": [
+        {
+          "id": "r1",
+          "effect": "deny",
+          "subject": {
+            "kind": "user",
+            "id": "u-1"
+          },
+          "tools": [
+            "search"
+          ],
+          "expires_at": null
+        },
+        {
+          "id": "r1",
+          "effect": "deny",
+          "subject": {
+            "kind": "user",
+            "id": "u-2"
+          },
+          "tools": [
+            "search"
+          ],
+          "expires_at": null
+        }
+      ]
+    },
+    {
+      "label": "an empty or unknown group yields no rule",
+      "rules": [
+        {
+          "id": "r1",
+          "effect": "deny",
+          "subject": {
+            "kind": "group",
+            "id": "g-1"
+          },
+          "tools": [
+            "*"
+          ],
+          "expires_at": null
+        },
+        {
+          "id": "r2",
+          "effect": "only",
+          "subject": {
+            "kind": "group",
+            "id": "g-x"
+          },
+          "tools": [
+            "a"
+          ],
+          "expires_at": null
+        }
+      ],
+      "members": {
+        "g-1": []
+      },
+      "expect": []
+    },
+    {
+      "label": "other rules pass through, order kept",
+      "rules": [
+        {
+          "id": "r1",
+          "effect": "deny",
+          "subject": {
+            "kind": "pat",
+            "id": "p"
+          },
+          "tools": [
+            "a"
+          ],
+          "expires_at": null
+        },
+        {
+          "id": "r2",
+          "effect": "only",
+          "subject": {
+            "kind": "group",
+            "id": "g-1"
+          },
+          "tools": [
+            "b"
+          ],
+          "expires_at": null
+        },
+        {
+          "id": "r3",
+          "effect": "deny",
+          "subject": {
+            "kind": "client",
+            "id": "c"
+          },
+          "tools": [
+            "*"
+          ],
+          "expires_at": null
+        }
+      ],
+      "members": {
+        "g-1": [
+          "u-1"
+        ]
+      },
+      "expect": [
+        {
+          "id": "r1",
+          "effect": "deny",
+          "subject": {
+            "kind": "pat",
+            "id": "p"
+          },
+          "tools": [
+            "a"
+          ],
+          "expires_at": null
+        },
+        {
+          "id": "r2",
+          "effect": "only",
+          "subject": {
+            "kind": "user",
+            "id": "u-1"
+          },
+          "tools": [
+            "b"
+          ],
+          "expires_at": null
+        },
+        {
+          "id": "r3",
+          "effect": "deny",
+          "subject": {
+            "kind": "client",
+            "id": "c"
+          },
+          "tools": [
+            "*"
+          ],
+          "expires_at": null
+        }
+      ]
+    },
+    {
+      "label": "a member listed twice yields one rule",
+      "rules": [
+        {
+          "id": "r1",
+          "effect": "deny",
+          "subject": {
+            "kind": "group",
+            "id": "g"
+          },
+          "tools": [
+            "a"
+          ],
+          "expires_at": null
+        }
+      ],
+      "members": {
+        "g": [
+          "u",
+          "u"
+        ]
+      },
+      "expect": [
+        {
+          "id": "r1",
+          "effect": "deny",
+          "subject": {
+            "kind": "user",
+            "id": "u"
+          },
+          "tools": [
+            "a"
+          ],
+          "expires_at": null
+        }
+      ]
+    }
+  ]
+}

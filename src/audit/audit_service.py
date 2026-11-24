@@ -55,6 +55,17 @@ class AuditAction(str, Enum):
     TOOL_REJECT = "tool_reject"
     TOOL_APPROVE_ALL = "tool_approve_all"
     TOOL_REPORT = "tool_report"
+    # Tool access (#37)
+    TOOL_SCOPE_SET = "tool_scope_set"
+    TOOL_RULE_CREATE = "tool_rule_create"
+    TOOL_RULE_UPDATE = "tool_rule_update"
+    TOOL_RULE_DELETE = "tool_rule_delete"
+    SERVICE_UNSCOPED_TOOLS_SET = "service_unscoped_tools_set"
+    GROUP_CREATE = "group_create"
+    GROUP_UPDATE = "group_update"
+    GROUP_DELETE = "group_delete"
+    GROUP_MEMBER_ADD = "group_member_add"
+    GROUP_MEMBER_REMOVE = "group_member_remove"
 
     # Admin-console accounts
     ADMIN_SETUP = "admin_setup"
@@ -74,6 +85,7 @@ class ResourceType(str, Enum):
     OAUTH_CONSENT = "oauth_consent"
     OAUTH_SCOPE = "oauth_scope"
     SERVICE = "service"
+    GROUP = "group"
     ADMIN = "admin"
     SYSTEM = "system"
 

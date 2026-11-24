@@ -18,6 +18,9 @@ from db.database import Base
 # OAuth client_id columns: generated ids are short ("mcpc_..."), but a client using a Client ID Metadata Document is
 # identified by the document's https URL
 CLIENT_ID_LENGTH = 255
+# Longest space-separated scope string MCP Gate accepts or stores (a request's `scope`, a client's registered scope, a
+# grant). The columns are TEXT since 1.6 (#37): a token may carry many bundle scopes, which outgrew VARCHAR(512)
+MAX_SCOPE_STRING = 4096
 
 
 def local_now() -> datetime:
@@ -140,6 +143,9 @@ class Service(Base):
 
     oauth_audience = Column(String(256), nullable=True, index=True)
     oauth_scopes = Column(String(512), nullable=True)
+    # Tool access (#37): what a tool that belongs to no scope may do. "allow" (default, unchanged behaviour on
+    # upgrade): any token for this server may call it; "require": it is hidden until an admin assigns it a scope
+    unscoped_tools = Column(String(16), nullable=False, default="allow", server_default="allow")
 
     health_status = Column(String(32), default="unknown")
     health_last_checked = Column(DateTime, nullable=True)
@@ -182,6 +188,7 @@ class Service(Base):
             "oauth_audience": self.oauth_audience,
             "effective_audience": self.effective_audience,
             "oauth_scopes": self.oauth_scopes.split() if self.oauth_scopes else [],
+            "unscoped_tools": self.unscoped_tools or UNSCOPED_ALLOW,
         }
         if include_health:
             data["health"] = {
@@ -195,6 +202,11 @@ class Service(Base):
             data["tools"] = [t.to_dict() for t in self.tools]
         return data
 
+
+# Tool access (#37): Service.unscoped_tools
+UNSCOPED_ALLOW = "allow"
+UNSCOPED_REQUIRE = "require"
+UNSCOPED_MODES = (UNSCOPED_ALLOW, UNSCOPED_REQUIRE)
 
 # Tool pinning (#32): the states a tool version can be in
 TOOL_STATE_APPROVED = "approved"
@@ -316,6 +328,143 @@ class MCPToolVersion(Base):
         }
 
 
+# ==================== Tool access (#37) ====================
+
+# ToolAccessRule.effect
+RULE_DENY = "deny"
+RULE_ONLY = "only"
+RULE_EFFECTS = (RULE_DENY, RULE_ONLY)
+# ToolAccessRule.subject_kind: a personal access token (its jti), an OAuth client (client_id), a user (the token's
+# sub = the console user's id) or a group of users (expanded to its members' subs before rules leave MCP Gate)
+SUBJECT_PAT = "pat"
+SUBJECT_CLIENT = "client"
+SUBJECT_USER = "user"
+SUBJECT_GROUP = "group"
+SUBJECT_KINDS = (SUBJECT_PAT, SUBJECT_CLIENT, SUBJECT_USER, SUBJECT_GROUP)
+
+
+def _iso_utc(dt: datetime | None) -> str | None:
+    """A naive UTC datetime -> ISO 8601 with +00:00."""
+    return dt.replace(tzinfo=timezone.utc).isoformat() if dt is not None else None
+
+
+class ToolScope(Base):
+    """A tool belongs to a scope (#37): a token may call the tool when it carries any of the tool's scopes. A scope
+    with tools assigned is a bundle. The scope is named, not referenced by key: a global scope (OAuthScope, name
+    primary key) has scope_service_id NULL; a server's own scope (ServiceScope) has its server's id. Memberships of
+    a deleted scope are removed by the adapter (global) or by the foreign key (server scope with its server).
+
+    is_challenge marks the one scope put in a step-up challenge (WWW-Authenticate scope="…") for this tool; when
+    none is marked, the narrowest of the tool's scopes is used (src/tool_policy/policy.py)."""
+    __tablename__ = "tool_scopes"
+    __table_args__ = (UniqueConstraint("tool_id", "scope_name", name="uq_tool_scopes_tool_id_scope_name"),)
+
+    id = Column(Uuid, primary_key=True, default=uuid.uuid4)
+    tool_id = Column(Uuid, ForeignKey("mcp_tools.id", ondelete="CASCADE"), nullable=False, index=True)
+    scope_name = Column(String(128), nullable=False, index=True)
+    scope_service_id = Column(Uuid, ForeignKey("services.id", ondelete="CASCADE"), nullable=True, index=True)
+    is_challenge = Column(Boolean, nullable=False, default=False, server_default=sa_false())
+    created_at = Column(DateTime, default=local_now, nullable=False)
+    created_by = Column(String(256), nullable=True)
+
+    def to_dict(self) -> dict:
+        return {"tool_id": str(self.tool_id), "scope": self.scope_name,
+                "source": "service" if self.scope_service_id else "global",
+                "challenge": bool(self.is_challenge)}
+
+
+class ToolAccessRule(Base):
+    """A rule about who may call which tools of one server (#37).
+
+    effect "deny": the subject may never call the listed tools ("*" = every tool of the server); "only": the subject
+    may call nothing but the listed tools (several matching "only" rules intersect). Deny wins over "only", which
+    wins over scopes. Tools are named (stable across definition changes). expires_at (naive UTC) ends the rule;
+    NULL = no end. A rule never looks at tool arguments."""
+    __tablename__ = "tool_access_rules"
+
+    id = Column(Uuid, primary_key=True, default=uuid.uuid4)
+    service_id = Column(Uuid, ForeignKey("services.id", ondelete="CASCADE"), nullable=False, index=True)
+    effect = Column(String(8), nullable=False)
+    subject_kind = Column(String(8), nullable=False)
+    # jti / client_id (a CIMD client id is an https URL) / user id / group id
+    subject_id = Column(String(CLIENT_ID_LENGTH), nullable=False, index=True)
+    tools = Column(Text, nullable=False, default="[]")  # JSON list of tool names, or ["*"]
+    note = Column(String(256), nullable=True)
+    expires_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=local_now, nullable=False)
+    created_by = Column(String(256), nullable=True)
+    updated_at = Column(DateTime, default=local_now, onupdate=local_now, nullable=False)
+
+    def tool_list(self) -> list:
+        return _json_list(self.tools)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": str(self.id),
+            "service_id": str(self.service_id),
+            "effect": self.effect,
+            "subject": {"kind": self.subject_kind, "id": self.subject_id},
+            "tools": self.tool_list(),
+            "note": self.note,
+            "expires_at": _iso_utc(self.expires_at),
+            "created_at": format_datetime(self.created_at),
+            "created_by": self.created_by,
+            "updated_at": format_datetime(self.updated_at),
+        }
+
+
+class UserGroup(Base):
+    """A named group of console users (#37). Rules can name a group; MCP Gate expands such a rule to the members'
+    subs before it reaches a server, so a server only ever matches token claims. Meant for later uses too."""
+    __tablename__ = "user_groups"
+
+    id = Column(Uuid, primary_key=True, default=uuid.uuid4)
+    name = Column(String(64), nullable=False, unique=True)
+    description = Column(String(256), nullable=True)
+    created_at = Column(DateTime, default=local_now, nullable=False)
+    created_by = Column(String(256), nullable=True)
+    updated_at = Column(DateTime, default=local_now, onupdate=local_now, nullable=False)
+
+    members = relationship("UserGroupMember", back_populates="group", cascade="all, delete-orphan",
+                           passive_deletes=True)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": str(self.id),
+            "name": self.name,
+            "description": self.description,
+            "member_count": len(self.members),
+            "created_at": format_datetime(self.created_at),
+            "created_by": self.created_by,
+            "updated_at": format_datetime(self.updated_at),
+        }
+
+
+class UserGroupMember(Base):
+    """A user's membership of a group (#37). Goes with the user or the group."""
+    __tablename__ = "user_group_members"
+    __table_args__ = (UniqueConstraint("group_id", "user_id", name="uq_user_group_members_group_id_user_id"),)
+
+    id = Column(Uuid, primary_key=True, default=uuid.uuid4)
+    group_id = Column(Uuid, ForeignKey("user_groups.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(Uuid, ForeignKey("admin_users.id", ondelete="CASCADE"), nullable=False, index=True)
+    added_at = Column(DateTime, default=local_now, nullable=False)
+    added_by = Column(String(256), nullable=True)
+
+    group = relationship("UserGroup", back_populates="members")
+    user = relationship("AdminUser")
+
+    def to_dict(self) -> dict:
+        return {
+            "user_id": str(self.user_id),
+            "email": self.user.email if self.user else None,
+            "username": self.user.username if self.user else None,
+            "is_active": self.user.is_active if self.user else None,
+            "added_at": format_datetime(self.added_at),
+            "added_by": self.added_by,
+        }
+
+
 # ==================== OAuth 2.1 Authorization Server ====================
 
 class OAuthSigningKey(Base):
@@ -386,7 +535,7 @@ class OAuthClient(Base):
     redirect_uris = Column(Text, nullable=False, default="[]")
     grant_types = Column(Text, nullable=False, default="[]")
     response_types = Column(Text, nullable=False, default='["code"]')
-    scope = Column(String(512), nullable=True)
+    scope = Column(Text, nullable=True)  # space-separated; Text since 1.6 (#37): bundles add scopes
     token_endpoint_auth_method = Column(String(32), default="none", nullable=False)
     # private_key_jwt (RFC 7523): the client's public keys, either inline (a JWKS document as JSON text) or by
     # reference (fetched and cached). Exactly one is set for such clients; both are null for every other method.
@@ -414,6 +563,9 @@ class OAuthClient(Base):
     # When this resource server last read the tool policy feed (POST /oauth/policy, #33): tells the console whether
     # the server enforces tool approvals (its pinning middleware hides unapproved tools)
     policy_polled_at = Column(DateTime, nullable=True)
+    # What the server's middleware said it can enforce on its last poll of the policy feed (#37), e.g. "rules1"
+    # (tool access rules); NULL when it never said (a 1.5 middleware ignores rules, so the console warns)
+    policy_features = Column(String(64), nullable=True)
     # created_via = cimd: when the client's metadata document was last fetched and stored (the client_id is the
     # document's https URL; see src/oauth/client_metadata.py)
     metadata_fetched_at = Column(DateTime, nullable=True)
@@ -451,6 +603,7 @@ class OAuthClient(Base):
             "last_used_at": format_datetime(self.last_used_at),
             "revocation_polled_at": format_datetime(self.revocation_polled_at),
             "policy_polled_at": format_datetime(self.policy_polled_at),
+            "policy_features": self.policy_features.split() if self.policy_features else [],
             "metadata_fetched_at": format_datetime(self.metadata_fetched_at),
         }
 
@@ -466,7 +619,7 @@ class OAuthAuthorizationRequest(Base):
     id = Column(String(64), primary_key=True)
     client_id = Column(String(CLIENT_ID_LENGTH), ForeignKey("oauth_clients.client_id", ondelete="CASCADE"), nullable=False, index=True)
     redirect_uri = Column(String(512), nullable=False)
-    scope = Column(String(512), nullable=True)
+    scope = Column(Text, nullable=True)  # space-separated; Text since 1.6 (#37): bundles add scopes
     resource = Column(String(256), nullable=True)
     state = Column(String(512), nullable=True)
     code_challenge = Column(String(128), nullable=True)  # None only for clients with require_pkce=False
@@ -486,7 +639,7 @@ class OAuthAuthorizationCode(Base):
     client_id = Column(String(CLIENT_ID_LENGTH), ForeignKey("oauth_clients.client_id", ondelete="CASCADE"), nullable=False, index=True)
     user_id = Column(Uuid, ForeignKey("admin_users.id", ondelete="CASCADE"), nullable=False)
     redirect_uri = Column(String(512), nullable=False)
-    scope = Column(String(512), nullable=True)
+    scope = Column(Text, nullable=True)  # space-separated; Text since 1.6 (#37): bundles add scopes
     resource = Column(String(256), nullable=True)
     code_challenge = Column(String(128), nullable=True)  # None only for clients with require_pkce=False
     code_challenge_method = Column(String(16), default="S256", nullable=True)
@@ -502,12 +655,15 @@ class OAuthScope(Base):
     __tablename__ = "oauth_scopes"
 
     name = Column(String(128), primary_key=True)
+    # Display name, e.g. for a scope used as a tool bundle (#37)
+    title = Column(String(128), nullable=True)
     description = Column(String(256), nullable=True)
     is_default = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, default=local_now, nullable=False)
 
     def to_dict(self) -> dict:
-        return {"name": self.name, "description": self.description, "is_default": self.is_default}
+        return {"name": self.name, "title": self.title, "description": self.description,
+                "is_default": self.is_default}
 
 
 class ServiceScope(Base):
@@ -523,6 +679,8 @@ class ServiceScope(Base):
     id = Column(Uuid, primary_key=True, default=uuid.uuid4)
     service_id = Column(Uuid, ForeignKey("services.id", ondelete="CASCADE"), nullable=False, index=True)
     name = Column(String(128), nullable=False)
+    # Display name, e.g. for a scope used as a tool bundle (#37)
+    title = Column(String(128), nullable=True)
     description = Column(String(256), nullable=True)
     is_default = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, default=local_now, nullable=False)
@@ -530,8 +688,8 @@ class ServiceScope(Base):
     service = relationship("Service")
 
     def to_dict(self) -> dict:
-        return {"name": self.name, "description": self.description, "is_default": self.is_default,
-                "service_id": str(self.service_id)}
+        return {"name": self.name, "title": self.title, "description": self.description,
+                "is_default": self.is_default, "service_id": str(self.service_id)}
 
 
 class OAuthToken(Base):
@@ -553,7 +711,7 @@ class OAuthToken(Base):
     sub = Column(String(128), nullable=False)
     audience = Column(String(256), nullable=True, index=True)
     service_id = Column(Uuid, ForeignKey("services.id", ondelete="SET NULL"), nullable=True, index=True)
-    scope = Column(String(512), nullable=True)
+    scope = Column(Text, nullable=True)  # space-separated; Text since 1.6 (#37): bundles add scopes
     label = Column(String(128), nullable=True)
     # revoke_family filters on parent_jti (OR jti): replay detection must not scan the whole table
     parent_jti = Column(String(64), nullable=True, index=True)
@@ -618,7 +776,7 @@ class OAuthConsent(Base):
     # (token history is kept separately in oauth_tokens)
     client_id = Column(String(CLIENT_ID_LENGTH), ForeignKey("oauth_clients.client_id", ondelete="CASCADE"), nullable=False, index=True)
     audience = Column(String(256), nullable=True)
-    scope = Column(String(512), nullable=True)
+    scope = Column(Text, nullable=True)  # space-separated; Text since 1.6 (#37): bundles add scopes
     granted_at = Column(DateTime, default=local_now, nullable=False)
 
     __table_args__ = (UniqueConstraint("user_id", "client_id", "audience", name="uq_oauth_consent"),)
