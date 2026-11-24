@@ -72,6 +72,8 @@ def test_tpen_001_without_the_feature_the_answer_stays_format_1(owner_client, se
     assert not {"rules_version", "unscoped_tools", "tool_scopes"} & set(feed)
     # unknown features alone do not switch the format either
     assert _feed(owner_client, rs, features="rules2 other")["format"] == 1
+    # a feature is a whole token: "rules10" or "xrules1" is not rules1
+    assert _feed(owner_client, rs, features="rules10 xrules1")["format"] == 1
 
 
 def test_tpen_002_rules1_gets_the_built_policy(owner_client, service, tools, db_session):
