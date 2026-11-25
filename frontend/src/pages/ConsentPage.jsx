@@ -183,7 +183,14 @@ export default function ConsentPage() {
         <Alert tone="warning" className="mt-3">{t('consent.loopbackWarning', { host: req.redirect_host })}</Alert>
       )}
 
-      {/* Scopes */}
+      {/* Step-up: the app asks for more than the user approved before (MCP insufficient_scope) */}
+      {req.step_up && (
+        <Alert tone="info" className="mt-5" title={t('consent.stepUpTitle')}>
+          {t('consent.stepUpBody', { time: formatTime(req.previous_grant?.at) })}
+        </Alert>
+      )}
+
+      {/* Scopes, each with the tools it unlocks on this server */}
       <div className="mt-5">
         <SectionLabel className="mb-2">{t('consent.scopesTitle')}</SectionLabel>
         {scopes.length === 0 ? (
@@ -196,8 +203,34 @@ export default function ConsentPage() {
                 className="px-3 py-2.5"
                 checked={selected.has(s.name)}
                 onChange={() => toggleScope(s.name)}
-                label={<span className="font-mono text-xs">{s.name}</span>}
-                description={describeScope(t, s.name, s.description) || t('consent.noDescription')}
+                label={
+                  <span className="flex flex-wrap items-center gap-1.5">
+                    <span className="break-all font-mono text-xs">{s.name}</span>
+                    {s.new && <Badge tone="info">{t('consent.newScope')}</Badge>}
+                  </span>
+                }
+                description={
+                  <>
+                    <span className="block">{describeScope(t, s.name, s.description) || t('consent.noDescription')}</span>
+                    {s.tools?.length > 0 && (
+                      <span className="mt-1.5 flex flex-wrap items-center gap-1">
+                        <span>{t('consent.unlocks')}</span>
+                        {s.tools.map((tool) => (
+                          <Badge
+                            key={tool.name}
+                            mono
+                            tone={tool.new ? 'info' : 'neutral'}
+                            className="max-w-full overflow-hidden text-ellipsis"
+                            title={tool.new ? t('consent.newToolTitle') : tool.title || undefined}
+                          >
+                            {tool.name}
+                            {tool.new && <span className="font-sans">· {t('consent.newTool')}</span>}
+                          </Badge>
+                        ))}
+                      </span>
+                    )}
+                  </>
+                }
               />
             ))}
           </div>

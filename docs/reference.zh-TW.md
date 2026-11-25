@@ -187,7 +187,7 @@ MCP Gate 只記錄這些決定;它不在 client 與 server 之間,所以單靠�
 - **Policy。** 每 `poll_interval` 秒(預設 15)讀一次 `POST /oauth/policy`。MCP Gate 自己的請求(重新整理、掃描、健康檢查、*Inspect as*)所用的短效 token 帶有 `mcp_gate_probe` claim;middleware 對它們列出所有 tool,不論是否核准,因此重新整理記錄的是真正的清單,不會把被隱藏的 tool 標成已不再列出。帶這種 token 的呼叫仍會被拒絕。
 - **連不到 MCP Gate 時**,繼續使用最後一次收到的清單。它也會寫進 `cache_file`(預設為工作目錄下的 `mcp_gate_policy.json`;以原子方式寫入、權限 600;設 `None` 則只放記憶體),所以 MCP Gate 停機時重啟 server 也還在。為其他 issuer、audience 或雜湊版本寫的快取會被忽略;有設 `max_cache_age` 時,超過該秒數的也一樣。MCP Gate 恢復回應後,它的清單會取代快取。
 - **從未收到清單**(第一次啟動時 MCP Gate 沒開、也沒有可用的快取):所有 tool 都隱藏且不能呼叫,並有一行 log 說明原因。設 `fail_open=True` 則在收到第一份清單前列出並執行所有 tool。
-- **存取規則(1.6)。** middleware 輪詢時帶 `features=rules1`,MCP Gate 就會一併回傳這台 server 的 [tool 存取規則](#tool-存取規則)(格式 2);middleware 以自帶的評估器(`evaluate_access`,能算出標準向量)對呼叫者已驗證的 token(`jti`、`client_id`、`sub`、`scope` claim)檢查每個已核准的 tool。`tools/list` 時,這個 token 永遠不能呼叫的 tool(`hidden`:拒絕規則、不在限定規則內、server 要求 scope 而 tool 沒有)不會列出;多一個 scope 就能用的 tool(`needs_scope`)會列出。`tools/call` 時,隱藏的 tool 和不存在的 tool 一樣被拒絕;`needs_scope` 的 tool 則回覆 tool 錯誤 `Tool '<name>' requires the scope '<challenge>', which this access token does not carry. …`(HTTP `403 insufficient_scope` 的追加授權在 1.6 後續步驟才加入)。過期的規則到了 `expires_at` 就不再套用,不必等輪詢。MCP Gate 的 probe token 仍然看得到所有 tool。
+- **存取規則(1.6)。** middleware 輪詢時帶 `features=rules1`,MCP Gate 就會一併回傳這台 server 的 [tool 存取規則](#tool-存取規則)(格式 2);middleware 以自帶的評估器(`evaluate_access`,能算出標準向量)對呼叫者已驗證的 token(`jti`、`client_id`、`sub`、`scope` claim)檢查每個已核准的 tool。`tools/list` 時,這個 token 永遠不能呼叫的 tool(`hidden`:拒絕規則、不在限定規則內、server 要求 scope 而 tool 沒有)不會列出;多一個 scope 就能用的 tool(`needs_scope`)會列出。`tools/call` 時,隱藏的 tool 和不存在的 tool 一樣被拒絕;`needs_scope` 的 tool 則回覆 tool 錯誤 `Tool '<name>' requires the scope '<challenge>', which …`。前面再加上 [`MCPGateScopeGate`](#追加授權) 時,同樣的呼叫改為收到 HTTP `403 insufficient_scope` 追加授權要求。過期的規則到了 `expires_at` 就不再套用,不必等輪詢。MCP Gate 的 probe token 仍然看得到所有 tool。
 - **規則與快取。** 規則和核准清單一起保存與快取(快取格式 2),所以連不到 MCP Gate 時,最後收到的規則會繼續套用,重啟後也一樣;從未收到則如上所述全部隱藏。為其他規則版本寫的快取會被忽略;1.5 middleware 寫的格式 1 快取只當作核准清單讀取。無法完整套用的回應(其他格式或規則版本、格式錯誤的 policy)會整份拒絕,繼續沿用先前的 policy。比 1.6 舊的 MCP Gate 回應格式 1:此時只執行核准,啟動 log 會寫 "no access rules"。
 - **管理台。** server 頁面有一列 *Tool approvals*,和撤銷清單那列一樣:由 server 執行(附最後一次輪詢時間)、已停止輪詢、從未輪詢,或未執行。middleware 輪詢過之後,下方會顯示**存取規則已執行**,或是**存取規則未執行 — 請更新 middleware**:表示這台 server 有 resource server 上次輪詢時沒有宣告 `rules1`(1.5 的 middleware 不管規則,會把所有已核准的 tool 列給每個 token);若這台 server 有規則、有 scope 的 tool 或設了*必須有 scope*,會以警告樣式顯示。待核准 tool 的審核卡片會說明這台 server 是否執行核准。
 
@@ -199,14 +199,14 @@ MCP Gate 只記錄這些決定;它不在 client 與 server 之間,所以單靠�
 
 ### Tool 存取規則
 
-*1.6 進行中。* MCP Gate 儲存並評估規則;執行 1.6 版 `MCPGateToolPinning` middleware 的 server 會從 policy feed(格式 2)收到規則,並在一次輪詢內執行(見 [Server 上的 tool 核准](#server-上的-tool-核准))。沒有這個 middleware,或用的是 1.5 版的 server 不會執行,管理台的 server 頁面會說明。缺少 scope 時的 HTTP 追加授權會在後續步驟加入;在那之前,這樣的呼叫會以寫出所需 scope 的 tool 錯誤失敗。
+*1.6 進行中。* MCP Gate 儲存並評估規則;執行 1.6 版 `MCPGateToolPinning` middleware 的 server 會從 policy feed(格式 2)收到規則,並在一次輪詢內執行(見 [Server 上的 tool 核准](#server-上的-tool-核准))。沒有這個 middleware,或用的是 1.5 版的 server 不會執行,管理台的 server 頁面會說明。缺少 scope 的呼叫:server 也執行 `MCPGateScopeGate` 時,會收到 HTTP 403 [追加授權](#追加授權)要求;否則會收到寫出所需 scope 的 tool 錯誤。
 
 一個 token 能不能呼叫 server 的某個 tool,依下列順序決定,先符合者為準:
 
 1. **未核准**([tool 釘選](#tool-釘選與核准)):隱藏。
 2. 有針對這個 token 的**拒絕規則**列出這個 tool(或 `*`,即所有 tool):隱藏。
 3. 有針對這個 token 的**限定規則**,而 tool 不在其中某一條裡(多條取交集):隱藏。
-4. **Scope。** tool 可以放進 scope(server 可授予的全域 scope,或 server 自己的 scope)。token 持有其中**任一個**就能呼叫;否則 tool 仍會列出,但呼叫會被拒絕並寫出其中一個 scope(1.6 後續步驟會改為追加授權(step-up)要求)。不在任何 scope 裡的 tool 預設允許,除非 server 設為**必須有 scope**(`unscoped_tools: require`),此時會隱藏。
+4. **Scope。** tool 可以放進 scope(server 可授予的全域 scope,或 server 自己的 scope)。token 持有其中**任一個**就能呼叫;否則 tool 仍會列出,但呼叫會被拒絕並寫出其中一個 scope([追加授權](#追加授權)要求)。不在任何 scope 裡的 tool 預設允許,除非 server 設為**必須有 scope**(`unscoped_tools: require`),此時會隱藏。
 5. 其餘允許。
 
 - **工具組合就是 scope。** 放了 tool 的 scope 就是一個工具組合;一個 tool 可以在多個組合裡,範圍較大的 scope 只是放了較多 tool。每個 tool 有一個**追加授權 scope**,也就是 step-up 時要求的那個:有標記就用標記的,否則用最窄的(tool 最少,再依名稱)。刪除 scope 時,所有 tool 都會移出。指派給 tool 的 scope 必須是 RFC 6749 scope-token(可列印 ASCII,不含空白、`"` 與 `\`),因為它會放進 `WWW-Authenticate: Bearer scope="…"`;新建的 scope 必須符合,舊名稱不符合的會在 1.6 migration 的 log 列出,且不能指派。scope 可以有顯示用的 `title`。
@@ -220,6 +220,32 @@ MCP Gate 只記錄這些決定;它不在 client 與 server 之間,所以單靠�
   - `GET/POST /api/services/{id}/access-rules`、`GET/PUT/DELETE /api/services/{id}/access-rules/{rule_id}`,內容為 `{"effect": "deny" | "only", "subject": {"kind", "id"}, "tools": [...], "note", "expires_at"}`(`tool_rule_create`、`tool_rule_update`、`tool_rule_delete`)。錯誤:`400 access.invalid_effect`、`access.invalid_subject_kind`、`access.subject_not_found`、`access.pat_other_service`、`access.no_tools`、`access.unknown_tool`、`access.wildcard_not_alone`、`access.only_all_tools`、`access.too_many_tools`、`access.expires_in_past`;`404 access.rule_not_found`。
   - `GET/POST /api/groups`、`GET/PUT/DELETE /api/groups/{id}`、`PUT/DELETE /api/groups/{id}/members/{user_id}`(`group_create`、`group_update`、`group_delete`、`group_member_add`、`group_member_remove`);`409 groups.name_taken`(名稱不分大小寫不得重複)、`409 groups.in_use`、`404 groups.not_found` / `groups.member_not_found`。`GET /api/users` 列出可選的管理台帳號。
 - **升級到 1.6。** Migration `b5d7f9a1c3e6` 新增資料表 `tool_scopes`、`tool_access_rules`、`user_groups`、`user_group_members`,新增欄位 `services.unscoped_tools`(既有 server 皆為 `allow`)、`oauth_clients.policy_features` 與兩個 scope 資料表的 `title`,並把 client、授權請求與授權碼、token、同意紀錄的 `scope` 欄位改為 `TEXT`(帶很多組合 scope 的 token 在 PostgreSQL 上會超過 `VARCHAR(512)`);`scope` 參數現在最長 4,096 字元。不回填任何資料,所以在管理員指派 scope 或新增規則之前,一切照舊。在 PostgreSQL 上,若之後存過超過 512 字元的 scope,降版會失敗。
+
+### 追加授權
+
+*1.6。* token 缺少某個 tool 需要的 scope 時,這個 tool 仍會列出,但呼叫會收到 **HTTP 403** 與 `WWW-Authenticate: Bearer error="insufficient_scope", scope="<challenge>", resource_metadata="<protected resource metadata 網址>", error_description="<原因>"`(RFC 6750 §3.1,MCP 授權的追加授權 step-up)。支援追加授權的 client 會請使用者再授權一次、加上這個 scope,然後重試呼叫。MCP client 只在真正的 403 時才會重新授權,HTTP 200 裡的 tool 錯誤不會觸發。所以這個 403 必須由一個在 FastMCP 回應之前執行的 ASGI middleware 送出。
+
+[`examples/mcp_gate_hooks.py`](../examples/mcp_gate_hooks.py) 裡的 `MCPGateScopeGate` 就是這個 middleware。它和 `MCPGateToolPinning` 一起放在 server 的 HTTP app 上,使用同一個評估器:`mcp.run(transport="http", middleware=[Middleware(MCPGateScopeGate, pinning=pinning, server=mcp)])`(完整範例見 README)。
+
+- **回覆什麼。** 每個 `POST` 它都會在 app 執行前先讀 JSON-RPC body。只有呼叫已核准 tool、而判定為 `needs_scope` 的 `tools/call` 會收到 403。body 是 JSON-RPC 錯誤(`code` -32001,`message` 是原因,`data` 是 `{"error": "insufficient_scope", "scope"}`),帶著請求的 `id`。其他請求原封不動交給 app:其他 method(有 MCP 2026-07-28 的 `Mcp-Method` header 時連 body 都不讀)、不存在、未核准或被規則隱藏的 tool(pinning middleware 仍會當成不存在的 tool 拒絕,所以 403 不會透露隱藏的 tool)、MCP Gate 的 probe token、缺少 server `required_scopes` 的 token(由 FastMCP 自己回應)、所有 `GET`(SSE 串流)與 `DELETE`。app 開始回應後它就不再改動,串流回應不受影響。
+- **Body 上限。** `max_body`(預設 4 MiB)。超過的 body(依 `Content-Length` 或實際讀到的量)整個交給 app,由 pinning middleware 以下面的 tool 錯誤拒絕。
+- **舊式 JSON-RPC batch。** 只有每則訊息都是需要同一個 scope 的 `tools/call` 時才回 403(body 是錯誤陣列);其他 batch 照常交給 app,逐一拒絕。
+- **要求的 scope。** 預設只寫 tool 的 challenge scope,也就是 MCP 2026-07-28 與 RFC 6750 的定義:client 以這個 scope 和它已有的 scope 的聯集重新授權。Claude Code、FastMCP 的 `client_credentials` client 和 claude.ai 都這樣做。`challenge_includes_token_scopes=True` 會一併列出 token 目前的 scope(不含 `offline_access`),給會用要求內容取代原有 scope 的 client 使用,這是 MCP 2025-11-25 建議 server 對這類 client 採用的做法。代價是 Claude Code 用個人存取 token 時,會把列出的每個 scope 都顯示成「required」。
+- **原因說明**寫出 scope,並說明這種 token 能怎麼做。個人存取 token(`client_id` 為 `mcp-gate-console`)無法增加 scope:要用這個 scope 發一個新的(*Tokens → Issue token*)。`client_credentials` token(`sub` 等於 `client_id`):申請帶這個 scope 的 token;MCP Gate 拒絕時,要由管理員允許這個 client 使用該 scope。使用者的 token:重新登入並同意這個 scope,或改用帶有它的個人存取 token。pinning middleware 的 tool 錯誤也是同一段文字(`Tool '<name>' requires the scope '<scope>', which …`),所以沒有 gate 的 server,或不理會 403 的 client,一樣會顯示它。
+- **同意畫面。** 每個要求的 scope 會列出它在這台 server 上能使用的已核准 tool。使用者之前已同意過這個 client 存取這台 server(記住的同意,否則是透過它取得的最新 access token)時,畫面會顯示「要求更多權限」,標出新增的 scope,以及先前無法呼叫的 tool:在新 scope 裡的 tool,或在那次同意之後才加入已授予 scope 的 tool。「記住這次的決定」(和以前一樣)會保留記住過的 scope 與這次同意的 scope 的聯集,所以只要求新 scope 的追加授權不會讓舊的被忘掉。同意的稽核紀錄會記下 `step_up` 與 `added_scopes`。手動註冊(受信任)的 client 仍會略過同意畫面,所以它們的追加授權不會詢問,只受 client 允許的 scope 限制。
+- **不會重複循環。** 一次呼叫只收到一次 403。拿不到 scope 的 client 會停下:允許的 scope 不含它的 `client_credentials` client 會收到 MCP Gate token endpoint 的 `invalid_scope`(`scope not permitted: <scope>`);個人存取 token 無法升級。
+
+**實測過的 client**(2026-11-25,MCP Gate 1.6 開發版與 FastMCP 4.1.5,server 為 README 的完整範例):
+
+| Client | 登入方式 | 結果 |
+|---|---|---|
+| Claude Code 2.1.318,互動模式 | OAuth(Client ID Metadata Document) | **會追加授權。** 詢問「needs additional permissions for this tool … Re-authenticate now?」,開啟同意畫面要求 challenge scope 加上它已有的 scope,然後重試一次呼叫,成功。 |
+| Claude Code 2.1.318,`claude -p`(無介面) | OAuth | 不會自行追加授權。回報 `MCP server "<name>" needs additional permissions (scope: "<scope>") — run /mcp to re-authenticate`;執行 `claude mcp login <name>`(會要求聯集)後呼叫成功。 |
+| Claude Code 2.1.318 | header 裡的個人存取 token | 一次 403,不會循環。顯示 `Insufficient scope: required "<scope>"`,不會顯示原因說明。請發一個帶這個 scope 的新 token。 |
+| FastMCP 4.1.5 `ClientCredentialsOAuthProvider` | `client_credentials` | **會追加授權。** 以原有 scope 和 challenge 的聯集申請新 token,重試,成功。 |
+| 同上,但 client 允許的 scope 不含它 | `client_credentials` | 一次 403,之後 MCP Gate 拒絕發 token:`OAuthTokenError … invalid_scope … scope not permitted: <scope>`。不會循環。 |
+| FastMCP 4.1.5 `BearerAuth` | 個人存取 token | 一次 403。呼叫拋出 `MCPError`,內容是原因說明("A personal access token cannot gain scopes: issue a new one …")。 |
+| VS Code、Codex、Cursor | | 未測試:測試機上沒有安裝。2026 年 2 月的回報指出 Cursor 不會追加授權。這些 client 的使用者會看到原因說明;也可以把該 scope 設為預設(首次登入時就授予)。 |
 
 ### 連接 MCP client
 

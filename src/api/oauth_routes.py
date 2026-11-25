@@ -239,6 +239,7 @@ def decide_authorization_request(request_id: str, body: DecisionRequest, request
     except OAuthError as e:
         return _error_json(e)
     client_id, client_name, resource, requested = req.client_id, req.client.client_name, req.resource, req.scope
+    previous = oauth.previous_grant(db, user, client_id, resource)
     if body.approve:
         url = oauth.approve_request(db, req, user, granted_scopes=body.scopes, remember=body.remember)
         logger.info(f"consent granted: client={client_id} user={user.email} aud={resource}")
@@ -248,6 +249,8 @@ def decide_authorization_request(request_id: str, body: DecisionRequest, request
     granted = requested.split() if requested else []
     if body.approve and body.scopes is not None:
         granted = [s for s in granted if s in set(body.scopes)]
+    # A step-up: the user had agreed to this client before and now grants more (#37)
+    added = sorted(set(granted) - previous["scopes"]) if previous and body.approve else []
     try:
         AuditService.log_from_request(
             db=db, request=request,
@@ -255,7 +258,8 @@ def decide_authorization_request(request_id: str, body: DecisionRequest, request
             resource_type=ResourceType.OAUTH_CONSENT, status=AuditStatus.SUCCESS, resource_id=client_id,
             actor_type=ActorType.ADMIN, actor_id=str(user.id), actor_name=user.audit_name,
             details={"client_id": client_id, "client_name": client_name, "resource": resource,
-                     "scopes": granted if body.approve else [], "remember": bool(body.approve and body.remember)},
+                     "scopes": granted if body.approve else [], "remember": bool(body.approve and body.remember),
+                     "step_up": bool(added), "added_scopes": added},
         )
     except Exception as e:  # the decision is already stored; the redirect must still go back
         db.rollback()

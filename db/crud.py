@@ -432,6 +432,18 @@ class ToolScopeCRUD:
         return query.order_by(MCPTool.name).all()
 
     @staticmethod
+    def approved_memberships(db: Session, service_id) -> list:
+        """(scope_name, tool name, tool title, membership created_at) for every tool of a server that is listed now
+        and whose current definition is approved: what a scope unlocks on that server (the consent page, #37)."""
+        return (db.query(ToolScope.scope_name, MCPTool.name, MCPTool.title, ToolScope.created_at)
+                .join(MCPTool, MCPTool.id == ToolScope.tool_id)
+                .join(MCPToolVersion, (MCPToolVersion.tool_id == MCPTool.id)
+                      & (MCPToolVersion.hash == MCPTool.current_hash))
+                .filter(MCPTool.service_id == _uuid(service_id), MCPTool.removed_at.is_(None),
+                        MCPToolVersion.state == TOOL_STATE_APPROVED)
+                .order_by(ToolScope.scope_name, MCPTool.name).all())
+
+    @staticmethod
     def scope_sizes(db: Session) -> dict:
         """How many listed tools each scope holds: {(scope_name, scope_service_id str or None): count}."""
         rows = (db.query(ToolScope.scope_name, ToolScope.scope_service_id, func.count(ToolScope.id))
@@ -1289,6 +1301,17 @@ class OAuthTokenCRUD:
         if not include_inactive:
             q = q.filter(OAuthToken.revoked_at.is_(None), OAuthToken.expires_at >= local_now())
         return q.order_by(OAuthToken.issued_at.desc()).limit(limit).all()
+
+    @staticmethod
+    def latest_access(db: Session, *, user_id, client_id: str, audience: Optional[str]) -> Optional[OAuthToken]:
+        """The newest access token a user obtained through a client for an audience, revoked or expired included:
+        what the user agreed to last time (the consent page marks what a new request adds, #37)."""
+        if user_id is None:
+            return None
+        q = db.query(OAuthToken).filter(OAuthToken.kind == "access", OAuthToken.user_id == _uuid(user_id),
+                                        OAuthToken.client_id == client_id)
+        q = q.filter(OAuthToken.audience == audience) if audience else q.filter(OAuthToken.audience.is_(None))
+        return q.order_by(OAuthToken.issued_at.desc()).first()
 
     @staticmethod
     def list_revoked_unexpired(db: Session, *, since: Optional[datetime] = None,
