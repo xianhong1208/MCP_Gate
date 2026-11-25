@@ -8,6 +8,7 @@ Invariant (guarded by tests/test_architecture_layering.py): only src/adapters/* 
 
 from db.crud import normalize_audience, normalize_service_host  # pure utility functions, re-exported via this layer
 
+from src.adapters.access_adapter import ToolAccessAdapter, UserGroupAdapter
 from src.adapters.admin_adapter import AdminSessionAdapter, AdminUserAdapter
 from src.adapters.encryption_adapter import EncryptedColumnAdapter
 from src.adapters.managed_adapter import (
@@ -49,6 +50,8 @@ __all__ = [
     "OAuthTokenAdapter",
     "OAuthConsentAdapter",
     "ServiceScopeAdapter",
+    "ToolAccessAdapter",
+    "UserGroupAdapter",
     "normalize_service_host",
     "fallback_service_name",
     "fallback_service_description",

@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 
 from db.models import (
     AdminUser, OAuthAuthorizationCode, OAuthAuthorizationRequest, OAuthClient, OAuthToken, Service, format_datetime,
-    local_now,
+    MAX_SCOPE_STRING, local_now,
 )
 from db.database import make_session
 from db.seed import CONSOLE_CLIENT_ID, LEGACY_CLIENT_IDS, SCANNER_CLIENT_ID
@@ -89,7 +89,7 @@ LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1")
 INFO_URI_FIELDS = ("client_uri", "logo_uri", "tos_uri", "policy_uri")
 MAX_REDIRECT_URIS = 20      # native/desktop MCP clients register one or two
 MAX_RESPONSE_TYPES = 5
-MAX_SCOPE_PARAM = 1024      # characters of a raw `scope` parameter
+MAX_SCOPE_PARAM = MAX_SCOPE_STRING  # characters of a raw `scope` parameter (4096 since 1.6, #37: bundle scopes)
 MAX_RESOURCE_PARAM = 512    # characters of a raw `resource` parameter
 
 
@@ -314,7 +314,7 @@ def _check_metadata_lengths(metadata: dict, jwks_uri: Optional[str]) -> None:
         "client_uri": (metadata.get("client_uri"), OAuthClient.client_uri),
         "logo_uri": (metadata.get("logo_uri"), OAuthClient.logo_uri),
         "software_id": (metadata.get("software_id"), OAuthClient.software_id),
-        "scope": (metadata.get("scope"), OAuthClient.scope),
+        "scope": (metadata.get("scope"), MAX_SCOPE_STRING),
         "default_resource": (metadata.get("default_resource"), OAuthClient.default_resource),
         # not stored, but bounded like the URIs that are
         "tos_uri": (metadata.get("tos_uri"), OAuthClient.client_uri),
@@ -326,7 +326,7 @@ def _check_metadata_lengths(metadata: dict, jwks_uri: Optional[str]) -> None:
             continue
         if not isinstance(value, str):
             raise OAuthError("invalid_client_metadata", f"{field} must be a string")
-        limit = column_limit(column)
+        limit = column if isinstance(column, int) else column_limit(column)
         if len(value) > limit:
             raise OAuthError("invalid_client_metadata", f"{field} is too long (maximum {limit} characters)")
 
@@ -601,7 +601,7 @@ def begin_authorization(
         raise OAuthError("invalid_scope", "scope is too long", redirectable=True)
     audience, service = resolve_resource(db, resource or client.default_resource)
     granted_scope = resolve_scope(db, scope, client, service)
-    if granted_scope and len(granted_scope) > column_limit(OAuthAuthorizationRequest.scope):
+    if granted_scope and len(granted_scope) > MAX_SCOPE_STRING:
         raise OAuthError("invalid_scope", "too many scopes requested", redirectable=True)
 
     return OAuthAuthRequestAdapter.create(

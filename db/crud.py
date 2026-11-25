@@ -14,8 +14,8 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 from db.models import (
     TOOL_BASELINE_ACTOR, TOOL_SOURCE_SCAN, TOOL_STATE_APPROVED, TOOL_STATE_PENDING, AdminSession, AdminUser, AuditLog,
     ManagedMcpProcess, MCPTool, MCPToolVersion, OAuthAuthorizationCode, OAuthAuthorizationRequest, OAuthClient,
-    OAuthConsent, OAuthScope, OAuthSigningKey, OAuthToken, Service, ServiceScope, TokenUsage, UserMcpDefinition,
-    local_now, utc_now,
+    OAuthConsent, OAuthScope, OAuthSigningKey, OAuthToken, Service, ServiceScope, TokenUsage, ToolAccessRule,
+    ToolScope, UserGroup, UserGroupMember, UserMcpDefinition, local_now, utc_now,
 )
 from src.tool_pinning.hashing import canonical_json, tool_hash
 from src.utils.field_limits import clip, column_limit
@@ -43,6 +43,10 @@ def normalize_audience(value: Optional[str]) -> Optional[str]:
         return value.strip().rstrip("/")
     path = parts.path.rstrip("/")
     return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), path, parts.query, ""))
+
+
+# "not given" for optional updates where None means "clear"
+_UNSET = object()
 
 
 def _uuid(value) -> Optional[uuid.UUID]:
@@ -374,6 +378,202 @@ def _dump_json(value) -> Optional[str]:
 def _legacy_view(tool: dict) -> tuple:
     """The fields stored before pinning, the way they were stored (an empty inputSchema was saved as none)."""
     return tool.get("name"), tool.get("description"), tool.get("inputSchema") or None
+
+
+# ==================== Tool access (#37) ====================
+
+class ToolScopeCRUD:
+    """Which scopes each tool belongs to (ToolScope). Rules about what may be assigned live in ToolAccessAdapter."""
+
+    @staticmethod
+    def list_for_service(db: Session, service_id) -> List[ToolScope]:
+        return (db.query(ToolScope).join(MCPTool, MCPTool.id == ToolScope.tool_id)
+                .filter(MCPTool.service_id == _uuid(service_id))
+                .order_by(ToolScope.tool_id, ToolScope.scope_name).all())
+
+    @staticmethod
+    def list_for_tool(db: Session, tool_id) -> List[ToolScope]:
+        return (db.query(ToolScope).filter(ToolScope.tool_id == _uuid(tool_id))
+                .order_by(ToolScope.scope_name).all())
+
+    @staticmethod
+    def replace_for_tool(db: Session, tool_id, entries: List[tuple], challenge: Optional[str],
+                         actor: Optional[str]) -> List[ToolScope]:
+        """Set a tool's scopes to ``entries`` ((scope_name, scope_service_id or None) pairs) in one transaction;
+        ``challenge`` marks one of them (None: none marked). Memberships that stay keep their creation record."""
+        tid = _uuid(tool_id)
+        now = local_now()
+        current = {row.scope_name: row for row in db.query(ToolScope).filter(ToolScope.tool_id == tid).all()}
+        wanted = {name for name, _ in entries}
+        for name, row in current.items():
+            if name not in wanted:
+                db.delete(row)
+        db.flush()
+        for name, scope_service_id in entries:
+            row = current.get(name)
+            if row is None:
+                row = ToolScope(tool_id=tid, scope_name=name, scope_service_id=_uuid(scope_service_id),
+                                created_at=now, created_by=actor)
+                db.add(row)
+            row.scope_service_id = _uuid(scope_service_id)
+            row.is_challenge = name == challenge
+        db.commit()
+        return ToolScopeCRUD.list_for_tool(db, tool_id)
+
+    @staticmethod
+    def tools_in_scope(db: Session, name: str, scope_service_id=None) -> List[MCPTool]:
+        """The tools a scope holds (a global scope when scope_service_id is None), any server."""
+        query = db.query(MCPTool).join(ToolScope, ToolScope.tool_id == MCPTool.id).filter(
+            ToolScope.scope_name == name)
+        if scope_service_id is None:
+            query = query.filter(ToolScope.scope_service_id.is_(None))
+        else:
+            query = query.filter(ToolScope.scope_service_id == _uuid(scope_service_id))
+        return query.order_by(MCPTool.name).all()
+
+    @staticmethod
+    def scope_sizes(db: Session) -> dict:
+        """How many listed tools each scope holds: {(scope_name, scope_service_id str or None): count}."""
+        rows = (db.query(ToolScope.scope_name, ToolScope.scope_service_id, func.count(ToolScope.id))
+                .join(MCPTool, MCPTool.id == ToolScope.tool_id).filter(MCPTool.removed_at.is_(None))
+                .group_by(ToolScope.scope_name, ToolScope.scope_service_id).all())
+        return {(name, str(sid) if sid else None): count for name, sid, count in rows}
+
+
+class ToolAccessRuleCRUD:
+    """Deny / "only" rules of a server (ToolAccessRule)."""
+
+    @staticmethod
+    def list_for_service(db: Session, service_id) -> List[ToolAccessRule]:
+        return (db.query(ToolAccessRule).filter(ToolAccessRule.service_id == _uuid(service_id))
+                .order_by(ToolAccessRule.created_at, ToolAccessRule.id).all())
+
+    @staticmethod
+    def get_in_service(db: Session, service_id, rule_id) -> Optional[ToolAccessRule]:
+        rid, sid = _uuid(rule_id), _uuid(service_id)
+        if rid is None or sid is None:
+            return None
+        return db.query(ToolAccessRule).filter(ToolAccessRule.id == rid, ToolAccessRule.service_id == sid).first()
+
+    @staticmethod
+    def list_for_subject(db: Session, kind: str, subject_id: str) -> List[ToolAccessRule]:
+        return (db.query(ToolAccessRule).filter(ToolAccessRule.subject_kind == kind,
+                                                ToolAccessRule.subject_id == subject_id)
+                .order_by(ToolAccessRule.created_at).all())
+
+    @staticmethod
+    def create(db: Session, **fields) -> ToolAccessRule:
+        now = local_now()
+        rule = ToolAccessRule(created_at=now, updated_at=now, **fields)
+        db.add(rule)
+        db.commit()
+        db.refresh(rule)
+        return rule
+
+    @staticmethod
+    def update(db: Session, rule: ToolAccessRule, **fields) -> ToolAccessRule:
+        for key, value in fields.items():
+            setattr(rule, key, value)
+        rule.updated_at = local_now()
+        db.commit()
+        db.refresh(rule)
+        return rule
+
+    @staticmethod
+    def delete(db: Session, rule: ToolAccessRule) -> None:
+        db.delete(rule)
+        db.commit()
+
+
+class UserGroupCRUD:
+    """Groups of console users and their members (#37)."""
+
+    @staticmethod
+    def list_all(db: Session) -> List[UserGroup]:
+        return db.query(UserGroup).options(selectinload(UserGroup.members)).order_by(UserGroup.name).all()
+
+    @staticmethod
+    def get(db: Session, group_id) -> Optional[UserGroup]:
+        gid = _uuid(group_id)
+        if gid is None:
+            return None
+        return (db.query(UserGroup).options(selectinload(UserGroup.members).joinedload(UserGroupMember.user))
+                .filter(UserGroup.id == gid).first())
+
+    @staticmethod
+    def get_by_name(db: Session, name: str) -> Optional[UserGroup]:
+        return db.query(UserGroup).filter(func.lower(UserGroup.name) == name.lower()).first()
+
+    @staticmethod
+    def create(db: Session, *, name: str, description: Optional[str], actor: Optional[str]) -> UserGroup:
+        now = local_now()
+        group = UserGroup(name=name, description=description, created_at=now, updated_at=now, created_by=actor)
+        db.add(group)
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            raise ValueError("group name taken")
+        db.refresh(group)
+        return group
+
+    @staticmethod
+    def update(db: Session, group: UserGroup, **fields) -> UserGroup:
+        for key, value in fields.items():
+            setattr(group, key, value)
+        group.updated_at = local_now()
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            raise ValueError("group name taken")
+        db.refresh(group)
+        return group
+
+    @staticmethod
+    def delete(db: Session, group: UserGroup) -> None:
+        db.delete(group)
+        db.commit()
+
+    @staticmethod
+    def add_member(db: Session, group: UserGroup, user_id, actor: Optional[str]) -> bool:
+        """Add a user; False when already a member (nothing changes)."""
+        uid = _uuid(user_id)
+        if any(m.user_id == uid for m in group.members):
+            return False
+        group.members.append(UserGroupMember(user_id=uid, added_at=local_now(), added_by=actor))
+        group.updated_at = local_now()
+        try:
+            db.commit()
+        except IntegrityError:  # a concurrent add of the same user won
+            db.rollback()
+            return False
+        return True
+
+    @staticmethod
+    def remove_member(db: Session, group: UserGroup, user_id) -> bool:
+        uid = _uuid(user_id)
+        member = next((m for m in group.members if m.user_id == uid), None)
+        if member is None:
+            return False
+        group.members.remove(member)
+        group.updated_at = local_now()
+        db.commit()
+        return True
+
+    @staticmethod
+    def members_by_group(db: Session, group_ids=None) -> dict:
+        """{group id: [member user ids]} as strings (a token's sub is the user id)."""
+        query = db.query(UserGroupMember.group_id, UserGroupMember.user_id)
+        if group_ids is not None:
+            ids = [g for g in (_uuid(x) for x in group_ids) if g is not None]
+            if not ids:
+                return {}
+            query = query.filter(UserGroupMember.group_id.in_(ids))
+        out: dict = {}
+        for gid, uid in query.all():
+            out.setdefault(str(gid), []).append(str(uid))
+        return out
 
 
 # ==================== Token events / statistics ====================
@@ -956,22 +1156,28 @@ class OAuthScopeCRUD:
         return db.query(OAuthScope).filter(OAuthScope.name == name).first()
 
     @staticmethod
-    def upsert(db: Session, *, name: str, description: Optional[str], is_default: bool) -> OAuthScope:
+    def upsert(db: Session, *, name: str, description: Optional[str], is_default: bool,
+               title=_UNSET) -> OAuthScope:
         scope = OAuthScopeCRUD.get(db, name)
         if scope is None:
             scope = OAuthScope(name=name)
             db.add(scope)
         scope.description = description
         scope.is_default = is_default
+        if title is not _UNSET:
+            scope.title = title
         db.commit()
         db.refresh(scope)
         return scope
 
     @staticmethod
     def delete(db: Session, name: str) -> bool:
+        """Delete a global scope and, in the same transaction, the tools' memberships of it (#37)."""
         scope = OAuthScopeCRUD.get(db, name)
         if not scope:
             return False
+        db.query(ToolScope).filter(ToolScope.scope_name == name, ToolScope.scope_service_id.is_(None)).delete(
+            synchronize_session=False)
         db.delete(scope)
         db.commit()
         return True
@@ -1001,22 +1207,28 @@ class ServiceScopeCRUD:
         return db.query(ServiceScope).filter(ServiceScope.name == name).count()
 
     @staticmethod
-    def upsert(db: Session, service_id, *, name: str, description: Optional[str], is_default: bool) -> ServiceScope:
+    def upsert(db: Session, service_id, *, name: str, description: Optional[str], is_default: bool,
+               title=_UNSET) -> ServiceScope:
         scope = ServiceScopeCRUD.get(db, service_id, name)
         if scope is None:
             scope = ServiceScope(service_id=_uuid(service_id), name=name)
             db.add(scope)
         scope.description = description
         scope.is_default = bool(is_default)
+        if title is not _UNSET:
+            scope.title = title
         db.commit()
         db.refresh(scope)
         return scope
 
     @staticmethod
     def delete(db: Session, service_id, name: str) -> bool:
+        """Delete a server's own scope and, in the same transaction, its tools' memberships of it (#37)."""
         scope = ServiceScopeCRUD.get(db, service_id, name)
         if scope is None:
             return False
+        db.query(ToolScope).filter(ToolScope.scope_name == name,
+                                   ToolScope.scope_service_id == _uuid(service_id)).delete(synchronize_session=False)
         db.delete(scope)
         db.commit()
         return True
