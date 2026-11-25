@@ -94,7 +94,8 @@ def test_consent_page_describes_service_scope(owner_client, service):
     }, follow_redirects=False)
     rid = parse_qs(urlparse(r.headers["location"]).query)["rid"][0]
     info = owner_client.get(f"/oauth/authorize/requests/{rid}").json()
-    assert info["scopes"] == [{"name": "files:read", "description": "Read files on this server"}]
+    assert [{k: s[k] for k in ("name", "description")} for s in info["scopes"]] == \
+        [{"name": "files:read", "description": "Read files on this server"}]
 
 
 def test_allow_list_restricts_globals_but_not_own_scopes(owner_client, service):

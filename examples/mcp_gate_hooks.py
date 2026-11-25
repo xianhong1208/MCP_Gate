@@ -46,6 +46,10 @@ per-user "deny" and "only these tools" rules (groups already expanded to their m
 the token may never call is hidden and one that more scope would unlock is listed; on ``tools/call`` the first is
 refused like an unknown tool and the second with an error naming the scope to ask for.
 
+MCPGateScopeGate is the ASGI half of the same check (step-up): a ``tools/call`` that only lacks a scope gets a real
+HTTP 403 ``insufficient_scope`` challenge before FastMCP answers, so MCP clients that support step-up ask the user for
+that scope and retry. Clients that do not still see the reason, which names the scope to add.
+
 Copy this single file next to your server; it needs only ``fastmcp`` and ``httpx`` (``pyjwt`` and
 ``cryptography`` as well when using ``private_key_pem``).
 """
@@ -349,9 +353,24 @@ def evaluate_access(policy: Mapping[str, Any], token: Mapping[str, Any], tool: s
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 CACHE_FORMAT = 2  # 2 (1.6) adds the access policy; a format 1 cache (1.5) is still read, as approvals only
 NOT_AVAILABLE = "Tool {name!r} is not available on this server."
-NEEDS_SCOPE = ("Tool {name!r} requires the scope {scope!r}, which this access token does not carry. Sign in again "
-               "asking for that scope, or use a personal access token issued with it.")
 PROBE_CLAIM = "mcp_gate_probe"  # set by MCP Gate on the tokens of its own tools/list requests
+PAT_CLIENT_ID = "mcp-gate-console"  # every personal access token carries this client_id
+
+
+def scope_refusal(name: str, scope: str, claims: Optional[Mapping[str, Any]]) -> str:
+    """Why a call needs more scope, and what this kind of token can do about it. Used both as the tool error and as
+    the ``error_description`` of the step-up challenge, so a client that never re-authorizes still shows it."""
+    claims = claims or {}
+    head = f"Tool {name!r} requires the scope {scope!r}, which "
+    if claims.get("client_id") == PAT_CLIENT_ID:
+        return head + ("this personal access token does not carry. A personal access token cannot gain scopes: issue "
+                       "a new one with that scope in MCP Gate (Tokens -> Issue token) and use it instead.")
+    client = claims.get("client_id")
+    if isinstance(client, str) and client and claims.get("sub") == client:  # client_credentials: no user behind it
+        return head + (f"the token of client {client!r} does not carry. Request a token with scope={scope} from "
+                       "MCP Gate; if MCP Gate refuses it, an admin must allow that scope for this client.")
+    return head + ("this access token does not carry. Sign in again and approve that scope (many MCP clients offer "
+                   "this on their own), or use a personal access token issued with it.")
 
 try:  # which version of a versioned tool a call asks for (FastMCP's own helper; absent in other releases)
     from fastmcp.server.middleware.authorization import _requested_version
@@ -549,7 +568,7 @@ class MCPGateToolPinning(Middleware):
         if verdict["decision"] == ACCESS_NEEDS_SCOPE:
             logger.info("Refused a call to tool %r for client %s: needs scope %r", name,
                         (claims or {}).get("client_id"), verdict["challenge"])
-            raise ToolError(NEEDS_SCOPE.format(name=name, scope=verdict["challenge"]))
+            raise ToolError(scope_refusal(name, verdict["challenge"], claims))
         return await call_next(context)
 
     # ------------------------------------------------------------------ background sync
@@ -724,6 +743,220 @@ class MCPGateToolPinning(Middleware):
                 os.unlink(tmp)
             except OSError:
                 pass
+
+
+# ====================================================================== step-up gate (#37)
+# MCPGateToolPinning refuses a call that needs more scope with a tool error, which travels inside an HTTP 200: no MCP
+# client re-authorizes on that. Clients ask the user for more scope only on a real HTTP 403 with
+# ``WWW-Authenticate: Bearer error="insufficient_scope", scope="..."`` (RFC 6750 section 3.1, MCP authorization
+# "step-up"), and that answer must be chosen before FastMCP starts its response. MCPGateScopeGate is the small ASGI
+# middleware that does it, in front of the same middleware and with the same evaluator.
+STEP_UP_MAX_BODY = 4 * 1024 * 1024  # larger tools/call bodies are passed through; the FastMCP middleware still refuses
+INSUFFICIENT_SCOPE_CODE = -32001     # JSON-RPC error code in the 403 body (implementation-defined range)
+_SCOPE_TOKEN = re.compile(r"^[\x21\x23-\x5b\x5d-\x7e]+$")  # RFC 6749 scope-token: fits a quoted challenge
+_NEVER_CHALLENGED = {"offline_access"}  # MCP 2026-07-28: never put in a challenge
+
+
+def _quoted(text: str) -> str:
+    """Text that fits an RFC 6750 quoted header value: printable ASCII without '"' and '\\' ('?' for the rest)."""
+    return "".join(c if " " <= c <= "~" and c not in '"\\' else "?" for c in text)
+
+
+def resource_metadata_url(resource: str) -> str:
+    """RFC 9728 metadata URL of a resource, as FastMCP serves it: /.well-known/oauth-protected-resource + path."""
+    parts = urlsplit(resource)
+    path = parts.path if parts.path != "/" else ""
+    return f"{parts.scheme}://{parts.netloc}/.well-known/oauth-protected-resource{path}"
+
+
+def _asgi_claims(scope: Mapping[str, Any]) -> Optional[dict]:
+    """Claims of the access token FastMCP's authentication middleware verified for this request (None without)."""
+    token = getattr(scope.get("user"), "access_token", None)
+    claims = getattr(token, "claims", None)
+    return dict(claims) if isinstance(claims, Mapping) else None
+
+
+class MCPGateScopeGate:
+    """ASGI middleware: answer a ``tools/call`` that only lacks a scope with HTTP 403 ``insufficient_scope``.
+
+    Add it to the server's HTTP app next to MCPGateToolPinning (FastMCP places it after its own authentication, so
+    the verified token is known)::
+
+        from starlette.middleware import Middleware
+        mcp.run(transport="http", middleware=[Middleware(MCPGateScopeGate, pinning=pinning, server=mcp)])
+
+    For each POST it reads the JSON-RPC body (up to ``max_body`` bytes) before the app runs. When the body is a
+    ``tools/call`` of an approved tool whose only obstacle is a missing scope (the access verdict ``needs_scope``), it
+    answers ``403`` with ``WWW-Authenticate: Bearer error="insufficient_scope", scope="...", resource_metadata="...",
+    error_description="..."`` and a JSON-RPC error carrying the same readable reason. Everything else is replayed to
+    the app unchanged: other methods, a tool that does not exist, is not approved or is hidden by a rule (refused by
+    the FastMCP middleware exactly as before, so nothing is revealed), MCP Gate's probe tokens, a token without the
+    server's required scopes (FastMCP answers that itself), larger bodies, and every GET (the SSE stream) or DELETE.
+    The gate never touches a response the app has started, so streamed answers pass through as they are.
+
+    A legacy JSON-RPC batch is refused only when every message is a ``tools/call`` needing the same scope; any other
+    batch is passed through and the middleware refuses call by call.
+
+    ``challenge_includes_token_scopes`` (default False) also puts the token's current scopes in the challenge. By
+    default the challenge names only the scope the tool needs, as MCP 2026-07-28 and RFC 6750 section 3.1 define it:
+    the client re-authorizes with the union of that and what it holds (Claude Code, FastMCP's client_credentials
+    client and claude.ai all do). Set it to True for a client that *replaces* its scopes with the challenge (the
+    approach MCP 2025-11-25 recommends to servers for such clients), at the cost of a challenge that lists scopes the
+    token already has as "required" (Claude Code with a personal access token shows that list).
+
+    The reason text (``scope_refusal``) says what this kind of token can do: a personal access token cannot gain
+    scopes (issue a new one), a client_credentials client asks for the scope (or an admin allows it), a user signs in
+    again. A client that never steps up shows that text.
+    """
+
+    def __init__(
+        self,
+        app: Any,
+        *,
+        pinning: "MCPGateToolPinning",
+        server: Any,
+        challenge_includes_token_scopes: bool = False,
+        max_body: int = STEP_UP_MAX_BODY,
+        resource_metadata: Optional[str] = None,
+    ):
+        self.app = app
+        self.pinning = pinning
+        self.server = server
+        self.challenge_includes_token_scopes = challenge_includes_token_scopes
+        self.max_body = max_body
+        self.resource_metadata = resource_metadata or resource_metadata_url(pinning.audience)
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope.get("type") != "http" or scope.get("method") != "POST":
+            await self.app(scope, receive, send)
+            return
+        claims = _asgi_claims(scope)
+        if claims is None or claims.get(PROBE_CLAIM) is True or not self._has_required_scopes(claims):
+            await self.app(scope, receive, send)
+            return
+        headers = {k.lower(): v for k, v in scope.get("headers") or []}
+        method = headers.get(b"mcp-method")
+        if method is not None and method.strip() != b"tools/call":
+            await self.app(scope, receive, send)  # MCP 2026-07-28 names the method: no need to read the body
+            return
+        try:
+            if int(headers.get(b"content-length", b"0")) > self.max_body:
+                await self.app(scope, receive, send)
+                return
+        except ValueError:
+            pass
+        messages, complete = await self._read(receive)
+        refusal = None
+        if complete:
+            body = b"".join(m.get("body", b"") for m in messages if m.get("type") == "http.request")
+            refusal = await self._refusal(body, claims)
+        if refusal is None:
+            await self.app(scope, _replay(messages, receive), send)
+            return
+        await self._challenge(send, claims, *refusal)
+
+    def _has_required_scopes(self, claims: Mapping[str, Any]) -> bool:
+        required = getattr(getattr(self.server, "auth", None), "required_scopes", None) or []
+        return set(required) <= _token_scopes(claims)
+
+    async def _read(self, receive) -> tuple:
+        """The request's ASGI messages up to max_body bytes; complete=False when the body is larger (or the client
+        went away), in which case the rest is left to the app."""
+        messages, size = [], 0
+        while True:
+            message = await receive()
+            messages.append(message)
+            if message.get("type") != "http.request":
+                return messages, False
+            size += len(message.get("body", b""))
+            if size > self.max_body:
+                return messages, False
+            if not message.get("more_body"):
+                return messages, True
+
+    async def _refusal(self, body: bytes, claims: Mapping[str, Any]) -> Optional[tuple]:
+        """(calls [(id, name)], scope, batch) when every call in the body only lacks the same scope, else None."""
+        try:
+            data = json.loads(body)
+        except (ValueError, UnicodeDecodeError):
+            return None
+        batch = isinstance(data, list)
+        messages = data if batch else [data]
+        if not messages or not all(isinstance(m, dict) and m.get("method") == "tools/call" for m in messages):
+            return None
+        calls, needed = [], set()
+        for message in messages:
+            params = message.get("params")
+            if not isinstance(params, dict) or not isinstance(params.get("name"), str):
+                return None
+            verdict = await self._verdict(params, claims)
+            if verdict is None or verdict["decision"] != ACCESS_NEEDS_SCOPE:
+                return None
+            calls.append((message.get("id"), params["name"]))
+            needed.add(verdict["challenge"])
+        if len(needed) != 1:
+            return None
+        scope = needed.pop()
+        if not isinstance(scope, str) or not _SCOPE_TOKEN.match(scope):
+            return None  # cannot be written in a challenge; the middleware's tool error still names it
+        return calls, scope, batch
+
+    async def _verdict(self, params: Mapping[str, Any], claims: Mapping[str, Any]) -> Optional[dict]:
+        """The access verdict for an approved tool of this server; None when the tool is unknown or not approved."""
+        pinning = self.pinning
+        await pinning._ensure_started()
+        meta = params.get("_meta")
+        meta = meta if isinstance(meta, Mapping) else None
+        if _requested_version is not None:
+            version = _requested_version(meta)
+        elif meta and meta.get("fastmcp"):
+            return None
+        else:
+            version = None
+        try:
+            tool = await self.server.get_tool(params["name"], version=version)
+        except Exception:
+            return None
+        if tool is None:
+            return None
+        digest = pinning._note(tool)
+        if digest is None or not pinning.is_allowed(digest):
+            return None
+        return pinning.access(params["name"], claims)
+
+    async def _challenge(self, send, claims: Mapping[str, Any], calls: list, scope: str, batch: bool) -> None:
+        reason = scope_refusal(calls[0][1], scope, claims)
+        scopes = [scope]
+        if self.challenge_includes_token_scopes:
+            held = sorted(s for s in _token_scopes(claims)
+                          if s != scope and s not in _NEVER_CHALLENGED and _SCOPE_TOKEN.match(s))
+            scopes = held + [scope]
+        challenge = (f'Bearer error="insufficient_scope", scope="{" ".join(scopes)}", '
+                     f'resource_metadata="{_quoted(self.resource_metadata)}", error_description="{_quoted(reason)}"')
+        errors = [{"jsonrpc": "2.0", "id": request_id,
+                   "error": {"code": INSUFFICIENT_SCOPE_CODE, "message": scope_refusal(name, scope, claims),
+                             "data": {"error": "insufficient_scope", "scope": scope}}}
+                  for request_id, name in calls]
+        body = json.dumps(errors if batch else errors[0], ensure_ascii=False).encode("utf-8")
+        logger.info("Step-up challenge for tool %r, client %s: needs scope %r", calls[0][1], claims.get("client_id"),
+                    scope)
+        await send({"type": "http.response.start", "status": 403, "headers": [
+            (b"content-type", b"application/json"),
+            (b"content-length", str(len(body)).encode()),
+            (b"www-authenticate", challenge.encode("ascii")),
+        ]})
+        await send({"type": "http.response.body", "body": body})
+
+
+def _replay(messages: list, receive):
+    """An ASGI receive that first returns the messages already read, then the rest of the request."""
+    pending = list(messages)
+
+    async def replay():
+        if pending:
+            return pending.pop(0)
+        return await receive()
+    return replay
 
 
 def _describe_access(access: Optional[dict]) -> str:

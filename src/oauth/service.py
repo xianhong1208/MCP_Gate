@@ -32,7 +32,7 @@ from src.audit import AuditAction, AuditStatus, ResourceType, record_oauth_event
 from src.adapters import (
     OAuthAuthRequestAdapter, OAuthClientAdapter, OAuthCodeAdapter, OAuthConsentAdapter, OAuthScopeAdapter,
     ServiceScopeAdapter,
-    OAuthTokenAdapter, ServiceAdapter, TokenUsageAdapter, normalize_audience,
+    OAuthTokenAdapter, ServiceAdapter, TokenUsageAdapter, ToolAccessAdapter, normalize_audience,
 )
 from src.config import Config
 from src.logging import get_logger
@@ -629,11 +629,46 @@ def get_pending_request(db: Session, request_id: str) -> OAuthAuthorizationReque
     return req
 
 
+def previous_grant(db: Session, user: AdminUser, client_id: str, audience: Optional[str]) -> Optional[dict]:
+    """What the user last agreed to for this client and server: the remembered consent, else the scopes of the newest
+    access token they obtained through it. ``{"source": "consent" | "token", "scopes": set, "at": datetime}`` or None
+    the first time."""
+    consent = OAuthConsentAdapter.get(db, user.id, client_id, audience)
+    if consent is not None:
+        return {"source": "consent", "scopes": set((consent.scope or "").split()), "at": consent.granted_at}
+    token = OAuthTokenAdapter.latest_access(db, user_id=user.id, client_id=client_id, audience=audience)
+    if token is not None:
+        return {"source": "token", "scopes": set((token.scope or "").split()), "at": token.issued_at}
+    return None
+
+
+def scope_tools(db: Session, service, scopes: list, previous: Optional[dict]) -> dict:
+    """{scope: [{"name", "title", "new"}]}: the approved tools each requested scope unlocks on the server. A tool is
+    new when the user had not been able to call it under what they agreed to last time: none of its scopes was
+    granted then, or it joined a granted scope only afterwards."""
+    if service is None or not scopes:
+        return {}
+    rows = ToolAccessAdapter.approved_memberships(db, service)
+    reachable = set()
+    if previous is not None:
+        reachable = {name for scope, name, _title, since in rows
+                     if scope in previous["scopes"] and since is not None and since <= previous["at"]}
+    wanted = set(scopes)
+    out: dict = {}
+    for scope, name, title, _since in rows:
+        if scope in wanted:
+            out.setdefault(scope, []).append({"name": name, "title": title,
+                                              "new": previous is not None and name not in reachable})
+    return out
+
+
 def describe_request(db: Session, req: OAuthAuthorizationRequest, user: AdminUser) -> dict:
     """Information shown on the consent page."""
     scopes = req.scope.split() if req.scope else []
     service = ServiceAdapter.get_by_audience(db, req.resource) if req.resource else None
     registry = scope_registry(db, service)
+    previous = previous_grant(db, user, req.client_id, req.resource)
+    tools = scope_tools(db, service, scopes, previous)
     metadata_document = req.client.created_via == client_metadata.CREATED_VIA
     return {
         "request_id": req.id,
@@ -648,7 +683,14 @@ def describe_request(db: Session, req: OAuthAuthorizationRequest, user: AdminUse
             "metadata_document": metadata_document,
             "identity_host": urlsplit(req.client.client_id).hostname if metadata_document else None,
         },
-        "scopes": [{"name": s, "description": registry[s].description if s in registry else None} for s in scopes],
+        # Each scope with the tools it unlocks on this server; "new" marks what the user had not agreed to before
+        # (a step-up asks for more: MCP authorization, insufficient_scope)
+        "scopes": [{"name": s, "description": registry[s].description if s in registry else None,
+                    "new": previous is not None and s not in previous["scopes"], "tools": tools.get(s, [])}
+                   for s in scopes],
+        "previous_grant": {"source": previous["source"], "at": format_datetime(previous["at"]),
+                           "scopes": sorted(previous["scopes"])} if previous else None,
+        "step_up": previous is not None and bool(set(scopes) - previous["scopes"]),
         "resource": req.resource,
         "service": {"id": str(service.id), "name": service.name} if service else None,
         "redirect_host": urlparse(req.redirect_uri).netloc or req.redirect_uri,

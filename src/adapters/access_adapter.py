@@ -97,6 +97,11 @@ class ToolAccessAdapter:
         return ToolScopeCRUD.scope_sizes(db)
 
     @staticmethod
+    def approved_memberships(db, service) -> list:
+        """(scope, tool name, tool title, since) for the approved, listed tools of a server that are in a scope."""
+        return ToolScopeCRUD.approved_memberships(db, service.id)
+
+    @staticmethod
     def tools_in_scope(db, name, scope_service_id=None):
         return ToolScopeCRUD.tools_in_scope(db, name, scope_service_id)
 

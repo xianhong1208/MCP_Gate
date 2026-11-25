@@ -27,7 +27,7 @@ MCP Gate 把標準化的身分驗證放在你每一台 MCP server 前面。[Fast
 - **服務登錄。** 手動登記或掃描 MCP server、同步工具清單、監看健康狀態,還能用某張 token 的身分查看它看得到的工具(「Inspect as」)。支援 MCP 2026-07-28(`server/discover`、無狀態 server),遇到 2024-11-05 到 2025-11-25 的 server 則退回 `initialize` 握手;每個 server 的頁面會顯示它用哪一版回應。見 [MCP 協定版本](docs/reference.zh-TW.md#mcp-協定版本)。
 - **Tool 釘選。** 每個 tool 定義都以 SHA-256 雜湊釘選;新的或變更過的 tool 要等管理員看過與已核准版本的差異後核准或拒絕。server 上的 FastMCP middleware 會隱藏所有未核准的 tool,並立刻回報新的 tool。見 [Tool 釘選與核准](docs/reference.zh-TW.md#tool-釘選與核准)。
 - **Poisoning 掃描。** 內建規則會標示 tool 定義裡藏的指令、不可見字元、提到其他 server 的 tool、索取機密、可疑網址與編碼文字,並在核准卡片上標亮。不用模型、不連網;發現只供核准時參考,本身不會擋下任何東西。見 [Poisoning 掃描](docs/reference.zh-TW.md#poisoning-掃描)。
-- **Tool 存取規則(1.6 進行中)。** 把 tool 放進 scope(工具組合),對個人存取 token、client、使用者或群組拒絕某些 tool,或限定只能用某些 tool;MCP Gate 會評估誰能呼叫什麼(先拒絕、再限定、再看 scope),同一個 FastMCP middleware 會在一次輪詢內於你的 server 上套用這些規則:被拒絕的 tool 會隱藏,需要 token 沒有的 scope 的 tool 會被拒絕,錯誤訊息寫出所需的 scope。server 的 middleware 太舊而無法執行規則時,管理台會提出警告。見 [Tool 存取規則](docs/reference.zh-TW.md#tool-存取規則)。
+- **Tool 存取規則(1.6 進行中)。** 把 tool 放進 scope(工具組合),對個人存取 token、client、使用者或群組拒絕某些 tool,或限定只能用某些 tool;MCP Gate 會評估誰能呼叫什麼(先拒絕、再限定、再看 scope),同一個 FastMCP middleware 會在一次輪詢內於你的 server 上套用這些規則:被拒絕的 tool 會隱藏,需要 token 沒有的 scope 的 tool 會以 HTTP 403 `insufficient_scope` 拒絕(追加授權:Claude Code 會請你重新登入取得該 scope,再重試呼叫),錯誤訊息寫出所需的 scope。同意畫面會列出每個 scope 能使用的 tool,並標出新增的部分。server 的 middleware 太舊而無法執行規則時,管理台會提出警告。見 [Tool 存取規則](docs/reference.zh-TW.md#tool-存取規則)。
 - **Marketplace 與 orchestrator。** 從 catalog 部署 MCP server,或貼一段 `{command, args, env}`,由 MCP Gate 掛上 HTTP bridge,跑在 Docker 或本機行程裡。
 - **零設定啟動。** 預設 SQLite、首次啟動自動產生密鑰、在瀏覽器裡建立擁有者帳號;換 PostgreSQL 只要一個環境變數。管理台有英文與繁體中文。
 
@@ -99,7 +99,7 @@ docker logs mcp-gate | grep "Setup token"
 把 [`examples/mcp_gate_hooks.py`](examples/mcp_gate_hooks.py) 複製到 server 旁邊。裡面是 `MCPGateVerifier`:FastMCP 的 `JWTVerifier` 再加上撤銷清單與使用回報;以及 `MCPGateToolPinning`:一個 FastMCP middleware,會隱藏管理員還沒核准的 tools。只需要 `fastmcp` 和 `httpx`。接著把下面這段存成 `server.py`(就是 [`examples/fastmcp_server_hooks.py`](examples/fastmcp_server_hooks.py)):
 
 ```python
-"""A FastMCP server protected by MCP Gate, with the revocation feed, tool approvals and tool access rules.
+"""A FastMCP server protected by MCP Gate, with the revocation feed, tool approvals, tool access rules and step-up.
 
 Every request must carry an access token issued by MCP Gate for this server's audience. Tokens are verified
 offline against MCP Gate's JWKS; MCP Gate is never on the request path. When a resource-server client is
@@ -113,9 +113,11 @@ configured (MCP_GATE_CLIENT_ID / MCP_GATE_CLIENT_SECRET):
 - The same middleware applies the server's tool access rules to each token: a tool denied to the caller (or
   outside its "only these tools" rule) is hidden; a tool that needs a scope the token lacks is listed, and calling
   it fails with an error naming the scope. Rules set in the console reach the server within one poll.
+- MCPGateScopeGate turns that refusal into a real HTTP 403 `insufficient_scope` challenge (step-up), so a client
+  that supports it asks the user for the scope and retries; the error text names the scope either way.
 
     pip install fastmcp httpx          # or: uv add fastmcp httpx
-    cp examples/mcp_gate_hooks.py .    # MCPGateVerifier and MCPGateToolPinning live in that single file
+    cp examples/mcp_gate_hooks.py .    # MCPGateVerifier, MCPGateToolPinning and MCPGateScopeGate: one file
     MCP_GATE_URL=http://localhost:4568 python server.py
 
 Before starting it, register the server in the MCP Gate console (Services -> Register Service: host
@@ -130,8 +132,9 @@ from fastmcp import FastMCP
 from fastmcp.server.auth import RemoteAuthProvider
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 from fastmcp.server.dependencies import get_access_token
+from starlette.middleware import Middleware
 
-from mcp_gate_hooks import MCPGateToolPinning, MCPGateVerifier
+from mcp_gate_hooks import MCPGateScopeGate, MCPGateToolPinning, MCPGateVerifier
 
 MCP_GATE = os.environ.get("MCP_GATE_URL", "http://localhost:4568").rstrip("/")  # MCP Gate's OAUTH_ISSUER
 HOST = os.environ.get("MCP_HOST", "127.0.0.1")
@@ -147,6 +150,7 @@ verifier_settings = dict(
 )
 
 middleware = []
+pinning = None
 if os.environ.get("MCP_GATE_CLIENT_ID"):
     # Offline verification plus the revocation feed and usage reports.
     verifier = MCPGateVerifier(
@@ -157,12 +161,13 @@ if os.environ.get("MCP_GATE_CLIENT_ID"):
         flush_interval=30,  # seconds between usage reports
     )
     # Only tools approved in the console are listed and callable, and the access rules apply to each token.
-    middleware.append(MCPGateToolPinning(
+    pinning = MCPGateToolPinning(
         verifier,
         cache_file=os.environ.get("MCP_GATE_POLICY_CACHE", "mcp_gate_policy.json"),  # last approvals + rules
         poll_interval=15,   # seconds between tool-policy polls
         fail_open=False,    # True: list every tool until the first list arrives (default: hide them all)
-    ))
+    )
+    middleware.append(pinning)
 else:
     # Offline verification only: a revoked token keeps working until it expires, and every tool is listed.
     verifier = JWTVerifier(**verifier_settings)
@@ -196,10 +201,17 @@ def whoami() -> dict:
 if __name__ == "__main__":
     feeds = "on" if isinstance(verifier, MCPGateVerifier) else "off"
     print(f"MCP Gate: {MCP_GATE}   audience: {AUDIENCE}   revocation feed: {feeds}   "
-          f"tool approvals and access rules: {feeds}")
+          f"tool approvals, access rules and step-up: {feeds}")
     # Serves MCP 2026-07-28 (stateless) and older clients on the same endpoint. Add stateless_http=True to keep no
     # sessions for older clients either (e.g. behind a load balancer); MCPGateVerifier and the middleware work both ways.
-    mcp.run(transport="http", host=HOST, port=PORT)
+    # The step-up gate sits in front of FastMCP's HTTP handler (an ASGI middleware), next to the pinning middleware.
+    http_middleware = [Middleware(
+        MCPGateScopeGate,
+        pinning=pinning,
+        server=mcp,
+        challenge_includes_token_scopes=False,  # True: also name the token's scopes, for clients that do not union
+    )] if pinning else []
+    mcp.run(transport="http", host=HOST, port=PORT, middleware=http_middleware)
 ```
 
 ### 4. 執行
@@ -212,7 +224,7 @@ export MCP_GATE_CLIENT_SECRET=…
 python server.py
 ```
 
-它會印出 `MCP Gate: http://localhost:4568   audience: http://127.0.0.1:8000/mcp   revocation feed: on   tool approvals and access rules: on`。幾秒內,管理台上這台 server 的頁面就會顯示 **Revocation feed: Wired** 與 **Tool approvals: Enforced by the server**,下方還有 **存取規則已執行**。
+它會印出 `MCP Gate: http://localhost:4568   audience: http://127.0.0.1:8000/mcp   revocation feed: on   tool approvals, access rules and step-up: on`。幾秒內,管理台上這台 server 的頁面就會顯示 **Revocation feed: Wired** 與 **Tool approvals: Enforced by the server**,下方還有 **存取規則已執行**。
 
 開啟 tool 核准後,新的 server 在你核准之前不會列出任何 tool。第一次有 client 列出 tools 時,server 會把 `hello` 和 `whoami` 回報給 MCP Gate,管理台上這台 server 的頁面就會顯示它們待核准、由 server 回報。看過定義後按 **Approve all**;一次輪詢之內(範例是 15 秒)兩個 tool 就會列出來。之後只要某個 tool 的名稱、說明或 schema 改變,它會立刻被隱藏,並附上與已核准版本的差異,等你再次核准。見 [Server 上的 tool 核准](docs/reference.zh-TW.md#server-上的-tool-核准)。
 

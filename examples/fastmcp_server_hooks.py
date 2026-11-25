@@ -1,4 +1,4 @@
-"""A FastMCP server protected by MCP Gate, with the revocation feed, tool approvals and tool access rules.
+"""A FastMCP server protected by MCP Gate, with the revocation feed, tool approvals, tool access rules and step-up.
 
 Every request must carry an access token issued by MCP Gate for this server's audience. Tokens are verified
 offline against MCP Gate's JWKS; MCP Gate is never on the request path. When a resource-server client is
@@ -12,9 +12,11 @@ configured (MCP_GATE_CLIENT_ID / MCP_GATE_CLIENT_SECRET):
 - The same middleware applies the server's tool access rules to each token: a tool denied to the caller (or
   outside its "only these tools" rule) is hidden; a tool that needs a scope the token lacks is listed, and calling
   it fails with an error naming the scope. Rules set in the console reach the server within one poll.
+- MCPGateScopeGate turns that refusal into a real HTTP 403 `insufficient_scope` challenge (step-up), so a client
+  that supports it asks the user for the scope and retries; the error text names the scope either way.
 
     pip install fastmcp httpx          # or: uv add fastmcp httpx
-    cp examples/mcp_gate_hooks.py .    # MCPGateVerifier and MCPGateToolPinning live in that single file
+    cp examples/mcp_gate_hooks.py .    # MCPGateVerifier, MCPGateToolPinning and MCPGateScopeGate: one file
     MCP_GATE_URL=http://localhost:4568 python server.py
 
 Before starting it, register the server in the MCP Gate console (Services -> Register Service: host
@@ -29,8 +31,9 @@ from fastmcp import FastMCP
 from fastmcp.server.auth import RemoteAuthProvider
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 from fastmcp.server.dependencies import get_access_token
+from starlette.middleware import Middleware
 
-from mcp_gate_hooks import MCPGateToolPinning, MCPGateVerifier
+from mcp_gate_hooks import MCPGateScopeGate, MCPGateToolPinning, MCPGateVerifier
 
 MCP_GATE = os.environ.get("MCP_GATE_URL", "http://localhost:4568").rstrip("/")  # MCP Gate's OAUTH_ISSUER
 HOST = os.environ.get("MCP_HOST", "127.0.0.1")
@@ -46,6 +49,7 @@ verifier_settings = dict(
 )
 
 middleware = []
+pinning = None
 if os.environ.get("MCP_GATE_CLIENT_ID"):
     # Offline verification plus the revocation feed and usage reports.
     verifier = MCPGateVerifier(
@@ -56,12 +60,13 @@ if os.environ.get("MCP_GATE_CLIENT_ID"):
         flush_interval=30,  # seconds between usage reports
     )
     # Only tools approved in the console are listed and callable, and the access rules apply to each token.
-    middleware.append(MCPGateToolPinning(
+    pinning = MCPGateToolPinning(
         verifier,
         cache_file=os.environ.get("MCP_GATE_POLICY_CACHE", "mcp_gate_policy.json"),  # last approvals + rules
         poll_interval=15,   # seconds between tool-policy polls
         fail_open=False,    # True: list every tool until the first list arrives (default: hide them all)
-    ))
+    )
+    middleware.append(pinning)
 else:
     # Offline verification only: a revoked token keeps working until it expires, and every tool is listed.
     verifier = JWTVerifier(**verifier_settings)
@@ -95,7 +100,14 @@ def whoami() -> dict:
 if __name__ == "__main__":
     feeds = "on" if isinstance(verifier, MCPGateVerifier) else "off"
     print(f"MCP Gate: {MCP_GATE}   audience: {AUDIENCE}   revocation feed: {feeds}   "
-          f"tool approvals and access rules: {feeds}")
+          f"tool approvals, access rules and step-up: {feeds}")
     # Serves MCP 2026-07-28 (stateless) and older clients on the same endpoint. Add stateless_http=True to keep no
     # sessions for older clients either (e.g. behind a load balancer); MCPGateVerifier and the middleware work both ways.
-    mcp.run(transport="http", host=HOST, port=PORT)
+    # The step-up gate sits in front of FastMCP's HTTP handler (an ASGI middleware), next to the pinning middleware.
+    http_middleware = [Middleware(
+        MCPGateScopeGate,
+        pinning=pinning,
+        server=mcp,
+        challenge_includes_token_scopes=False,  # True: also name the token's scopes, for clients that do not union
+    )] if pinning else []
+    mcp.run(transport="http", host=HOST, port=PORT, middleware=http_middleware)
