@@ -301,12 +301,13 @@ def service_revocation_feed(service_id: str, db: Session = Depends(get_db), _: A
 def service_policy_feed(service_id: str, db: Session = Depends(get_db), _: AdminUser = Depends(get_current_user)):
     """Whether this server enforces tool approvals (#33): the resource servers bound to it and when they last read
     the tool policy feed (`state`: active | stale | never_polled | not_wired). A server whose pinning middleware
-    polls hides unapproved tools; any other server only has its tools' state shown here."""
+    polls hides unapproved tools; any other server only has its tools' state shown here. `rules_enforced` says
+    whether its middleware also applies tool access rules (#37; it advertised `rules1`)."""
     try:
         service = ServiceAdapter.get_existing(db, service_id)
     except AdapterError as e:
         raise _adapter_exc(e)
-    return policy_feed.policy_feed_status(db, service.effective_audience)
+    return policy_feed.policy_feed_status(db, service.effective_audience, service)
 
 
 @router.get("/revocation-feed")

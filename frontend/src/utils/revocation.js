@@ -33,3 +33,17 @@ export function revocationNote(t, status, token, formatTime = (v) => v) {
   }
   return t('confirm.revokeFeedNotWired', { server, expires: formatTime(token.expires_at) })
 }
+
+/**
+ * Whether the server also enforces tool access rules (#37), from the tool-policy-feed status
+ * (GET /api/oauth/services/{id}/policy-feed): `rules_enforced` is true when every resource server that read the feed
+ * advertised `rules1`, false when one did not, null when none has read it.
+ *
+ * Returns null (nothing to show: the feed was never read), 'enforced', 'not_enforced' (a 1.5 middleware, nothing to
+ * enforce yet) or 'not_enforced_warn' (the server has rules, scoped tools or "require a scope" that are ignored).
+ */
+export function accessRulesState(status) {
+  if (!status || status.rules_enforced == null) return null
+  if (status.rules_enforced) return 'enforced'
+  return status.has_access_policy ? 'not_enforced_warn' : 'not_enforced'
+}

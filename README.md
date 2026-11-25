@@ -27,7 +27,7 @@ MCP Gate puts standards-based authentication in front of every MCP server you ru
 - **A server registry.** Register or scan MCP servers, sync their tools, watch their health, and see each tool list as a given token sees it ("Inspect as"). It speaks MCP 2026-07-28 (`server/discover`, stateless servers) and falls back to the `initialize` handshake for servers on 2024-11-05 to 2025-11-25; each server's page shows which one it answered with. See [MCP protocol versions](docs/reference.md#mcp-protocol-versions).
 - **Tool pinning.** Every tool definition is pinned by a SHA-256 hash; a new or changed tool waits for an admin, who sees a diff against the approved version before approving or rejecting it. A FastMCP middleware on your server hides every unapproved tool and reports new ones at once. See [Tool pinning and approval](docs/reference.md#tool-pinning-and-approval).
 - **Poisoning scan.** Built-in rules flag hidden instructions, invisible characters, mentions of other servers' tools, requests for secrets, suspicious URLs and encoded text in a tool definition, highlighted on the approval card. No model and no network; findings inform the approval and never block on their own. See [Poisoning scan](docs/reference.md#poisoning-scan).
-- **Tool access rules (1.6, in progress).** Put tools in scopes (bundles), deny tools to a personal access token, client, user or group, or limit them to a set of tools; MCP Gate evaluates who may call what (deny, then "only", then scope). Servers start enforcing the rules with the next step of 1.6. See [Tool access rules](docs/reference.md#tool-access-rules).
+- **Tool access rules (1.6, in progress).** Put tools in scopes (bundles), deny tools to a personal access token, client, user or group, or limit them to a set of tools; MCP Gate evaluates who may call what (deny, then "only", then scope), and the same FastMCP middleware applies the rules on your server within one poll: denied tools are hidden, a tool that needs a scope the token lacks is refused with the scope named. The console warns when a server's middleware is too old to enforce them. See [Tool access rules](docs/reference.md#tool-access-rules).
 - **Marketplace and orchestrator.** Deploy MCP servers from a catalog, or paste a `{command, args, env}` block and let MCP Gate run it in Docker or as a local process behind an HTTP bridge.
 - **Zero-config start.** SQLite by default, secrets generated on first run, an in-browser setup for the owner account; PostgreSQL is one environment variable away. The console speaks English and Traditional Chinese.
 
@@ -99,7 +99,7 @@ Copy the client id and secret; the secret is shown once. The same client also re
 Copy [`examples/mcp_gate_hooks.py`](examples/mcp_gate_hooks.py) next to your server. It holds `MCPGateVerifier`, FastMCP's `JWTVerifier` plus the revocation feed and usage reports, and `MCPGateToolPinning`, a FastMCP middleware that hides every tool an admin has not approved. It needs only `fastmcp` and `httpx`. Then save this as `server.py` (it is [`examples/fastmcp_server_hooks.py`](examples/fastmcp_server_hooks.py)):
 
 ```python
-"""A FastMCP server protected by MCP Gate, with the revocation feed and tool approvals.
+"""A FastMCP server protected by MCP Gate, with the revocation feed, tool approvals and tool access rules.
 
 Every request must carry an access token issued by MCP Gate for this server's audience. Tokens are verified
 offline against MCP Gate's JWKS; MCP Gate is never on the request path. When a resource-server client is
@@ -110,6 +110,9 @@ configured (MCP_GATE_CLIENT_ID / MCP_GATE_CLIENT_SECRET):
 - MCPGateToolPinning lists and runs only the tools an admin approved in the console. A new or changed tool is
   hidden at once and shows up in the console as pending. The approved list is cached in MCP_GATE_POLICY_CACHE,
   so a restart while MCP Gate is down keeps it; with no list at all every tool stays hidden.
+- The same middleware applies the server's tool access rules to each token: a tool denied to the caller (or
+  outside its "only these tools" rule) is hidden; a tool that needs a scope the token lacks is listed, and calling
+  it fails with an error naming the scope. Rules set in the console reach the server within one poll.
 
     pip install fastmcp httpx          # or: uv add fastmcp httpx
     cp examples/mcp_gate_hooks.py .    # MCPGateVerifier and MCPGateToolPinning live in that single file
@@ -153,10 +156,10 @@ if os.environ.get("MCP_GATE_CLIENT_ID"):
         poll_interval=15,   # seconds between revocation-feed polls
         flush_interval=30,  # seconds between usage reports
     )
-    # Only tools approved in the console are listed and callable.
+    # Only tools approved in the console are listed and callable, and the access rules apply to each token.
     middleware.append(MCPGateToolPinning(
         verifier,
-        cache_file=os.environ.get("MCP_GATE_POLICY_CACHE", "mcp_gate_policy.json"),  # last approved list
+        cache_file=os.environ.get("MCP_GATE_POLICY_CACHE", "mcp_gate_policy.json"),  # last approvals + rules
         poll_interval=15,   # seconds between tool-policy polls
         fail_open=False,    # True: list every tool until the first list arrives (default: hide them all)
     ))
@@ -192,7 +195,8 @@ def whoami() -> dict:
 
 if __name__ == "__main__":
     feeds = "on" if isinstance(verifier, MCPGateVerifier) else "off"
-    print(f"MCP Gate: {MCP_GATE}   audience: {AUDIENCE}   revocation feed: {feeds}   tool approvals: {feeds}")
+    print(f"MCP Gate: {MCP_GATE}   audience: {AUDIENCE}   revocation feed: {feeds}   "
+          f"tool approvals and access rules: {feeds}")
     # Serves MCP 2026-07-28 (stateless) and older clients on the same endpoint. Add stateless_http=True to keep no
     # sessions for older clients either (e.g. behind a load balancer); MCPGateVerifier and the middleware work both ways.
     mcp.run(transport="http", host=HOST, port=PORT)
@@ -208,7 +212,7 @@ export MCP_GATE_CLIENT_SECRET=…
 python server.py
 ```
 
-It prints `MCP Gate: http://localhost:4568   audience: http://127.0.0.1:8000/mcp   revocation feed: on   tool approvals: on`. Within a few seconds the server's page in the console shows **Revocation feed: Wired** and **Tool approvals: Enforced by the server**.
+It prints `MCP Gate: http://localhost:4568   audience: http://127.0.0.1:8000/mcp   revocation feed: on   tool approvals and access rules: on`. Within a few seconds the server's page in the console shows **Revocation feed: Wired** and **Tool approvals: Enforced by the server**, with **Access rules enforced** under it.
 
 With tool approvals on, a new server lists no tools until you approve them. The first time a client lists them, the server reports `hello` and `whoami` to MCP Gate, and the server's page shows them as pending, reported by the server. Read the definitions and press **Approve all**; within one poll (15 seconds in the example) both are listed. From then on, a tool whose name, description or schema changes is hidden at once and waits for your approval again, with a diff against the approved version. See [Tool approvals on the server](docs/reference.md#tool-approvals-on-the-server).
 

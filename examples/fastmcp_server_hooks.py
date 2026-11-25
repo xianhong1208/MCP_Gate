@@ -1,4 +1,4 @@
-"""A FastMCP server protected by MCP Gate, with the revocation feed and tool approvals.
+"""A FastMCP server protected by MCP Gate, with the revocation feed, tool approvals and tool access rules.
 
 Every request must carry an access token issued by MCP Gate for this server's audience. Tokens are verified
 offline against MCP Gate's JWKS; MCP Gate is never on the request path. When a resource-server client is
@@ -9,6 +9,9 @@ configured (MCP_GATE_CLIENT_ID / MCP_GATE_CLIENT_SECRET):
 - MCPGateToolPinning lists and runs only the tools an admin approved in the console. A new or changed tool is
   hidden at once and shows up in the console as pending. The approved list is cached in MCP_GATE_POLICY_CACHE,
   so a restart while MCP Gate is down keeps it; with no list at all every tool stays hidden.
+- The same middleware applies the server's tool access rules to each token: a tool denied to the caller (or
+  outside its "only these tools" rule) is hidden; a tool that needs a scope the token lacks is listed, and calling
+  it fails with an error naming the scope. Rules set in the console reach the server within one poll.
 
     pip install fastmcp httpx          # or: uv add fastmcp httpx
     cp examples/mcp_gate_hooks.py .    # MCPGateVerifier and MCPGateToolPinning live in that single file
@@ -52,10 +55,10 @@ if os.environ.get("MCP_GATE_CLIENT_ID"):
         poll_interval=15,   # seconds between revocation-feed polls
         flush_interval=30,  # seconds between usage reports
     )
-    # Only tools approved in the console are listed and callable.
+    # Only tools approved in the console are listed and callable, and the access rules apply to each token.
     middleware.append(MCPGateToolPinning(
         verifier,
-        cache_file=os.environ.get("MCP_GATE_POLICY_CACHE", "mcp_gate_policy.json"),  # last approved list
+        cache_file=os.environ.get("MCP_GATE_POLICY_CACHE", "mcp_gate_policy.json"),  # last approvals + rules
         poll_interval=15,   # seconds between tool-policy polls
         fail_open=False,    # True: list every tool until the first list arrives (default: hide them all)
     ))
@@ -91,7 +94,8 @@ def whoami() -> dict:
 
 if __name__ == "__main__":
     feeds = "on" if isinstance(verifier, MCPGateVerifier) else "off"
-    print(f"MCP Gate: {MCP_GATE}   audience: {AUDIENCE}   revocation feed: {feeds}   tool approvals: {feeds}")
+    print(f"MCP Gate: {MCP_GATE}   audience: {AUDIENCE}   revocation feed: {feeds}   "
+          f"tool approvals and access rules: {feeds}")
     # Serves MCP 2026-07-28 (stateless) and older clients on the same endpoint. Add stateless_http=True to keep no
     # sessions for older clients either (e.g. behind a load balancer); MCPGateVerifier and the middleware work both ways.
     mcp.run(transport="http", host=HOST, port=PORT)

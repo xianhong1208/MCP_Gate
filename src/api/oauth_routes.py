@@ -371,7 +371,8 @@ def _usage_report(request: Request, db: Session, form: dict) -> JSONResponse:
 @router.post("/oauth/policy")
 async def tool_policy(request: Request, db: Session = Depends(get_db)):
     """Tool policy feed (#33) for an MCP server that enforces tool approvals itself: the hashes of its tool
-    definitions by state (approved / pending / rejected) and the hash version. Send back the `etag` you hold to get
+    definitions by state (approved / pending / rejected) and the hash version. Send `features=rules1` to also get the
+    server's tool access policy (format 2, #37). Send back the `etag` you hold to get
     `{"unchanged": true}` when nothing changed. Requires a resource server (a console-registered confidential
     client bound to an MCP server); only that server's tools are listed."""
     return await _off_loop(request, _form, _tool_policy, db)
@@ -380,7 +381,8 @@ async def tool_policy(request: Request, db: Session = Depends(get_db)):
 def _tool_policy(request: Request, db: Session, form: dict) -> JSONResponse:
     try:
         caller = _authenticate_client(request, db, form)
-        return JSONResponse(content=policy_feed.policy_feed(db, caller=caller, etag=form.get("etag")),
+        return JSONResponse(content=policy_feed.policy_feed(db, caller=caller, etag=form.get("etag"),
+                                                            features=form.get("features")),
                             headers=NO_STORE)
     except OAuthError as e:
         db.rollback()

@@ -16,7 +16,7 @@ import ScopeEditor from '../components/ScopeEditor'
 import ClientConfigPanel from '../components/ClientConfigPanel'
 import MarkdownLite from '../components/MarkdownLite'
 import { copyToClipboard } from '../utils/clipboard'
-import { feedTone, revocationReachesServer } from '../utils/revocation'
+import { accessRulesState, feedTone, revocationReachesServer } from '../utils/revocation'
 import { toolChanges } from '../utils/toolDiff'
 import { countBySeverity, excerptSegments, groupByRule, highlightSegments, needlesFor, plainText, sortFindings, toolsNeedingConfirm } from '../utils/toolFindings'
 import { useConfirm } from '../contexts/ConfirmContext'
@@ -90,6 +90,30 @@ function PolicyFeedStatus({ status }) {
       </span>
       {status.state !== 'active' && (
         <span className="mt-1 block text-xs text-muted-foreground">{t('services.detail.policyHint')}</span>
+      )}
+      <AccessRulesStatus status={status} />
+    </span>
+  )
+}
+
+/** Whether the server's middleware also enforces tool access rules (#37: it advertised `rules1` on its last poll) */
+function AccessRulesStatus({ status }) {
+  const { t } = useTranslation()
+  const rules = accessRulesState(status)
+  if (!rules) return null
+  const tone = rules === 'enforced' ? 'success' : rules === 'not_enforced_warn' ? 'warning' : 'neutral'
+  return (
+    <span className="mt-1.5 block" data-testid="access-rules-status" data-state={rules}>
+      <span className="flex items-start justify-end gap-1.5">
+        <span className="mt-[0.45em] flex shrink-0"><StatusDot tone={tone} /></span>
+        <span className={rules === 'not_enforced_warn' ? 'text-right font-medium text-foreground' : 'text-right'}>
+          {rules === 'enforced' ? t('services.detail.rulesEnforced') : t('services.detail.rulesNotEnforced')}
+        </span>
+      </span>
+      {rules !== 'enforced' && (
+        <span className="mt-1 block text-xs text-muted-foreground">
+          {rules === 'not_enforced_warn' ? t('services.detail.rulesNotEnforcedHint') : t('services.detail.rulesNotEnforcedIdle')}
+        </span>
       )}
     </span>
   )
