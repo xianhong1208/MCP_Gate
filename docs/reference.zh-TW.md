@@ -197,9 +197,66 @@ MCP Gate 只記錄這些決定;它不在 client 與 server 之間,所以單靠�
 - **格式 2。** `features` 是以空白或逗號分隔、說明你的實作會執行哪些功能的清單;MCP Gate 會存在 client 上(`policy_features`,小寫、已知的排前面、最多 64 字元),並顯示在管理台。帶 `rules1` 時回應格式 2:同樣的欄位再加上 `"rules_version": 1`、`"unscoped_tools": "allow" | "require"`、`"tool_scopes": {"<tool>": {"any_of": [...], "challenge": "<scope>"}}` 與 `"rules": [{"id", "effect", "subject": {"kind": "pat" | "client" | "user", "id"}, "tools": [...] | ["*"], "expires_at": <unix 秒> | null}]`:正是評估器的輸入(見 [Tool 存取規則](#tool-存取規則)),只含未過期的規則,群組已展開成 `user` 規則。etag 涵蓋這些內容,所以規則、tool 的 scope、*必須有 scope*、群組成員有任何變動或刪除 scope,都會在 server 下一次輪詢時送到;只有規則變動時,格式 1 的回應不會改變。沒有 `rules1` 就維持格式 1,和 1.5 相同。格式 2 的回應要嘛整份套用、要嘛完全不用:不認得的 `rules_version` 不得套用(沿用先前的 policy),不認得的規則 `effect` 視為拒絕它列出的 tool。
 - `POST /oauth/tool-report`,`tools` 是 `tools/list` 回傳格式的 tool 物件 JSON 陣列(最多 200 個、body 最大 2 MiB、每個 client 每分鐘 30 次、每份定義最大 64 KiB)。MCP Gate 會自己為每份定義計算雜湊:一併送來的 `hash` 只拿來比對,不同的會列在 `hash_mismatch`。回應是 `{"recorded": [{"name", "hash", "state", "new"}], "invalid": [{"index", "name", "reason"}], "hash_mismatch": [...]}`。回報和重新整理走同一套規則,只是它沒提到的 tool 不受影響。新的定義會以 `tool_report` 記入稽核日誌,執行者是該 resource server。
 
+### 1.6 的 tool 存取控制:各部分如何搭配
+
+1.6 決定誰可以呼叫 server 的哪個 tool。MCP Gate 從不在請求的路徑上:它儲存並評估 policy,透過 policy feed 送給每台 server,再由 server 用自己那份評估器執行。細節在後面幾節([Tool 存取規則](#tool-存取規則)、[追加授權](#追加授權),以及 [Server 上的 tool 核准](#server-上的-tool-核准) 裡的 feed 格式)。這一節跟著一次變更,從管理台一路走到被拒絕的呼叫。
+
+1. **管理員設定 policy**:在 server 的 *存取控制* 分頁、*工具組合* 與 *群組* 頁,或透過 API。把 tool 放進 scope(放了 tool 的 scope 就是工具組合);`deny` 與 `only` 規則指定一個個人存取 token、一個 OAuth client、一位使用者或一個群組;`unscoped_tools` 決定不在任何 scope 裡的 tool 是否允許。每次變更都會記入稽核日誌。
+2. **MCP Gate 組出這台 server 的 policy。** 它去掉過期的規則,並把每條群組規則展開成每位成員一條 `user` 規則,規則 id 不變、成員依序排列(`expand_groups`;由 `tests/fixtures/tool_policy_vectors.json` 裡的 `expansions` 釘住)。結果正是評估器的輸入;`GET /api/services/{id}/access` 以 `policy` 顯示它。
+3. **Policy feed 把它送出去。** server 的 middleware 每 15 秒帶 `features=rules1` 輪詢 `POST /oauth/policy`,收到**格式 2**:已核准、待核准、已拒絕的雜湊,加上 `rules_version`、`unscoped_tools`、`tool_scopes` 與 `rules`,共用一個 `etag`。變更在一次輪詢內送到 server,已經簽發的 token 也適用(個人存取 token 的 jti 不變,所以針對它的規則下一次呼叫就生效)。沒有變化時,回應只有 `{"unchanged": true, "etag", "now"}`。
+4. **Server 評估每個請求。** `MCPGateToolPinning` 用已驗證 token 的 `jti`、`client_id`、`sub` 與 `scope` 執行 `evaluate_access`:`hidden` 的 tool 不出現在 `tools/list`,`tools/call` 時和不存在的 tool 一樣被拒絕;`needs_scope` 的 tool 會列出,呼叫則回覆寫出所需 scope 的 tool 錯誤。
+5. **追加授權。** `MCPGateScopeGate` 是放在 FastMCP 前面的 ASGI middleware,它對同一個呼叫回 HTTP `403 insufficient_scope` 與該 tool 的 challenge scope,支援追加授權的 client 就會請使用者同意這個 scope,然後重試。
+6. **管理台回報狀態。** 每次輪詢都會記錄 server 執行哪些功能(`policy_features`);server 頁面與它的 *存取控制* 分頁會顯示**存取規則已執行**,或說明 server 的 middleware 太舊或沒有安裝。
+
+**範例。** 兩條規則(群組 `contractors` 只有一位成員 `u-7`)和兩個有 scope 的 tool,會得到下面這份格式 2 回應(雜湊清單已省略):
+
+```json
+{"format": 2, "hash_version": 1, "audience": "http://127.0.0.1:8000/mcp", "service_id": "…",
+ "tools": {"approved": ["…"], "pending": [], "rejected": []},
+ "rules_version": 1, "unscoped_tools": "allow",
+ "tool_scopes": {"delete_file": {"any_of": ["files:admin", "files:write"], "challenge": "files:write"},
+                 "read_file": {"any_of": ["files:read"], "challenge": "files:read"}},
+ "rules": [{"id": "r1", "effect": "deny", "subject": {"kind": "user", "id": "u-7"}, "tools": ["delete_file"], "expires_at": null},
+           {"id": "r2", "effect": "only", "subject": {"kind": "client", "id": "https://ci.example/client.json"},
+            "tools": ["search", "read_file"], "expires_at": null}],
+ "unchanged": false, "etag": "…", "now": 1795000000}
+```
+
+| Token | `search` | `read_file` | `delete_file` |
+|---|---|---|---|
+| 使用者 `u-1` 透過 Claude Code,scope `files:read` | 允許 | 允許 | 會列出;呼叫 → `needs_scope`,challenge `files:write`(有 gate 時回 403) |
+| 使用者 `u-7`(屬於 `contractors`),scope `files:read files:write` | 允許 | 允許 | 隱藏(`denied_by_rule`,`r1`) |
+| client `https://ci.example/client.json`,scope `files:read files:write` | 允許 | 允許 | 隱藏(`outside_only_rule`,`r2`) |
+
+**實作必須相符的版本。** 套用任何內容之前都會先檢查;不相符時整份回應(或快取)都不採用,繼續沿用先前的 policy,若還沒有任何 policy,所有 tool 維持隱藏。
+
+| 欄位 | 1.6 的值 | 由誰釘住 | Server 不認得這個值時 |
+|---|---|---|---|
+| `hash_version` | 1 | `tests/fixtures/tool_hash_vectors.json`(每個 tool 的標準 JSON 與 SHA-256) | 拒絕這份回應 |
+| `format` | 輪詢帶了 `rules1` 時為 2,否則為 1 | 本文件 | 拒絕這份回應;格式 1 代表只有核准清單 |
+| `rules_version` | 1 | `tests/fixtures/tool_policy_vectors.json`(43 筆判定,加上群組展開) | 拒絕這份回應 |
+| 規則的 `effect` | `deny`、`only` | 同一份向量 | 不認得的效果視為拒絕它列出的 tool(沒列出就是全部) |
+| 快取檔的 `format` | 2(1 只當作核准清單讀取) | `examples/mcp_gate_hooks.py` | 忽略快取 |
+
+MCP Gate 自己的測試會拿 `examples/mcp_gate_hooks.py` 跑這兩份向量檔,所以這個檔案的副本(或其他實作)只要能算出每一筆結果就是正確的。請把 fixtures 一起複製過去,在你的 server 的測試裡做同樣的檢查;MCP Gate 提高版本時,記得更新副本。
+
+**缺少什麼或連不上時。**
+
+| 狀況 | Server 的行為 |
+|---|---|
+| 從未連上 policy feed,也沒有可用的快取 | 所有 tool 隱藏(預設關閉);設 `fail_open=True` 則在收到第一份回應前列出所有 tool |
+| feed 回應過一次,之後連不到 MCP Gate | 最後一份核准清單與規則繼續套用,重啟後也一樣(快取檔,權限 600);`max_cache_age` 可限制快取的最長時間 |
+| 連不到 MCP Gate 期間,某條規則到了 `expires_at` | 到時就不再套用,不必等輪詢 |
+| Server 用的是 1.5 middleware | 只執行核准;規則被忽略;管理台顯示*存取規則未執行 — 請更新 middleware* |
+| Server 沒有 middleware | 什麼都不執行;管理台顯示這台 server 未執行核准 |
+| 請求帶的是 MCP Gate 的 probe token(`mcp_gate_probe`) | 列出所有 tool,不論是否核准、不論規則;所有呼叫都拒絕 |
+| 要立刻撤銷 | 用撤銷清單(撤銷 token 或授權):規則是長期的 policy,不是緊急切斷 |
+
+**接上一台 server。** 把它註冊為服務,註冊一個綁定它為 resource server 的機密 `client_credentials` client(撤銷清單、policy feed 與 tool 回報都用這個 client),再照 README 的完整範例加上 `MCPGateVerifier`、`MCPGateToolPinning` 與 `MCPGateScopeGate`。自帶一份 hooks 檔的 server 用它自己的設定開啟,請見該 server 的設定文件。
+
 ### Tool 存取規則
 
-*1.6 進行中。* MCP Gate 儲存並評估規則;執行 1.6 版 `MCPGateToolPinning` middleware 的 server 會從 policy feed(格式 2)收到規則,並在一次輪詢內執行(見 [Server 上的 tool 核准](#server-上的-tool-核准))。沒有這個 middleware,或用的是 1.5 版的 server 不會執行,管理台的 server 頁面會說明。缺少 scope 的呼叫:server 也執行 `MCPGateScopeGate` 時,會收到 HTTP 403 [追加授權](#追加授權)要求;否則會收到寫出所需 scope 的 tool 錯誤。
+*1.6。* MCP Gate 儲存並評估規則;執行 1.6 版 `MCPGateToolPinning` middleware 的 server 會從 policy feed(格式 2)收到規則,並在一次輪詢內執行(見 [Server 上的 tool 核准](#server-上的-tool-核准))。沒有這個 middleware,或用的是 1.5 版的 server 不會執行,管理台的 server 頁面會說明。缺少 scope 的呼叫:server 也執行 `MCPGateScopeGate` 時,會收到 HTTP 403 [追加授權](#追加授權)要求;否則會收到寫出所需 scope 的 tool 錯誤。
 
 一個 token 能不能呼叫 server 的某個 tool,依下列順序決定,先符合者為準:
 
