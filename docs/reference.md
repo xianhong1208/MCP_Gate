@@ -197,9 +197,66 @@ The feed and the report, for other implementations (form-encoded `POST`, authent
 - **Format 2.** `features` is a space- or comma-separated list of what your implementation enforces; MCP Gate stores it on the client (`policy_features`, lowercase tokens, known ones first, 64 characters at most) and shows it in the console. With `rules1` the answer is format 2: the same fields plus `"rules_version": 1`, `"unscoped_tools": "allow" | "require"`, `"tool_scopes": {"<tool>": {"any_of": [...], "challenge": "<scope>"}}` and `"rules": [{"id", "effect", "subject": {"kind": "pat" | "client" | "user", "id"}, "tools": [...] | ["*"], "expires_at": <unix seconds> | null}]`: exactly the evaluator's input (see [Tool access rules](#tool-access-rules)), unexpired rules only, groups already expanded into `user` rules. The etag covers it, so any change of a rule, a tool's scopes, *require a scope*, a group's members or a scope deleted reaches the server in its next poll; format 1 answers do not change when only rules change. Without `rules1` the answer stays format 1, as in 1.5. Apply a format 2 answer as a whole or not at all: an unknown `rules_version` must not be applied (keep the previous policy), and an unknown rule `effect` is a deny of the tools it names.
 - `POST /oauth/tool-report` with `tools` = a JSON array of tool objects as `tools/list` returns them (at most 200, body up to 2 MiB, 30 reports a minute per client, each definition up to 64 KiB). MCP Gate hashes every definition itself: a `hash` sent along is only compared, and a difference is listed in `hash_mismatch`. The answer is `{"recorded": [{"name", "hash", "state", "new"}], "invalid": [{"index", "name", "reason"}], "hash_mismatch": [...]}`. A report goes through the same rules as a refresh, except that tools it does not mention are left alone. New definitions are audited as `tool_report`, with the resource server as the actor.
 
+### Tool access in 1.6: how the parts fit
+
+1.6 decides who may call which tool of a server. MCP Gate is never on the request path: it stores and evaluates the policy, sends it to each server in the policy feed, and the server enforces it with its own copy of the evaluator. The sections after this one hold the details ([Tool access rules](#tool-access-rules), [Step-up](#step-up), and the feed under [Tool approvals on the server](#tool-approvals-on-the-server)). This one follows one change from the console to a refused call.
+
+1. **An admin sets the policy** on the server's *Access* tab, the *Bundles* and *Groups* pages, or the API: tools are put in scopes (a scope with tools is a bundle), `deny` and `only` rules name a personal access token, an OAuth client, a user or a group, and `unscoped_tools` says whether a tool in no scope is allowed. Every change is audited.
+2. **MCP Gate builds the server's policy.** It drops expired rules and expands each group rule into one `user` rule per member, with the same rule id, members sorted (`expand_groups`; the `expansions` in `tests/fixtures/tool_policy_vectors.json` pin it). The result is exactly the evaluator's input; `GET /api/services/{id}/access` shows it as `policy`.
+3. **The policy feed carries it.** The server's middleware polls `POST /oauth/policy` every 15 seconds with `features=rules1` and gets **format 2**: the approved, pending and rejected hashes plus `rules_version`, `unscoped_tools`, `tool_scopes` and `rules`, under one `etag`. A change reaches the server within one poll, already-issued tokens included (a personal access token keeps its jti, so a rule on it applies to the next call). When nothing changed the answer is only `{"unchanged": true, "etag", "now"}`.
+4. **The server evaluates every request.** `MCPGateToolPinning` runs `evaluate_access` on the verified token's `jti`, `client_id`, `sub` and `scope`: `hidden` tools are left out of `tools/list` and refused on `tools/call` like a tool that does not exist; `needs_scope` tools are listed and their call is refused with a tool error naming the scope.
+5. **Step-up.** `MCPGateScopeGate`, an ASGI middleware in front of FastMCP, answers that same call with HTTP `403 insufficient_scope` and the tool's challenge scope, so a client that supports step-up asks the user for it and retries.
+6. **The console reports back.** Each poll records the features the server enforces (`policy_features`); the server's page and its *Access* tab say **Access rules enforced**, or that the server's middleware is older or missing.
+
+**Example.** Two rules (the group `contractors` has one member, `u-7`) and two scoped tools give this format 2 answer (hash lists shortened):
+
+```json
+{"format": 2, "hash_version": 1, "audience": "http://127.0.0.1:8000/mcp", "service_id": "…",
+ "tools": {"approved": ["…"], "pending": [], "rejected": []},
+ "rules_version": 1, "unscoped_tools": "allow",
+ "tool_scopes": {"delete_file": {"any_of": ["files:admin", "files:write"], "challenge": "files:write"},
+                 "read_file": {"any_of": ["files:read"], "challenge": "files:read"}},
+ "rules": [{"id": "r1", "effect": "deny", "subject": {"kind": "user", "id": "u-7"}, "tools": ["delete_file"], "expires_at": null},
+           {"id": "r2", "effect": "only", "subject": {"kind": "client", "id": "https://ci.example/client.json"},
+            "tools": ["search", "read_file"], "expires_at": null}],
+ "unchanged": false, "etag": "…", "now": 1795000000}
+```
+
+| Token | `search` | `read_file` | `delete_file` |
+|---|---|---|---|
+| user `u-1` through Claude Code, scope `files:read` | allowed | allowed | listed; call → `needs_scope`, challenge `files:write` (403 with the gate) |
+| user `u-7` (in `contractors`), scope `files:read files:write` | allowed | allowed | hidden (`denied_by_rule`, `r1`) |
+| client `https://ci.example/client.json`, scope `files:read files:write` | allowed | allowed | hidden (`outside_only_rule`, `r2`) |
+
+**Versions an implementation must match.** Each is checked before anything is applied; on a mismatch the whole answer (or cache) is refused and the previous policy stays in force, or, with none yet, every tool stays hidden.
+
+| Field | 1.6 value | Pinned by | A server that does not know the value |
+|---|---|---|---|
+| `hash_version` | 1 | `tests/fixtures/tool_hash_vectors.json` (canonical JSON and SHA-256 of each tool) | refuses the answer |
+| `format` | 2 when the poll sent `rules1`, else 1 | this document | refuses the answer; a format 1 answer means approvals only |
+| `rules_version` | 1 | `tests/fixtures/tool_policy_vectors.json` (43 verdicts plus the group expansions) | refuses the answer |
+| rule `effect` | `deny`, `only` | the same vectors | treats an unknown effect as a deny of the tools it names (of every tool when it names none) |
+| cache file `format` | 2 (1 is read as approvals only) | `examples/mcp_gate_hooks.py` | ignores the cache |
+
+MCP Gate's own tests run `examples/mcp_gate_hooks.py` against both vector files, so a copy of that file (or another implementation) is correct when it reproduces every entry. Copy the fixtures with it and run the same check in your server's tests; when MCP Gate raises a version, update the copy.
+
+**When something is missing or down.**
+
+| Situation | What the server does |
+|---|---|
+| The policy feed was never reached and there is no usable cache | Every tool hidden (closed by default); `fail_open=True` lists every tool until the first answer instead |
+| The feed answered once, then MCP Gate is unreachable | The last approvals and rules keep applying, also across a restart (cache file, mode 600); `max_cache_age` bounds how old a cache may be |
+| A rule's `expires_at` passes while MCP Gate is unreachable | The rule stops applying at that time without a poll |
+| The server runs the 1.5 middleware | Approvals only; rules ignored; the console shows *Access rules not enforced — update the middleware* |
+| The server runs no middleware | Nothing is enforced; the console shows the server as not enforcing approvals |
+| A request carries MCP Gate's probe token (`mcp_gate_probe`) | Every tool listed, approved or not and whatever the rules; every call refused |
+| Revoke now | Use the revocation feed (revoke the token or the grant): rules are for standing policy, not emergency cut-off |
+
+**Wiring a server.** Register it as a service, register a confidential `client_credentials` client bound to it as its resource server (the same client reads the revocation feed, the policy feed and the tool report), then add `MCPGateVerifier`, `MCPGateToolPinning` and `MCPGateScopeGate` as in the README's complete example. A server that carries its own copy of the hooks file switches it on with its own setting; see that server's configuration docs.
+
 ### Tool access rules
 
-*1.6, in progress.* MCP Gate stores the rules and evaluates them, and a server running the 1.6 `MCPGateToolPinning` middleware receives them in the policy feed (format 2) and enforces them within one poll (see [Tool approvals on the server](#tool-approvals-on-the-server)). A server without that middleware, or with the 1.5 one, does not: the console says so on the server's page. A call that lacks a scope gets an HTTP 403 [step-up](#step-up) challenge when the server also runs `MCPGateScopeGate`, and otherwise a tool error naming the scope.
+*1.6.* MCP Gate stores the rules and evaluates them, and a server running the 1.6 `MCPGateToolPinning` middleware receives them in the policy feed (format 2) and enforces them within one poll (see [Tool approvals on the server](#tool-approvals-on-the-server)). A server without that middleware, or with the 1.5 one, does not: the console says so on the server's page. A call that lacks a scope gets an HTTP 403 [step-up](#step-up) challenge when the server also runs `MCPGateScopeGate`, and otherwise a tool error naming the scope.
 
 Who may call which tool of a server is decided in this order, first match wins:
 
