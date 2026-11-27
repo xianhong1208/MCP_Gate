@@ -306,9 +306,9 @@ function ScopesSection() {
 
   useEffect(() => { load() }, [load])
 
-  const save = async ({ name, description, isDefault }) => {
+  const save = async ({ name, title, description, isDefault }) => {
     try {
-      await oauthApi.scopes.upsert(name, { description, isDefault })
+      await oauthApi.scopes.upsert(name, { description, isDefault, title })
       toast.success(t('clients.scopes.saved'))
       await load()
       return true

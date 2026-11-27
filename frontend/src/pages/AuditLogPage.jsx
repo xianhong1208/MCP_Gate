@@ -14,6 +14,7 @@ import {
   Shield,
   Download,
   ChevronDown,
+  Users,
 } from 'lucide-react'
 import { auditApi } from '../services/api'
 import { exportAuditLogsToCSV } from '../utils/export'
@@ -50,6 +51,16 @@ const ACTION_KEYS = [
   'tool_reject',
   'tool_approve_all',
   'tool_report',
+  'tool_scope_set',
+  'tool_rule_create',
+  'tool_rule_update',
+  'tool_rule_delete',
+  'service_unscoped_tools_set',
+  'group_create',
+  'group_update',
+  'group_delete',
+  'group_member_add',
+  'group_member_remove',
   'scan_services',
   'admin_setup',
   'admin_login',
@@ -65,6 +76,7 @@ const resourceTypeIcons = {
   service: Server,
   admin: User,
   system: Shield,
+  group: Users,
 }
 
 const statusConfig = {
@@ -308,6 +320,7 @@ export default function AuditLogPage() {
                 <option value="service">{t('audit.resourceType.service')}</option>
                 <option value="admin">{t('audit.resourceType.admin')}</option>
                 <option value="system">{t('audit.resourceType.system')}</option>
+                <option value="group">{t('audit.resourceType.group')}</option>
               </Select>
             </Field>
             <Field label={t('audit.filters.status')}>

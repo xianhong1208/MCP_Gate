@@ -93,6 +93,71 @@ const qs = (params) => {
   return s ? `?${s}` : ''
 }
 
+// ==================== Tool access (#37): bundles, rules, groups ====================
+
+const svc = (id) => `/api/services/${encodeURIComponent(id)}`
+
+export const accessApi = {
+  /** Everything that decides who may call a server's tools: tools with their scopes, rules, assignable scopes */
+  async get(serviceId) {
+    return request(`${svc(serviceId)}/access`)
+  },
+  /** `allow` (a tool in no bundle is callable) or `require` (hidden until it is in one) */
+  async setUnscopedTools(serviceId, value) {
+    return request(`${svc(serviceId)}/access`, { method: 'PUT', body: JSON.stringify({ unscoped_tools: value }) })
+  },
+  /** Replace a tool's scopes; `challenge` null = the narrowest of them */
+  async setToolScopes(serviceId, toolId, { scopes, challenge }) {
+    return request(`${svc(serviceId)}/tools/${encodeURIComponent(toolId)}/scopes`, {
+      method: 'PUT',
+      body: JSON.stringify({ scopes, challenge: challenge || null }),
+    })
+  },
+  async createRule(serviceId, body) {
+    return request(`${svc(serviceId)}/access-rules`, { method: 'POST', body: JSON.stringify(body) })
+  },
+  async updateRule(serviceId, ruleId, body) {
+    return request(`${svc(serviceId)}/access-rules/${encodeURIComponent(ruleId)}`, { method: 'PUT', body: JSON.stringify(body) })
+  },
+  async deleteRule(serviceId, ruleId) {
+    return request(`${svc(serviceId)}/access-rules/${encodeURIComponent(ruleId)}`, { method: 'DELETE' })
+  },
+}
+
+export const groupsApi = {
+  async list() {
+    return request('/api/groups')
+  },
+  async get(groupId) {
+    return request(`/api/groups/${encodeURIComponent(groupId)}`)
+  },
+  async create({ name, description }) {
+    return request('/api/groups', { method: 'POST', body: JSON.stringify({ name, description: description || null }) })
+  },
+  async update(groupId, { name, description }) {
+    return request(`/api/groups/${encodeURIComponent(groupId)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ name, description: description || null }),
+    })
+  },
+  async delete(groupId) {
+    return request(`/api/groups/${encodeURIComponent(groupId)}`, { method: 'DELETE' })
+  },
+  async addMember(groupId, userId) {
+    return request(`/api/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(userId)}`, { method: 'PUT' })
+  },
+  async removeMember(groupId, userId) {
+    return request(`/api/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(userId)}`, { method: 'DELETE' })
+  },
+}
+
+export const usersApi = {
+  /** Console accounts (group members, rule subjects); a token's `sub` is the account id */
+  async list() {
+    return request('/api/users')
+  },
+}
+
 // ==================== Session (admin console login) ====================
 
 export const sessionApi = {
@@ -310,6 +375,12 @@ export const clientConfigApi = {
   },
 }
 
+function scopeBody({ description, isDefault, title }) {
+  const body = { description: description || null, is_default: !!isDefault }
+  if (title !== undefined) body.title = title || null
+  return body
+}
+
 export const oauthApi = {
   clients: {
     /** status: all | approved | pending | revoked */
@@ -360,10 +431,11 @@ export const oauthApi = {
     async list() {
       return request('/api/oauth/scopes')
     },
-    async upsert(name, { description, isDefault }) {
+    /** `title` (a bundle's display name, #37) is sent only when given; null / '' clears it */
+    async upsert(name, { description, isDefault, title }) {
       return request(`/api/oauth/scopes/${encodeURIComponent(name)}`, {
         method: 'PUT',
-        body: JSON.stringify({ description: description || null, is_default: !!isDefault }),
+        body: JSON.stringify(scopeBody({ description, isDefault, title })),
       })
     },
     async delete(name) {
@@ -375,10 +447,10 @@ export const oauthApi = {
     async list(serviceId) {
       return request(`/api/oauth/services/${encodeURIComponent(serviceId)}/scopes`)
     },
-    async upsert(serviceId, name, { description, isDefault }) {
+    async upsert(serviceId, name, { description, isDefault, title }) {
       return request(`/api/oauth/services/${encodeURIComponent(serviceId)}/scopes/${encodeURIComponent(name)}`, {
         method: 'PUT',
-        body: JSON.stringify({ description: description || null, is_default: !!isDefault }),
+        body: JSON.stringify(scopeBody({ description, isDefault, title })),
       })
     },
     async delete(serviceId, name) {

@@ -1,23 +1,24 @@
 import { useState, useEffect, useCallback } from 'react'
 import { formatDate, formatDateTime } from '../utils/format'
-import { useParams, useNavigate, useLocation, Link } from 'react-router-dom'
+import { useParams, useNavigate, useLocation, useSearchParams, Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import {
   Copy, Check, Trash2, Clock, RefreshCw, ChevronDown,
-  Activity, Key, Network, Edit3, Wrench, Code2, ShieldCheck, ShieldX, ShieldAlert, CheckCheck, ScanSearch,
+  Activity, Key, Network, Edit3, Wrench, Code2, ShieldCheck, ShieldX, ShieldAlert, CheckCheck, ScanSearch, LayoutGrid, Lock,
 } from 'lucide-react'
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
-import { servicesApi, statsApi, oauthApi } from '../services/api'
+import { servicesApi, statsApi, oauthApi, accessApi } from '../services/api'
 import LastChecked from '../components/LastChecked'
 import CodeBlock from '../components/CodeBlock'
 import ServiceFormModal from '../components/ServiceFormModal'
 import HealthIndicator from '../components/HealthIndicator'
-import ScopeEditor from '../components/ScopeEditor'
+import AccessPanel from '../components/access/AccessPanel'
 import ClientConfigPanel from '../components/ClientConfigPanel'
 import MarkdownLite from '../components/MarkdownLite'
 import { copyToClipboard } from '../utils/clipboard'
 import { accessRulesState, feedTone, revocationReachesServer } from '../utils/revocation'
 import { toolChanges } from '../utils/toolDiff'
+import { addToBundleBody, bundleChoices } from '../utils/access'
 import { countBySeverity, excerptSegments, groupByRule, highlightSegments, needlesFor, plainText, sortFindings, toolsNeedingConfirm } from '../utils/toolFindings'
 import { useConfirm } from '../contexts/ConfirmContext'
 import { useToast } from '../contexts/ToastContext'
@@ -25,7 +26,7 @@ import { KindBadge, StatusBadge, ScopeChips } from './TokensPage'
 import clsx from 'clsx'
 import {
   PageHeader, Button, IconButton, Badge, StatusDot, Card, CardHeader, SectionLabel, DescriptionList,
-  EmptyState, Alert, LoadingBlock, SegmentedControl, Select,
+  EmptyState, Alert, LoadingBlock, SegmentedControl, Select, Tabs,
 } from '../components/ui'
 
 // recharts stroke attrs cannot read CSS vars: give fallback colors; the real line color
@@ -306,8 +307,9 @@ function FieldDiff({ field, lines, folded = false, needles = [] }) {
 const FOLDED_WHEN_NEW = new Set(['inputSchema', 'outputSchema', 'annotations'])
 
 /** A pending tool version to approve or reject, compared with the approved one (or shown whole when it is new). */
-function ToolApprovalCard({ tool, onDecide, deciding }) {
+function ToolApprovalCard({ tool, onDecide, deciding, bundles = [] }) {
   const { t } = useTranslation()
+  const [bundle, setBundle] = useState('')
   const current = (tool.versions || []).find((v) => v.hash === tool.hash)
   const before = tool.approved_version?.definition || null
   const changes = toolChanges(before, current?.definition || {})
@@ -332,9 +334,16 @@ function ToolApprovalCard({ tool, onDecide, deciding }) {
             {before ? t('services.toolPin.changedHint', { date: formatDate(tool.approved_version.decided_at) }) : t('services.toolPin.newHint')}
           </p>
         </div>
-        <div className="flex shrink-0 gap-1.5">
+        <div className="flex min-w-0 max-w-full flex-wrap items-center justify-end gap-1.5">
+          {bundles.length > 0 && (
+            <Select size="sm" value={bundle} onChange={(e) => setBundle(e.target.value)} className="h-7 w-auto min-w-0 max-w-[12rem] py-0 text-xs"
+              title={t('access.approve.bundleHint')} aria-label={t('access.approve.bundleHint')} data-testid="approve-bundle">
+              <option value="">{t('access.approve.noBundle')}</option>
+              {bundles.map((b) => <option key={b.name} value={b.name}>{t('access.approve.addTo', { name: b.title || b.name })}</option>)}
+            </Select>
+          )}
           <Button variant="secondary" size="xs" icon={ShieldX} loading={busy} onClick={() => onDecide(tool, 'reject')}>{t('services.toolPin.reject')}</Button>
-          <Button variant="primary" size="xs" icon={ShieldCheck} loading={busy} onClick={() => onDecide(tool, 'approve')}>{t('services.toolPin.approve')}</Button>
+          <Button variant="primary" size="xs" icon={ShieldCheck} loading={busy} onClick={() => onDecide(tool, 'approve', bundle)}>{t('services.toolPin.approve')}</Button>
         </div>
       </div>
       {findings.length > 0 && <ToolFindings findings={findings} className="mt-3" />}
@@ -476,12 +485,10 @@ export default function ServiceDetailPage() {
 
   const [service, setService] = useState(null)
   const [scopes, setScopes] = useState([])
-  const [ownScopes, setOwnScopes] = useState([])
   // Who the tools/list request looks like to the server: 'scanner' | 'token:<jti>' (remembered per service)
   const [refreshIdentity, setRefreshIdentity] = useState(() => {
     try { return localStorage.getItem(`refreshIdentity:${decodedServiceId}`) || 'scanner' } catch { return 'scanner' }
   })
-  const [isLoadingOwnScopes, setIsLoadingOwnScopes] = useState(true)
   const [snippets, setSnippets] = useState(null)
   const [snippetVariant, setSnippetVariant] = useState('server')
   const [tokens, setTokens] = useState([])
@@ -498,35 +505,21 @@ export default function ServiceDetailPage() {
   const [revokingJti, setRevokingJti] = useState(null)
   const [feedStatus, setFeedStatus] = useState(null)
   const [policyStatus, setPolicyStatus] = useState(null)
+  const [access, setAccess] = useState(null)
+  const [searchParams, setSearchParams] = useSearchParams()
+  const tab = searchParams.get('tab') === 'access' ? 'access' : 'overview'
+  const chooseTab = (key) => setSearchParams(key === 'access' ? { tab: 'access' } : {}, { replace: true })
 
-  const reloadOwnScopes = useCallback(async () => {
-    const res = await oauthApi.serviceScopes.list(decodedServiceId)
-    setOwnScopes(res.own || [])
+  // The Access tab and the approval card's bundle picker read this; the enforcement status changes with it (#37)
+  const reloadAccess = useCallback(async () => {
+    const [acc, policy] = await Promise.all([
+      accessApi.get(decodedServiceId),
+      oauthApi.policyFeed.forService(decodedServiceId).catch(() => null),
+    ])
+    setAccess(acc)
+    if (policy) setPolicyStatus(policy)
+    return acc
   }, [decodedServiceId])
-
-  const saveOwnScope = async ({ name, description, isDefault }) => {
-    try {
-      await oauthApi.serviceScopes.upsert(decodedServiceId, name, { description, isDefault })
-      toast.success(t('clients.scopes.saved'))
-      await reloadOwnScopes()
-      return true
-    } catch (err) {
-      toast.error(err.message || t('clients.scopes.saveFailed'))
-      return false
-    }
-  }
-
-  const deleteOwnScope = async (name) => {
-    const ok = await confirmDelete(t('clients.scopes.deleteTarget', { name }))
-    if (!ok) return
-    try {
-      await oauthApi.serviceScopes.delete(decodedServiceId, name)
-      toast.success(t('clients.scopes.deleted'))
-      await reloadOwnScopes()
-    } catch (err) {
-      toast.error(err.message || t('clients.scopes.deleteFailed'))
-    }
-  }
 
   const reload = useCallback(async () => {
     const updated = await servicesApi.getById(decodedServiceId, true)
@@ -543,10 +536,10 @@ export default function ServiceDetailPage() {
       oauthApi.scopes.list().catch(() => ({ scopes: [] })),
       oauthApi.snippets(decodedServiceId).catch(() => null),
       oauthApi.tokens.list({ serviceId: decodedServiceId }).catch(() => ({ tokens: [] })),
-      oauthApi.serviceScopes.list(decodedServiceId).catch(() => ({ own: [] })),
+      accessApi.get(decodedServiceId).catch(() => null),
       oauthApi.revocationFeed.forService(decodedServiceId).catch(() => null),
       oauthApi.policyFeed.forService(decodedServiceId).catch(() => null),
-    ]).then(([svc, sc, sn, tk, own, feed, policy]) => {
+    ]).then(([svc, sc, sn, tk, acc, feed, policy]) => {
       if (cancelled) return
       setService(svc)
       setFeedStatus(feed)
@@ -554,8 +547,7 @@ export default function ServiceDetailPage() {
       setScopes(sc.scopes || [])
       setSnippets(sn)
       setTokens(tk.tokens || [])
-      setOwnScopes(own.own || [])
-      setIsLoadingOwnScopes(false)
+      setAccess(acc)
     }).catch((err) => {
       if (!cancelled) setError(err.message || t('services.detail.loadFailed'))
     }).finally(() => { if (!cancelled) setIsLoading(false) })
@@ -652,14 +644,25 @@ export default function ServiceDetailPage() {
     })
   }
 
-  const handleDecideTool = async (tool, decision) => {
+  const handleDecideTool = async (tool, decision, bundle = '') => {
     if (decision === 'approve' && !(await confirmHighFindings([tool]))) return
     setDecidingHash(tool.hash)
     try {
       if (decision === 'approve') await servicesApi.approveTool(decodedServiceId, tool.id, tool.hash)
       else await servicesApi.rejectTool(decodedServiceId, tool.id, tool.hash)
       toast.success(t(decision === 'approve' ? 'services.toolPin.approvedToast' : 'services.toolPin.rejectedToast', { name: tool.name }))
+      // "Approve and add to bundle" (#37): the tool keeps the bundles it is already in
+      const body = decision === 'approve' ? addToBundleBody(access?.tools.find((tl) => tl.id === tool.id), bundle) : null
+      if (body) {
+        try {
+          await accessApi.setToolScopes(decodedServiceId, tool.id, body)
+          toast.success(t('access.approve.added', { name: tool.name, bundle }))
+        } catch (err) {
+          toast.error(t('access.approve.addFailed', { message: err.message }))
+        }
+      }
       await reload()
+      await reloadAccess().catch(() => {})
     } catch (err) {
       toast.error(t('services.toolPin.decideFailed', { message: err.message }))
       await reload().catch(() => {})
@@ -675,6 +678,7 @@ export default function ServiceDetailPage() {
       const res = await servicesApi.approveAllTools(decodedServiceId, pendingTools.map((tl) => tl.hash))
       toast.success(t('services.toolPin.approvedAllToast', { count: res.approved }))
       await reload()
+      await reloadAccess().catch(() => {})
     } catch (err) {
       toast.error(t('services.toolPin.decideFailed', { message: err.message }))
       await reload().catch(() => {})
@@ -789,6 +793,23 @@ export default function ServiceDetailPage() {
         }
       />
 
+      <Tabs
+        value={tab}
+        onChange={chooseTab}
+        className="-mt-4 overflow-x-auto"
+        items={[
+          { key: 'overview', label: t('access.tabs.overview'), icon: LayoutGrid },
+          { key: 'access', label: t('access.tabs.access'), icon: Lock, count: access ? access.rules.filter((r) => !r.expired).length || null : null },
+        ]}
+      />
+
+      {tab === 'access' ? (
+        access ? (
+          <AccessPanel service={service} access={access} policyStatus={policyStatus} tokens={tokens} onChanged={reloadAccess} />
+        ) : (
+          <Alert tone="danger">{t('access.loadFailed')}</Alert>
+        )
+      ) : (
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         {/* Left column */}
         <div className="space-y-4 lg:col-span-2">
@@ -970,17 +991,6 @@ export default function ServiceDetailPage() {
             </div>
           </Card>
 
-          {/* Scopes this server declares for itself (in addition to the global registry) */}
-          <ScopeEditor
-            title={t('services.detail.ownScopesTitle')}
-            description={t('services.detail.ownScopesSubtitle')}
-            scopes={ownScopes}
-            isLoading={isLoadingOwnScopes}
-            onSave={saveOwnScope}
-            onDelete={deleteOwnScope}
-            emptyText={t('services.detail.ownScopesEmpty')}
-          />
-
           {/* Tools */}
           <Card>
             <CardHeader
@@ -1045,7 +1055,7 @@ export default function ServiceDetailPage() {
                   )}
                 </Alert>
                 {pendingTools.map((tool) => (
-                  <ToolApprovalCard key={tool.id} tool={tool} onDecide={handleDecideTool} deciding={decidingHash} />
+                  <ToolApprovalCard key={tool.id} tool={tool} onDecide={handleDecideTool} deciding={decidingHash} bundles={bundleChoices(access)} />
                 ))}
               </div>
             )}
@@ -1121,6 +1131,7 @@ export default function ServiceDetailPage() {
           </Card>
         </div>
       </div>
+      )}
 
       {showEditModal && (
         <ServiceFormModal mode="edit" service={service} scopes={scopes} onClose={() => setShowEditModal(false)} onSubmit={handleUpdate} />

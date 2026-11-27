@@ -21,6 +21,8 @@ import {
   Settings,
   Menu,
   X,
+  Package,
+  Users,
 } from 'lucide-react'
 import clsx from 'clsx'
 import { IconButton, Avatar, Wordmark } from './ui'
@@ -45,6 +47,8 @@ import { IconButton, Avatar, Wordmark } from './ui'
 const navItems = [
   { to: '/', icon: LayoutDashboard, labelKey: 'nav.dashboard', end: true },
   { to: '/services', icon: Server, labelKey: 'nav.services' },
+  { to: '/bundles', icon: Package, labelKey: 'nav.bundles' },
+  { to: '/groups', icon: Users, labelKey: 'nav.groups' },
   { to: '/tokens', end: true, icon: Key, labelKey: 'nav.tokens' },
   { to: '/tokens/create', icon: Plus, labelKey: 'nav.issueToken' },
   { to: '/clients', icon: Bot, labelKey: 'nav.clients' },

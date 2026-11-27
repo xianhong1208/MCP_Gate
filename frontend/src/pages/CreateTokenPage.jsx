@@ -3,17 +3,56 @@ import { formatDateTime } from '../utils/format'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { Check, Sparkles } from 'lucide-react'
-import { oauthApi, servicesApi } from '../services/api'
+import { accessApi, oauthApi, servicesApi } from '../services/api'
 import { useToast } from '../contexts/ToastContext'
 import CodeBlock from '../components/CodeBlock'
 import { describeScope } from '../utils/scopes'
 import { tokenSnippets } from '../utils/snippets'
+import { splitBundles } from '../utils/access'
 import clsx from 'clsx'
 import {
   PageHeader, Button, Badge, Card, CardHeader, Alert, Field, Input, Select, SectionLabel, DescriptionList,
 } from '../components/ui'
 
 const QUICK_DAYS = [7, 30, 90, 365]
+
+/** Checkbox rows of scopes; a bundle (#37) shows its title and the tools it unlocks on this server. */
+function ScopeList({ scopes, selected, onToggle, t }) {
+  return (
+    <div className="divide-y divide-border rounded-md border border-border">
+      {scopes.map((s) => {
+        const checked = selected.has(s.name)
+        const desc = describeScope(t, s.name, s.description)
+        return (
+          <label
+            key={s.name}
+            className={clsx(
+              'flex cursor-pointer items-start gap-3 px-4 py-3 transition-colors duration-200',
+              checked ? 'bg-primary-soft/60' : 'hover:bg-muted/60',
+            )}
+          >
+            <input type="checkbox" className="ui-checkbox mt-0.5" checked={checked} onChange={() => onToggle(s.name)} data-testid={`pat-scope-${s.name}`} />
+            <span className="min-w-0">
+              <span className="flex flex-wrap items-center gap-2 text-sm font-medium text-foreground">
+                {s.title && <span>{s.title}</span>}
+                <span className={clsx('break-all font-mono', s.title && 'text-xs font-normal text-muted-foreground')}>{s.name}</span>
+                {s.is_default && <Badge tone="success">{t('tokens.create.defaultTag')}</Badge>}
+                {s.source === 'service' && <Badge tone="accent">{t('tokens.create.serverScopeTag')}</Badge>}
+              </span>
+              {desc && <span className="mt-0.5 block text-xs text-muted-foreground">{desc}</span>}
+              {s.tools?.length > 0 && (
+                <span className="mt-1 flex flex-wrap items-center gap-1">
+                  <span className="text-[11px] text-subtle-foreground">{t('tokens.create.unlocks')}</span>
+                  {s.tools.map((n) => <Badge key={n} tone="neutral" mono>{n}</Badge>)}
+                </span>
+              )}
+            </span>
+          </label>
+        )
+      })}
+    </div>
+  )
+}
 
 /** Issue a Personal Access Token to paste into the MCP client's Authorization: Bearer. The plaintext is shown once. */
 export default function CreateTokenPage() {
@@ -24,6 +63,7 @@ export default function CreateTokenPage() {
   const [services, setServices] = useState([])
   const [scopes, setScopes] = useState([])
   const [effective, setEffective] = useState(null)   // per-server list from the API; null until loaded
+  const [access, setAccess] = useState(null)         // the server's tools and bundles (#37); null until loaded
   const [isLoadingMeta, setIsLoadingMeta] = useState(true)
   const [serviceId, setServiceId] = useState(searchParams.get('service_id') || '')
   const [selectedScopes, setSelectedScopes] = useState(new Set())
@@ -56,10 +96,14 @@ export default function CreateTokenPage() {
   useEffect(() => {
     let cancelled = false
     setEffective(null)
+    setAccess(null)
     if (!serviceId) return undefined
     oauthApi.serviceScopes.list(serviceId)
       .then((res) => { if (!cancelled) setEffective(res.effective || []) })
       .catch(() => { if (!cancelled) setEffective(null) })
+    accessApi.get(serviceId)
+      .then((res) => { if (!cancelled) setAccess(res) })
+      .catch(() => {})
     return () => { cancelled = true }
   }, [serviceId])
 
@@ -73,6 +117,9 @@ export default function CreateTokenPage() {
     const extra = service.oauth_scopes.filter((n) => !scopes.some((s) => s.name === n)).map((name) => ({ name, description: null, is_default: false }))
     return [...known, ...extra]
   }, [effective, service, scopes])
+
+  // Bundles (scopes holding this server's tools) are offered first, with the tools each one unlocks
+  const { bundles, others } = useMemo(() => splitBundles(access, availableScopes), [access, availableScopes])
 
   // Reset to the default scopes when the service changes
   useEffect(() => {
@@ -227,30 +274,21 @@ export default function CreateTokenPage() {
             {availableScopes.length === 0 ? (
               <p className="text-sm text-muted-foreground">{t('tokens.create.noScopes')}</p>
             ) : (
-              <div className="divide-y divide-border rounded-md border border-border">
-                {availableScopes.map((s) => {
-                  const checked = selectedScopes.has(s.name)
-                  return (
-                    <label
-                      key={s.name}
-                      className={clsx(
-                        'flex cursor-pointer items-start gap-3 px-4 py-3 transition-colors duration-200',
-                        checked ? 'bg-primary-soft/60' : 'hover:bg-muted/60',
-                      )}
-                    >
-                      <input type="checkbox" className="ui-checkbox mt-0.5" checked={checked} onChange={() => toggleScope(s.name)} />
-                      <span className="min-w-0">
-                        <span className="flex items-center gap-2 font-mono text-sm font-medium text-foreground">
-                          {s.name}
-                          {s.is_default && <Badge tone="success">{t('tokens.create.defaultTag')}</Badge>}
-                          {s.source === 'service' && <Badge tone="accent">{t('tokens.create.serverScopeTag')}</Badge>}
-                        </span>
-                        {describeScope(t, s.name, s.description) && <span className="mt-0.5 block text-xs text-muted-foreground">{describeScope(t, s.name, s.description)}</span>}
-                      </span>
-                    </label>
-                  )
-                })}
-              </div>
+              <>
+                {bundles.length > 0 && (
+                  <div className="space-y-2" data-testid="pat-bundles">
+                    <p className="text-xs font-medium text-foreground">{t('tokens.create.bundlesLabel')}</p>
+                    <ScopeList scopes={bundles} selected={selectedScopes} onToggle={toggleScope} t={t} />
+                  </div>
+                )}
+                {others.length > 0 && (
+                  <div className="space-y-2">
+                    {bundles.length > 0 && <p className="text-xs font-medium text-foreground">{t('tokens.create.otherScopesLabel')}</p>}
+                    <ScopeList scopes={others} selected={selectedScopes} onToggle={toggleScope} t={t} />
+                  </div>
+                )}
+                {access?.unscoped_tools === 'require' && <p className="text-xs text-muted-foreground">{t('tokens.create.requireBundleHint')}</p>}
+              </>
             )}
           </section>
 
