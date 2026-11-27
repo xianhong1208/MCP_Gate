@@ -7,7 +7,9 @@
     "clients": "OAuth Client",
     "consents": "已記住的同意",
     "marketplace": "市集",
-    "audit": "稽核日誌"
+    "audit": "稽核日誌",
+    "bundles": "工具組合",
+    "groups": "群組"
   },
   "layout": {
     "appName": "MCP Gate",
@@ -421,7 +423,11 @@
       "viewToken": "Token 詳情",
       "viewAll": "全部 Token",
       "footerHint": "支援 OAuth 的 client(Claude Code、FastMCP Client)不需要 Personal Access Token,它們會透過同意頁登入。",
-      "copyToken": "複製 token"
+      "copyToken": "複製 token",
+      "bundlesLabel": "這台 server 的工具組合",
+      "otherScopesLabel": "其他 scope",
+      "unlocks": "可呼叫:",
+      "requireBundleHint": "這台 server 要求工具必須在組合中:不在任何組合裡的 tool 對所有 token 都隱藏。"
     }
   },
   "services": {
@@ -908,7 +914,8 @@
       "deleted": "Scope 已刪除",
       "deleteFailed": "刪除 scope 失敗",
       "deleteTarget": "scope「{{name}}」",
-      "empty": "尚未定義任何 scope"
+      "empty": "尚未定義任何 scope",
+      "titlePlaceholder": "標題,例如:讀取檔案(選填)"
     },
     "keys": {
       "title": "簽章金鑰",
@@ -1134,7 +1141,8 @@
       "system": "系統",
       "oauth_client": "OAuth Client",
       "oauth_consent": "同意紀錄",
-      "oauth_scope": "Scope"
+      "oauth_scope": "Scope",
+      "group": "群組"
     },
     "status": {
       "success": "成功",
@@ -1175,7 +1183,17 @@
       "oauth_client_bind": "設定 Client 資源伺服器",
       "oauth_key_activate": "啟用簽章金鑰",
       "oauth_key_revoke": "撤銷簽章金鑰",
-      "oauth_key_delete": "刪除簽章金鑰"
+      "oauth_key_delete": "刪除簽章金鑰",
+      "tool_scope_set": "設定 Tool 的組合",
+      "tool_rule_create": "新增存取規則",
+      "tool_rule_update": "修改存取規則",
+      "tool_rule_delete": "刪除存取規則",
+      "service_unscoped_tools_set": "設定未分組 Tools 的處理方式",
+      "group_create": "建立群組",
+      "group_update": "修改群組",
+      "group_delete": "刪除群組",
+      "group_member_add": "新增群組成員",
+      "group_member_remove": "移除群組成員"
     },
     "detail": {
       "title": "稽核日誌詳情",
@@ -1312,6 +1330,34 @@
       "no_url": "這台伺服器還沒有位址或 audience，用戶端無法連線。",
       "unknown_client": "未知的用戶端：請選擇 Claude Code、Cursor、VS Code 或 Codex。",
       "unknown_variant": "未知的方式：請選擇登入或個人 token。"
+    },
+    "access": {
+      "challenge_not_in_scopes": "追加授權要求的 scope 必須是這個 tool 所在的組合之一。",
+      "expires_in_past": "到期時間必須在未來。",
+      "invalid_effect": "規則只能是「拒絕」或「限定」。",
+      "invalid_subject_kind": "不認得的對象類型。",
+      "invalid_unscoped_tools": "請選擇「允許」或「必須在組合中」。",
+      "no_tools": "至少選一個 tool。",
+      "only_all_tools": "「只能使用這些 tools」的規則不能選全部 tools。",
+      "pat_other_service": "這個 Personal Access Token 是簽給另一台 server 的。",
+      "rule_not_found": "這條規則已經不存在。",
+      "rules_limit": "這台 server 收到的規則會超過 {{max}} 條。",
+      "rules_too_large": "這台 server 的規則會超過 {{max_bytes}} bytes。",
+      "scope_name_unsafe": "scope {{scope}} 含有追加授權無法帶的字元。",
+      "scope_not_permitted": "這台 server 不能授予 scope {{scope}}。",
+      "subject_not_found": "這個對象已經不存在。",
+      "too_many_scopes": "一個 tool 最多只能在 {{max}} 個組合中。",
+      "too_many_tools": "一條規則最多只能列 {{max}} 個 tools。",
+      "unknown_scope": "這台 server 沒有 scope {{scope}}。",
+      "unknown_tool": "這台 server 沒有 tool {{tool}}。",
+      "wildcard_not_alone": "「全部 tools」不能和個別 tool 一起選。"
+    },
+    "groups": {
+      "in_use": "有 {{rules}} 條存取規則用到這個群組。請先刪除或修改那些規則:刪掉群組會讓它的拒絕規則失效。",
+      "invalid_name": "群組名稱須為 1 到 {{max}} 個字元。",
+      "member_not_found": "這個帳號不在群組裡。",
+      "name_taken": "已經有同名的群組。",
+      "not_found": "這個群組已經不存在。"
     }
   },
   "components": {
@@ -1445,5 +1491,239 @@
         "patFile": "把 TOML 附加到 {{path}}。是加進檔案，不要取代整個檔案。"
       }
     }
+  },
+  "access": {
+    "loadFailed": "無法載入這台 server 的存取設定。",
+    "tabs": {
+      "overview": "總覽",
+      "access": "存取控制"
+    },
+    "source": {
+      "global": "所有 server",
+      "service": "僅此 server"
+    },
+    "subject": {
+      "pat": "Personal token",
+      "client": "OAuth Client",
+      "user": "使用者",
+      "group": "群組"
+    },
+    "enforcement": {
+      "lastPoll": "最後輪詢:",
+      "enforced": {
+        "title": "由這台 server 執行",
+        "body": "server 的 middleware 會讀取這些設定,在一次輪詢(15 秒)內套用到每個 token。"
+      },
+      "stale": {
+        "title": "server 已停止輪詢",
+        "body": "它會繼續套用最後收到的設定;之後的變更還沒送到它那裡。"
+      },
+      "oldMiddleware": {
+        "title": "未執行:server 用的是舊版 middleware",
+        "body": "它的 mcp_gate_hooks.py 早於 1.6,會把所有已核准的 tools 列給每個 token。換成 1.6 版後,這些設定才會生效。"
+      },
+      "neverPolled": {
+        "title": "尚未執行",
+        "body": "這台 server 已有資源伺服器 client,但它的 middleware 還沒讀過政策 feed。在那之前,這裡的設定都不會生效。"
+      },
+      "notWired": {
+        "title": "未執行:這台 server 沒有 middleware",
+        "body": "這台 server 沒有綁定資源伺服器 client,所以收不到這些設定。請在 server 上執行 mcp_gate_hooks.py 的 MCPGateToolPinning(參考「總覽」分頁的整合範例)。"
+      }
+    },
+    "unscoped": {
+      "label": "不在任何組合中的 tools",
+      "help": {
+        "allow": "這台 server 的任何 token 都能呼叫(預設)。",
+        "require": "放進組合之前,對所有 token 都隱藏。"
+      },
+      "allow": "允許",
+      "require": "必須在組合中",
+      "confirmTitle_one": "要隱藏 {{count}} 個 tool 嗎?",
+      "confirmTitle_other": "要隱藏 {{count}} 個 tools 嗎?",
+      "confirmMessage": "這些已核准的 tools 不在任何組合中,將對所有 token 隱藏:{{list}}",
+      "confirmButton": "必須在組合中",
+      "saved": "設定已儲存"
+    },
+    "tools": {
+      "title": "Tools 與所屬組合",
+      "subtitle": "token 只要持有 tool 所在的任一組合,就能呼叫它。↑ 標示追加授權時會要求的組合。",
+      "empty": "還沒有這台 server 的 tool 紀錄",
+      "noBundle": "不在組合中",
+      "challengeHint": "追加授權時會要求這個 scope",
+      "hidden": "已隱藏",
+      "hiddenHint": "這台 server 要求 tool 必須在組合中,但它不在任何組合裡",
+      "rules_one": "{{count}} 條規則",
+      "rules_other": "{{count}} 條規則",
+      "edit": "選擇組合"
+    },
+    "toolScopes": {
+      "title": "{{name}} 所屬的組合",
+      "subtitle": "持有任一勾選 scope 的 token 就能呼叫這個 tool。",
+      "unsafe": "這個名稱含有追加授權無法帶的字元,不能放入 tools。",
+      "noneAllow": "不在任何組合中:這台 server 的任何 token 都能呼叫。",
+      "noneRequire": "不在任何組合中:因為這台 server 要求組合,所以會被隱藏。",
+      "challengeLabel": "追加授權時要求",
+      "challengeHelp": "token 沒有任何一個勾選的 scope 時,client 會被告知要取得哪一個。",
+      "challengeAuto": "範圍最小的那個(tools 最少),由 MCP Gate 選",
+      "saved": "{{name}} 的組合已儲存"
+    },
+    "bundleTools": {
+      "title": "{{name}} 包含的 tools",
+      "subtitle": "持有 {{scope}} 的 token 可以呼叫勾選的 tools。它們所屬的其他組合不受影響。",
+      "noServers": "沒有任何 server 能授予這個 scope,所以無法放入 tools。",
+      "noTools": "還沒有這台 server 的 tool 紀錄。",
+      "alsoIn": "也在:{{list}}",
+      "changes_one": "{{count}} 個 tool 有變更",
+      "changes_other": "{{count}} 個 tools 有變更"
+    },
+    "bundles": {
+      "title": "工具組合",
+      "subtitle": "組合就是放了 tools 的 scope。授予這個 scope,token 就能呼叫裡面的 tools。",
+      "add": "新增組合",
+      "empty": "還沒有組合",
+      "emptyHint": "先建立組合,再把 tools 放進去。",
+      "toolCount_one": "{{count}} 個 tool",
+      "toolCount_other": "{{count}} 個 tools",
+      "editTools": "選擇 tools",
+      "globalHint": "適用所有 server 的組合在「工具組合」頁管理。",
+      "allBundles": "所有組合",
+      "saved": "組合已儲存",
+      "deleted": "組合已刪除",
+      "deleteTarget_one": "組合 {{name}}:之後不能再授予這個 scope,且 {{count}} 個 tool 會移出",
+      "deleteTarget_other": "組合 {{name}}:之後不能再授予這個 scope,且 {{count}} 個 tools 會移出"
+    },
+    "bundleForm": {
+      "addTitle": "新增組合",
+      "editTitle": "編輯組合",
+      "subtitle": "組合就是一個 scope:client 用名稱要求它,使用者看到的是標題。",
+      "titleLabel": "標題",
+      "titleHelp": "顯示在同意頁和簽發 token 的頁面上。",
+      "titlePlaceholder": "例如:讀取檔案",
+      "nameLabel": "Scope 名稱",
+      "nameHelp": "token 帶的就是這個名稱,建立後不能修改。建議格式:server:能力。",
+      "namePlaceholder": "例如:files:read",
+      "nameInvalid": "請使用可列印的 ASCII 字元,不含空白、引號或反斜線。",
+      "descriptionLabel": "說明",
+      "descriptionPlaceholder": "裡面的 tools 能做什麼",
+      "whereLabel": "適用範圍",
+      "whereHelp": "適用所有 server 的組合,可以放入任何能授予它的 server 的 tools。",
+      "allServers": "所有 server",
+      "onlyServer": "僅 {{name}}",
+      "defaultLabel": "預設授予",
+      "defaultHelp": "在同意頁和簽發 Personal token 時預先勾選。"
+    },
+    "rules": {
+      "title": "存取規則",
+      "subtitle": "不論 token 有哪些組合,都可以禁止某人使用特定 tools,或限定他只能用幾個 tools。",
+      "add": "新增規則",
+      "addTitle": "新增存取規則",
+      "editTitle": "編輯存取規則",
+      "dialogSubtitle": "規則也會套用到已簽發的 token,在 server 下一次輪詢時生效。",
+      "empty": "沒有規則",
+      "emptyHint": "沒有規則時,只由組合決定誰能呼叫什麼。",
+      "order": "判斷順序:未核准 → 拒絕規則 → 限定規則 → 組合,第一個符合的就決定結果。過期的規則不再套用。",
+      "effect": {
+        "deny": "拒絕",
+        "only": "只能使用這些 tools"
+      },
+      "effectLabel": "規則",
+      "effectHelp": {
+        "deny": "這個對象永遠不能呼叫選取的 tools,它的 token 看不到這些 tools。",
+        "only": "這個對象只能呼叫選取的 tools。有多條這類規則時,取它們的交集。"
+      },
+      "subjectKindLabel": "套用對象",
+      "subjectLabel": "對象",
+      "chooseSubject": "請選擇…",
+      "subjectHelp": {
+        "pat": "這台 server 的某一個 Personal Access Token。",
+        "client": "簽給這個 OAuth Client 的所有 token。",
+        "user": "這個主控台帳號的所有 token(Personal token 與登入取得的 token)。",
+        "group": "群組的每位成員;成員異動會在下一次輪詢時生效。"
+      },
+      "noSubjects": {
+        "pat": "這台 server 沒有有效的 Personal token",
+        "client": "沒有 OAuth Client",
+        "user": "沒有帳號",
+        "group": "還沒有群組"
+      },
+      "toolsLabel": "Tools",
+      "allTools": "全部 tools",
+      "noteLabel": "備註",
+      "notePlaceholder": "為什麼要有這條規則",
+      "expiresLabel": "到期時間",
+      "expiresHelp": "選填,以你的當地時間為準。留空表示不會到期。",
+      "expired": "已過期",
+      "expiresAt": "{{when}} 到期",
+      "expiredAt": "已於 {{when}} 過期",
+      "saved": "規則已儲存",
+      "deleted": "規則已刪除",
+      "deleteTarget": "{{subject}} 的規則",
+      "errors": {
+        "effect": "請選擇拒絕或限定。",
+        "subjectKind": "請選擇套用對象。",
+        "subject": "請選擇套用對象。",
+        "noTools": "至少選一個 tool。",
+        "onlyAllTools": "「只能使用這些 tools」的規則不能選全部 tools。",
+        "wildcardNotAlone": "「全部 tools」不能和個別 tool 一起選。",
+        "expiresInvalid": "日期時間格式不正確。",
+        "expiresInPast": "到期時間必須在未來。"
+      }
+    },
+    "approve": {
+      "noBundle": "不放入組合",
+      "addTo": "放入 {{name}}",
+      "bundleHint": "核准並把 tool 放進組合",
+      "added": "{{name}} 已放入 {{bundle}}",
+      "addFailed": "已核准,但放入組合失敗:{{message}}"
+    }
+  },
+  "groups": {
+    "title": "群組",
+    "subtitle": "主控台帳號的分組。存取規則可以指定群組,MCP Gate 會替每位成員各產生一條規則。",
+    "add": "新增群組",
+    "empty": "還沒有群組",
+    "emptyHint": "建立群組、加入帳號,再到 server 的存取規則中指定它。",
+    "memberCount_one": "{{count}} 位成員",
+    "memberCount_other": "{{count}} 位成員",
+    "ruleCount_one": "{{count}} 條規則使用中",
+    "ruleCount_other": "{{count}} 條規則使用中",
+    "members_one": "{{count}} 位成員",
+    "members_other": "{{count}} 位成員",
+    "noMembers": "還沒有成員。",
+    "inactive": "已停用",
+    "removeMember": "移出群組",
+    "chooseMember": "加入帳號…",
+    "addMember": "加入",
+    "everyoneIn": "所有帳號都已在這個群組中。",
+    "memberAdded": "已加入成員",
+    "memberRemoved": "已移除 {{name}}",
+    "usedBy_one": "{{count}} 條規則使用中",
+    "usedBy_other": "{{count}} 條規則使用中",
+    "notUsed": "沒有存取規則使用這個群組。",
+    "howRulesApply": "變更會在各 server 下一次輪詢時生效。被規則使用中的群組不能刪除。",
+    "saved": "群組已儲存",
+    "created": "群組已建立",
+    "deleted": "群組已刪除",
+    "deleteTarget": "群組 {{name}}",
+    "form": {
+      "addTitle": "新增群組",
+      "editTitle": "編輯群組",
+      "nameLabel": "名稱",
+      "nameHelp": "不可重複,不分大小寫。",
+      "namePlaceholder": "例如:外包人員",
+      "descriptionLabel": "說明",
+      "descriptionPlaceholder": "哪些人屬於這裡"
+    }
+  },
+  "bundles": {
+    "title": "工具組合",
+    "subtitle": "具名的一組 tools。組合就是 scope:持有它的 token,可以在每台指派了這些 tools 的 server 上呼叫它們。",
+    "emptyHint": "在這裡建立適用所有 server 的組合,或到某台 server 的「存取控制」分頁建立它專用的組合。",
+    "onlyOn": "僅 {{name}}",
+    "noTools": "還沒有 tools,請用「選擇 tools」加入。",
+    "noServers": "沒有任何 server 能授予這個 scope(請檢查各 server 允許的 scope)。",
+    "otherScopes_one": "另有 {{count}} 個 scope 沒有 tools:{{list}}",
+    "otherScopes_other": "另有 {{count}} 個 scope 沒有 tools:{{list}}"
   }
 }

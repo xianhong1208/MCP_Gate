@@ -7,13 +7,13 @@ import {
 } from './ui'
 
 /**
- * Card with an inline editor for a list of scopes ({name, description, is_default}). Used for the global
+ * Card with an inline editor for a list of scopes ({name, title, description, is_default}). Used for the global
  * registry (OAuth Clients page) and for the scopes one server declares (service detail page); the caller
- * owns the data and passes `onSave({name, description, isDefault, isNew})` / `onDelete(name)`.
+ * owns the data and passes `onSave({name, title, description, isDefault, isNew})` / `onDelete(name)`.
  */
 export default function ScopeEditor({ title, description, scopes, isLoading, onSave, onDelete, emptyText, badge }) {
   const { t } = useTranslation()
-  const [editing, setEditing] = useState(null)   // {name, description, isDefault, isNew}
+  const [editing, setEditing] = useState(null)   // {name, title, description, isDefault, isNew}
   const [saving, setSaving] = useState(false)
 
   const save = async () => {
@@ -33,7 +33,7 @@ export default function ScopeEditor({ title, description, scopes, isLoading, onS
         title={title}
         description={description}
         action={
-          <Button variant="secondary" size="sm" icon={Plus} onClick={() => setEditing({ name: '', description: '', isDefault: false, isNew: true })}>
+          <Button variant="secondary" size="sm" icon={Plus} onClick={() => setEditing({ name: '', title: '', description: '', isDefault: false, isNew: true })}>
             {t('clients.scopes.add')}
           </Button>
         }
@@ -56,6 +56,15 @@ export default function ScopeEditor({ title, description, scopes, isLoading, onS
             <Input
               type="text"
               size="sm"
+              value={editing.title || ''}
+              onChange={(e) => setEditing({ ...editing, title: e.target.value })}
+              placeholder={t('clients.scopes.titlePlaceholder')}
+              maxLength={128}
+            />
+            <Input
+              type="text"
+              size="sm"
+              className="md:col-span-2"
               value={editing.description || ''}
               onChange={(e) => setEditing({ ...editing, description: e.target.value })}
               placeholder={t('clients.scopes.descriptionPlaceholder')}
@@ -85,8 +94,9 @@ export default function ScopeEditor({ title, description, scopes, isLoading, onS
           {scopes.map((s) => (
             <div key={s.name} className="group flex items-center justify-between gap-3 py-2.5">
               <div className="min-w-0">
-                <p className="flex items-center gap-2 font-mono text-xs font-medium text-foreground">
+                <p className="flex flex-wrap items-center gap-2 font-mono text-xs font-medium text-foreground">
                   {s.name}
+                  {s.title && <span className="font-sans font-normal text-muted-foreground">{s.title}</span>}
                   {s.is_default && <Badge tone="success">{t('clients.scopes.default')}</Badge>}
                   {badge && <Badge tone="accent">{badge}</Badge>}
                 </p>
@@ -95,7 +105,7 @@ export default function ScopeEditor({ title, description, scopes, isLoading, onS
               <RowActions>
                 <IconButton
                   icon={Pencil}
-                  onClick={() => setEditing({ name: s.name, description: s.description || '', isDefault: !!s.is_default, isNew: false })}
+                  onClick={() => setEditing({ name: s.name, title: s.title || '', description: s.description || '', isDefault: !!s.is_default, isNew: false })}
                   title={t('clients.scopes.edit')}
                 />
                 <IconButton variant="destructive" icon={Trash2} onClick={() => onDelete(s.name)} title={t('clients.scopes.delete')} />

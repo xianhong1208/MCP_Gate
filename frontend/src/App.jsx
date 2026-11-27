@@ -16,6 +16,8 @@ import OAuthClientsPage from './pages/OAuthClientsPage'
 import ConsentsPage from './pages/ConsentsPage'
 import MarketplacePage from './pages/MarketplacePage'
 import AuditLogPage from './pages/AuditLogPage'
+import BundlesPage from './pages/BundlesPage'
+import GroupsPage from './pages/GroupsPage'
 
 function FullScreenSpinner() {
   return (
@@ -70,6 +72,8 @@ export default function App() {
         <Route index element={<DashboardPage />} />
         <Route path="services" element={<ServicesPage />} />
         <Route path="services/:serviceId" element={<ServiceDetailPage />} />
+        <Route path="bundles" element={<BundlesPage />} />
+        <Route path="groups" element={<GroupsPage />} />
         <Route path="tokens" element={<TokensPage />} />
         <Route path="tokens/create" element={<CreateTokenPage />} />
         <Route path="tokens/:jti" element={<TokenDetailPage />} />

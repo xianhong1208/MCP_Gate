@@ -7,7 +7,9 @@
     "clients": "OAuth Clients",
     "consents": "Consents",
     "marketplace": "Marketplace",
-    "audit": "Audit Logs"
+    "audit": "Audit Logs",
+    "bundles": "Bundles",
+    "groups": "Groups"
   },
   "layout": {
     "appName": "MCP Gate",
@@ -425,7 +427,11 @@
       "viewToken": "Token details",
       "viewAll": "All tokens",
       "footerHint": "Clients that support OAuth (Claude Code, FastMCP Client) do not need a personal token — they sign in through the consent page.",
-      "copyToken": "Copy token"
+      "copyToken": "Copy token",
+      "bundlesLabel": "Bundles of tools on this server",
+      "otherScopesLabel": "Other scopes",
+      "unlocks": "Unlocks:",
+      "requireBundleHint": "This server requires a bundle: a tool in no bundle is hidden from every token."
     }
   },
   "services": {
@@ -927,7 +933,8 @@
       "deleted": "Scope deleted",
       "deleteFailed": "Failed to delete scope",
       "deleteTarget": "scope \"{{name}}\"",
-      "empty": "No scopes defined yet"
+      "empty": "No scopes defined yet",
+      "titlePlaceholder": "Title, e.g. Read files (optional)"
     },
     "keys": {
       "title": "Signing keys",
@@ -1156,7 +1163,8 @@
       "system": "System",
       "oauth_client": "OAuth Client",
       "oauth_consent": "Consent",
-      "oauth_scope": "Scope"
+      "oauth_scope": "Scope",
+      "group": "Group"
     },
     "status": {
       "success": "Success",
@@ -1197,7 +1205,17 @@
       "oauth_client_bind": "Client Resource Server Set",
       "oauth_key_activate": "Signing Key Activated",
       "oauth_key_revoke": "Signing Key Revoked",
-      "oauth_key_delete": "Signing Key Deleted"
+      "oauth_key_delete": "Signing Key Deleted",
+      "tool_scope_set": "Set tool bundles",
+      "tool_rule_create": "Add access rule",
+      "tool_rule_update": "Change access rule",
+      "tool_rule_delete": "Delete access rule",
+      "service_unscoped_tools_set": "Set tools without a bundle",
+      "group_create": "Create group",
+      "group_update": "Change group",
+      "group_delete": "Delete group",
+      "group_member_add": "Add group member",
+      "group_member_remove": "Remove group member"
     },
     "detail": {
       "title": "Audit Log Details",
@@ -1334,6 +1352,34 @@
       "no_url": "This server has no address or audience yet, so a client cannot connect to it.",
       "unknown_client": "Unknown client: choose Claude Code, Cursor, VS Code or Codex.",
       "unknown_variant": "Unknown variant: choose sign-in or personal token."
+    },
+    "access": {
+      "challenge_not_in_scopes": "The step-up scope must be one of the tool's bundles.",
+      "expires_in_past": "The expiry must be in the future.",
+      "invalid_effect": "A rule is either deny or only.",
+      "invalid_subject_kind": "Unknown subject type.",
+      "invalid_unscoped_tools": "Choose allow or require a bundle.",
+      "no_tools": "Choose at least one tool.",
+      "only_all_tools": "An \"only these tools\" rule cannot name every tool.",
+      "pat_other_service": "This personal access token was issued for another server.",
+      "rule_not_found": "This rule no longer exists.",
+      "rules_limit": "This server would receive more than {{max}} rules.",
+      "rules_too_large": "This server's rules would be larger than {{max_bytes}} bytes.",
+      "scope_name_unsafe": "The scope {{scope}} has characters a step-up challenge cannot carry.",
+      "scope_not_permitted": "This server may not grant the scope {{scope}}.",
+      "subject_not_found": "That subject no longer exists.",
+      "too_many_scopes": "A tool can be in at most {{max}} bundles.",
+      "too_many_tools": "A rule can name at most {{max}} tools.",
+      "unknown_scope": "This server has no scope {{scope}}.",
+      "unknown_tool": "This server has no tool {{tool}}.",
+      "wildcard_not_alone": "\"All tools\" cannot be combined with single tools."
+    },
+    "groups": {
+      "in_use": "Access rules name this group ({{rules}}). Delete or change them first: deleting the group would lift its denies.",
+      "invalid_name": "A group name is 1 to {{max}} characters.",
+      "member_not_found": "This account is not in the group.",
+      "name_taken": "A group with this name already exists.",
+      "not_found": "This group no longer exists."
     }
   },
   "components": {
@@ -1467,5 +1513,239 @@
         "patFile": "Append the TOML to {{path}}. Add it to the file; do not replace the file."
       }
     }
+  },
+  "access": {
+    "loadFailed": "Could not load this server's access settings.",
+    "tabs": {
+      "overview": "Overview",
+      "access": "Access"
+    },
+    "source": {
+      "global": "All servers",
+      "service": "This server"
+    },
+    "subject": {
+      "pat": "Personal token",
+      "client": "OAuth client",
+      "user": "User",
+      "group": "Group"
+    },
+    "enforcement": {
+      "lastPoll": "Last poll:",
+      "enforced": {
+        "title": "Enforced by this server",
+        "body": "The server's middleware reads these settings and applies them to every token within one poll (15 s)."
+      },
+      "stale": {
+        "title": "The server stopped polling",
+        "body": "It keeps applying the last settings it received; changes made since then have not reached it."
+      },
+      "oldMiddleware": {
+        "title": "Not enforced: the server runs an older middleware",
+        "body": "Its mcp_gate_hooks.py is older than 1.6 and lists every approved tool to every token. Replace it with the 1.6 file for these settings to apply."
+      },
+      "neverPolled": {
+        "title": "Not enforced yet",
+        "body": "This server has a resource-server client but its middleware has not read the policy feed. Nothing set here applies until it does."
+      },
+      "notWired": {
+        "title": "Not enforced: no middleware on this server",
+        "body": "No resource-server client is bound to this server, so it never receives these settings. Run MCPGateToolPinning from mcp_gate_hooks.py on it (see the Integration snippets on the Overview tab)."
+      }
+    },
+    "unscoped": {
+      "label": "Tools in no bundle",
+      "help": {
+        "allow": "Any token for this server may call them (the default).",
+        "require": "Hidden from every token until you put them in a bundle."
+      },
+      "allow": "Allow",
+      "require": "Require a bundle",
+      "confirmTitle_one": "Hide {{count}} tool?",
+      "confirmTitle_other": "Hide {{count}} tools?",
+      "confirmMessage": "These approved tools are in no bundle and will be hidden from every token: {{list}}",
+      "confirmButton": "Require a bundle",
+      "saved": "Setting saved"
+    },
+    "tools": {
+      "title": "Tools and their bundles",
+      "subtitle": "A token may call a tool when it holds any of the tool's bundles. ↑ marks the bundle a step-up asks for.",
+      "empty": "No tools recorded for this server yet",
+      "noBundle": "No bundle",
+      "challengeHint": "Asked for in a step-up challenge",
+      "hidden": "Hidden",
+      "hiddenHint": "In no bundle while the server requires one",
+      "rules_one": "{{count}} rule",
+      "rules_other": "{{count}} rules",
+      "edit": "Choose bundles"
+    },
+    "toolScopes": {
+      "title": "Bundles of {{name}}",
+      "subtitle": "A token that holds any of the ticked scopes may call this tool.",
+      "unsafe": "This name has characters a step-up challenge cannot carry, so it cannot hold tools.",
+      "noneAllow": "In no bundle: any token for this server may call it.",
+      "noneRequire": "In no bundle: hidden, because this server requires one.",
+      "challengeLabel": "Step-up asks for",
+      "challengeHelp": "The scope a client is told to get when its token holds none of these.",
+      "challengeAuto": "The narrowest one (fewest tools), chosen by MCP Gate",
+      "saved": "Bundles of {{name}} saved"
+    },
+    "bundleTools": {
+      "title": "Tools in {{name}}",
+      "subtitle": "A token holding {{scope}} may call the ticked tools. Their other bundles stay as they are.",
+      "noServers": "No server may grant this scope, so no tool can be put in it.",
+      "noTools": "No tools recorded for this server.",
+      "alsoIn": "Also in: {{list}}",
+      "changes_one": "{{count}} tool changes",
+      "changes_other": "{{count}} tools change"
+    },
+    "bundles": {
+      "title": "Bundles",
+      "subtitle": "A bundle is a scope with tools in it. Grant the scope and the token may call those tools.",
+      "add": "New bundle",
+      "empty": "No bundles yet",
+      "emptyHint": "Create a bundle, then put tools in it.",
+      "toolCount_one": "{{count}} tool",
+      "toolCount_other": "{{count}} tools",
+      "editTools": "Choose tools",
+      "globalHint": "Bundles for all servers are managed on the Bundles page.",
+      "allBundles": "All bundles",
+      "saved": "Bundle saved",
+      "deleted": "Bundle deleted",
+      "deleteTarget_one": "bundle {{name}}: tokens can no longer be granted this scope, and {{count}} tool leaves it",
+      "deleteTarget_other": "bundle {{name}}: tokens can no longer be granted this scope, and {{count}} tools leave it"
+    },
+    "bundleForm": {
+      "addTitle": "New bundle",
+      "editTitle": "Edit bundle",
+      "subtitle": "A bundle is a scope: clients ask for it by name, people see its title.",
+      "titleLabel": "Title",
+      "titleHelp": "Shown on the consent page and when issuing a token.",
+      "titlePlaceholder": "e.g. Read files",
+      "nameLabel": "Scope name",
+      "nameHelp": "What tokens carry; cannot be changed later. Suggested form: server:capability.",
+      "namePlaceholder": "e.g. files:read",
+      "nameInvalid": "Use printable ASCII without spaces, quotes or backslashes.",
+      "descriptionLabel": "Description",
+      "descriptionPlaceholder": "What the tools in it can do",
+      "whereLabel": "Available on",
+      "whereHelp": "A bundle for all servers can hold tools of any server that may grant it.",
+      "allServers": "All servers",
+      "onlyServer": "Only {{name}}",
+      "defaultLabel": "Granted by default",
+      "defaultHelp": "Ticked in advance on the consent page and when issuing a personal token."
+    },
+    "rules": {
+      "title": "Access rules",
+      "subtitle": "Deny tools to someone, or limit them to a few tools, whatever their token's bundles.",
+      "add": "Add rule",
+      "addTitle": "Add access rule",
+      "editTitle": "Edit access rule",
+      "dialogSubtitle": "Rules apply to tokens already issued, within one poll of the server.",
+      "empty": "No rules",
+      "emptyHint": "Without rules, bundles alone decide who may call what.",
+      "order": "Order: not approved → deny rules → \"only\" rules → bundles. The first match decides. Expired rules no longer apply.",
+      "effect": {
+        "deny": "Deny",
+        "only": "Only these tools"
+      },
+      "effectLabel": "Rule",
+      "effectHelp": {
+        "deny": "The subject may never call the chosen tools; they are hidden from its tokens.",
+        "only": "The subject may call nothing but the chosen tools. Several such rules narrow each other."
+      },
+      "subjectKindLabel": "Applies to",
+      "subjectLabel": "Who",
+      "chooseSubject": "Choose…",
+      "subjectHelp": {
+        "pat": "One personal access token of this server.",
+        "client": "Every token issued to this OAuth client.",
+        "user": "Every token of this console account (personal tokens and sign-ins).",
+        "group": "Every member of the group; membership changes apply with the next poll."
+      },
+      "noSubjects": {
+        "pat": "No active personal tokens for this server",
+        "client": "No OAuth clients",
+        "user": "No accounts",
+        "group": "No groups yet"
+      },
+      "toolsLabel": "Tools",
+      "allTools": "All tools",
+      "noteLabel": "Note",
+      "notePlaceholder": "Why this rule exists",
+      "expiresLabel": "Expires",
+      "expiresHelp": "Optional, in your local time. Empty = never.",
+      "expired": "Expired",
+      "expiresAt": "Expires {{when}}",
+      "expiredAt": "Expired {{when}}",
+      "saved": "Rule saved",
+      "deleted": "Rule deleted",
+      "deleteTarget": "the rule for {{subject}}",
+      "errors": {
+        "effect": "Choose deny or only.",
+        "subjectKind": "Choose who the rule applies to.",
+        "subject": "Choose who the rule applies to.",
+        "noTools": "Choose at least one tool.",
+        "onlyAllTools": "An \"only\" rule cannot name every tool.",
+        "wildcardNotAlone": "\"All tools\" cannot be combined with single tools.",
+        "expiresInvalid": "Not a valid date and time.",
+        "expiresInPast": "The expiry must be in the future."
+      }
+    },
+    "approve": {
+      "noBundle": "No bundle",
+      "addTo": "Add to {{name}}",
+      "bundleHint": "Approve and put the tool in a bundle",
+      "added": "{{name}} added to {{bundle}}",
+      "addFailed": "Approved, but adding it to the bundle failed: {{message}}"
+    }
+  },
+  "groups": {
+    "title": "Groups",
+    "subtitle": "Named sets of console accounts. Access rules can name a group; MCP Gate turns it into a rule per member.",
+    "add": "New group",
+    "empty": "No groups yet",
+    "emptyHint": "Make a group, add accounts, then name it in a server's access rules.",
+    "memberCount_one": "{{count}} member",
+    "memberCount_other": "{{count}} members",
+    "ruleCount_one": "Used by {{count}} rule",
+    "ruleCount_other": "Used by {{count}} rules",
+    "members_one": "{{count}} member",
+    "members_other": "{{count}} members",
+    "noMembers": "No members yet.",
+    "inactive": "Disabled",
+    "removeMember": "Remove from group",
+    "chooseMember": "Add an account…",
+    "addMember": "Add",
+    "everyoneIn": "Every account is in this group.",
+    "memberAdded": "Member added",
+    "memberRemoved": "{{name}} removed",
+    "usedBy_one": "Used by {{count}} rule",
+    "usedBy_other": "Used by {{count}} rules",
+    "notUsed": "No access rule names this group.",
+    "howRulesApply": "Changes reach each server with its next poll. A group that a rule names cannot be deleted.",
+    "saved": "Group saved",
+    "created": "Group created",
+    "deleted": "Group deleted",
+    "deleteTarget": "group {{name}}",
+    "form": {
+      "addTitle": "New group",
+      "editTitle": "Edit group",
+      "nameLabel": "Name",
+      "nameHelp": "Unique, ignoring upper and lower case.",
+      "namePlaceholder": "e.g. Contractors",
+      "descriptionLabel": "Description",
+      "descriptionPlaceholder": "Who belongs here"
+    }
+  },
+  "bundles": {
+    "title": "Bundles",
+    "subtitle": "Named sets of tools. A bundle is a scope: a token that holds it may call the tools in it, on every server where they are assigned.",
+    "emptyHint": "Create a bundle for all servers here, or one for a single server on its Access tab.",
+    "onlyOn": "Only {{name}}",
+    "noTools": "No tools yet. Use Choose tools to add some.",
+    "noServers": "No server may grant this scope (check the servers' allowed scopes).",
+    "otherScopes_one": "{{count}} other scope holds no tools: {{list}}",
+    "otherScopes_other": "{{count}} other scopes hold no tools: {{list}}"
   }
 }
