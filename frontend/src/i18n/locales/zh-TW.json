@@ -1579,7 +1579,7 @@
     },
     "bundles": {
       "title": "工具組合",
-      "subtitle": "組合就是放了 tools 的 scope。授予這個 scope,token 就能呼叫裡面的 tools。",
+      "subtitle": "組合就是放了 tools 的 scope。授予這個 scope，token 就能呼叫裡面的 tools。",
       "add": "新增組合",
       "empty": "還沒有組合",
       "emptyHint": "先建立組合，再把 tools 放進去。",
@@ -1723,7 +1723,7 @@
     "onlyOn": "僅 {{name}}",
     "noTools": "還沒有 tools，請用「選擇 tools」加入。",
     "noServers": "沒有任何 server 能授予這個 scope（請檢查各 server 允許的 scope）。",
-    "otherScopes_one": "另有 {{count}} 個 scope 沒有 tools:{{list}}",
-    "otherScopes_other": "另有 {{count}} 個 scope 沒有 tools:{{list}}"
+    "otherScopes_one": "另有 {{count}} 個 scope 沒有 tools：{{list}}",
+    "otherScopes_other": "另有 {{count}} 個 scope 沒有 tools：{{list}}"
   }
 }
