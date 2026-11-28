@@ -8,6 +8,7 @@ import { oauthApi, statsApi } from '../services/api'
 import { useConfirm } from '../contexts/ConfirmContext'
 import { useToast } from '../contexts/ToastContext'
 import LastChecked from '../components/LastChecked'
+import { TokenToolsCard } from '../components/access/Verdicts'
 import { KindBadge, StatusBadge } from './TokensPage'
 import {
   PageHeader, Button, Badge, Card, CardHeader, Alert, EmptyState, LoadingBlock, StatusDot, DescriptionList,
@@ -45,6 +46,7 @@ export default function TokenDetailPage() {
   const [isLoadingStats, setIsLoadingStats] = useState(false)
   const [isRevoking, setIsRevoking] = useState(false)
   const [error, setError] = useState(null)
+  const [policyStatus, setPolicyStatus] = useState(null)
 
   useEffect(() => {
     let cancelled = false
@@ -56,6 +58,16 @@ export default function TokenDetailPage() {
       .finally(() => { if (!cancelled) setIsLoading(false) })
     return () => { cancelled = true }
   }, [decodedJti, t])
+
+  // Whether the token's server enforces what "Tools this token can call" shows (#37)
+  useEffect(() => {
+    if (!token?.service_id) return
+    let cancelled = false
+    oauthApi.policyFeed.forService(token.service_id)
+      .then((res) => { if (!cancelled) setPolicyStatus(res) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [token?.service_id])
 
   // Stats are per service (the token event stream does not distinguish jti)
   useEffect(() => {
@@ -187,6 +199,9 @@ export default function TokenDetailPage() {
           <DescriptionList items={lifecycleItems} />
         </Card>
       </div>
+
+      {/* Which tools of its server the token may call (#37) */}
+      <TokenToolsCard token={token} policyStatus={policyStatus} />
 
       {/* Usage chart (per service) */}
       <Card>

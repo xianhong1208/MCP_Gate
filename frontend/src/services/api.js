@@ -122,6 +122,10 @@ export const accessApi = {
   async deleteRule(serviceId, ruleId) {
     return request(`${svc(serviceId)}/access-rules/${encodeURIComponent(ruleId)}`, { method: 'DELETE' })
   },
+  /** MCP Gate's verdict per tool for a token (`{ jti }`) or a what-if subject (`client_id`, `user_id`, `group_id`, `scope`) */
+  async check(serviceId, params) {
+    return request(`${svc(serviceId)}/access/check${qs(params)}`)
+  },
 }
 
 export const groupsApi = {

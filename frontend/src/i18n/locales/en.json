@@ -1355,6 +1355,8 @@
     },
     "access": {
       "challenge_not_in_scopes": "The step-up scope must be one of the tool's bundles.",
+      "check_invalid_scope": "Scopes are printable ASCII without spaces, quotes or backslashes (at most 64).",
+      "check_subject": "Choose a token, or a client and/or a user or a group.",
       "expires_in_past": "The expiry must be in the future.",
       "invalid_effect": "A rule is either deny or only.",
       "invalid_subject_kind": "Unknown subject type.",
@@ -1368,6 +1370,7 @@
       "scope_name_unsafe": "The scope {{scope}} has characters a step-up challenge cannot carry.",
       "scope_not_permitted": "This server may not grant the scope {{scope}}.",
       "subject_not_found": "That subject no longer exists.",
+      "token_other_service": "This token was issued for another server.",
       "too_many_scopes": "A tool can be in at most {{max}} bundles.",
       "too_many_tools": "A rule can name at most {{max}} tools.",
       "unknown_scope": "This server has no scope {{scope}}.",
@@ -1698,6 +1701,96 @@
       "bundleHint": "Approve and put the tool in a bundle",
       "added": "{{name}} added to {{bundle}}",
       "addFailed": "Approved, but adding it to the bundle failed: {{message}}"
+    },
+    "check": {
+      "count": {
+        "allowed_one": "{{count}} allowed",
+        "allowed_other": "{{count}} allowed",
+        "needs_scope_one": "{{count}} needs a bundle",
+        "needs_scope_other": "{{count}} need a bundle",
+        "hidden_one": "{{count}} hidden",
+        "hidden_other": "{{count}} hidden"
+      },
+      "decision": {
+        "allowed": "Allowed",
+        "needs_scope": "Needs a bundle",
+        "hidden": "Hidden"
+      },
+      "reason": {
+        "viaBundle": "Through the bundle {{scopes}}.",
+        "noBundle": "In no bundle: any token for this server may call it.",
+        "missingScope": "Listed, but a call is refused until the token holds {{scope}} (the client is asked for it: step-up).",
+        "denied": "Hidden by a deny rule for {{rules}}.",
+        "outsideOnly": "Hidden: outside the \"only these tools\" rule for {{rules}}.",
+        "notApproved": "Hidden: this definition of the tool is not approved.",
+        "unscopedRequired": "Hidden: it is in no bundle and this server requires one.",
+        "unknown": "Hidden ({{reason}})."
+      },
+      "live": {
+        "listed": "Listed",
+        "listedHint": "The server listed this tool when the list was refreshed as this token.",
+        "notListed": "Not listed",
+        "notListedHint": "MCP Gate lets this token see the tool, but the server did not list it.",
+        "probeOnly": "Listed to MCP Gate only",
+        "probeOnlyHint": "The server's middleware lists every tool to MCP Gate's inspect copy of a token and hides this one from the token itself.",
+        "exposed": "Listed by the server",
+        "exposedHint": "MCP Gate hides this tool from the token, but the server listed it: the rule or bundle is not enforced there.",
+        "unverified": "Listed",
+        "unverifiedHint": "The server listed it; whether its middleware hides it from the token is unknown (no policy-feed status)."
+      },
+      "seeRules": "Rules",
+      "disagree": {
+        "title": "The server's list does not match MCP Gate's verdict",
+        "exposed": "Listed although MCP Gate hides them from this token: {{list}}. The server does not enforce these rules or bundles (see the Access tab).",
+        "notListed": "Not listed although this token may see them: {{list}}. The server filters its tools by itself, or no longer offers them."
+      },
+      "agree": {
+        "same": "The server's list matches MCP Gate's verdict.",
+        "probeOnly_one": "The server's list matches. It also listed 1 tool to MCP Gate's inspect copy of the token that its middleware hides from the token itself.",
+        "probeOnly_other": "The server's list matches. It also listed {{count}} tools to MCP Gate's inspect copy of the token that its middleware hides from the token itself."
+      },
+      "inspectTitle": "MCP Gate's verdict for this token",
+      "inspectHint": "What this token may call, from the bundles and rules MCP Gate sends to the server. Refresh to compare with what the server lists.",
+      "tokenTitle": "Tools this token can call",
+      "tokenSubtitle": "MCP Gate's verdict for every tool of",
+      "tokenNoService": "This token is not bound to a registered server.",
+      "tokenInactive": "This token is no longer active: it can call no tool.",
+      "notEnforcedNote": "This server does not enforce these verdicts yet; until it does, the token may see more tools than listed as allowed here."
+    },
+    "whatIf": {
+      "title": "What if",
+      "subtitle": "Check what someone could call on this server before issuing a token or changing a rule. Nothing is issued or stored.",
+      "kindLabel": "Who",
+      "kind": {
+        "pat": "Personal token",
+        "client": "OAuth client",
+        "user": "User",
+        "group": "A member of a group"
+      },
+      "subjectLabel": "Subject",
+      "subjectHelp": {
+        "pat": "Checked with the token's own scopes, plus the ones you add.",
+        "client": "A token the client gets for itself (client credentials).",
+        "user": "Any token of this user; add a client to apply its rules too.",
+        "group": "Someone in the group, even if it has no members yet."
+      },
+      "clientLabel": "Through client",
+      "clientHelp": "Rules for this client apply too.",
+      "anyClient": "No client rules",
+      "addScopesLabel": "Add scopes",
+      "scopesLabel": "Scopes",
+      "patScopes": "The token already holds: {{scopes}}.",
+      "patScopesHelp": "The token holds no scopes of its own.",
+      "scopesHelp": "The scopes the token would hold.",
+      "noScopes": "No other scopes for this server.",
+      "run": "Check",
+      "nothingIssued": "Read only: no token is issued.",
+      "withScopes": "With the scopes: {{scopes}}",
+      "resultToken": "Personal token {{name}}",
+      "resultClient": "OAuth client {{name}}",
+      "resultUser": "User {{name}}{{through}}",
+      "resultGroup": "A member of {{name}}{{through}}",
+      "through": " through {{client}}"
     }
   },
   "groups": {

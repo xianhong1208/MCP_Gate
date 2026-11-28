@@ -13,6 +13,7 @@ import CodeBlock from '../components/CodeBlock'
 import ServiceFormModal from '../components/ServiceFormModal'
 import HealthIndicator from '../components/HealthIndicator'
 import AccessPanel from '../components/access/AccessPanel'
+import { InspectVerdicts } from '../components/access/Verdicts'
 import ClientConfigPanel from '../components/ClientConfigPanel'
 import MarkdownLite from '../components/MarkdownLite'
 import { copyToClipboard } from '../utils/clipboard'
@@ -506,6 +507,9 @@ export default function ServiceDetailPage() {
   const [feedStatus, setFeedStatus] = useState(null)
   const [policyStatus, setPolicyStatus] = useState(null)
   const [access, setAccess] = useState(null)
+  // The tools the server listed to the last "Refresh as" a token: { jti, names }, compared with MCP Gate's verdict
+  const [liveList, setLiveList] = useState(null)
+  const [inspectNonce, setInspectNonce] = useState(0)
   const [searchParams, setSearchParams] = useSearchParams()
   const tab = searchParams.get('tab') === 'access' ? 'access' : 'overview'
   const chooseTab = (key) => setSearchParams(key === 'access' ? { tab: 'access' } : {}, { replace: true })
@@ -624,6 +628,8 @@ export default function ServiceDetailPage() {
       toast.success(result.tools_pending > 0
         ? t('services.toolPin.refreshedWithPending', { n: result.tools_count, count: result.tools_pending })
         : t('services.detail.refreshToolsSuccess', { n: result.tools_count }))
+      setLiveList(refreshMode === 'token' ? { jti: selectedInspectToken.jti, names: (result.tools || []).map((tl) => tl.name) } : null)
+      setInspectNonce((n) => n + 1)
       await reload()
     } catch (err) {
       toast.error(t('services.detail.refreshToolsFailed', { message: err.message }))
@@ -1037,6 +1043,10 @@ export default function ServiceDetailPage() {
                   </div>
                 )}
               </div>
+            )}
+            {hasMcpConnection && refreshMode === 'token' && selectedInspectToken && (
+              <InspectVerdicts serviceId={decodedServiceId} jti={selectedInspectToken.jti} live={liveList}
+                policyStatus={policyStatus} nonce={`${inspectNonce}:${(service.tools || []).map((tl) => tl.state).join()}:${access ? JSON.stringify(access.policy) : ''}`} />
             )}
             {pendingTools.length > 0 && (
               <div className="mb-4 space-y-3" data-testid="tool-approvals">

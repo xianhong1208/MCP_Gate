@@ -16,11 +16,11 @@ from db.crud import (
 )
 from db.models import (
     RULE_EFFECTS, RULE_ONLY, SUBJECT_CLIENT, SUBJECT_GROUP, SUBJECT_KINDS, SUBJECT_PAT, SUBJECT_USER,
-    UNSCOPED_MODES, utc_now,
+    TOOL_STATE_APPROVED, UNSCOPED_MODES, utc_now,
 )
 from src.adapters.exceptions import ConflictError, NotFoundError, ValidationFailedError
-from src.tool_policy.evaluate import ALL_TOOLS, RULES_VERSION, expand_groups
-from src.tool_policy.policy import challenge_scope, is_expired, rule_entry
+from src.tool_policy.evaluate import ALL_TOOLS, RULES_VERSION, evaluate, expand_groups
+from src.tool_policy.policy import challenge_scope, epoch_utc, is_expired, rule_entry
 from src.tool_policy.validation import (
     GROUP_NAME_MAX, MAX_RULES_BYTES_PER_SERVICE, MAX_RULES_PER_SERVICE, MAX_SCOPES_PER_TOOL, MAX_TOOLS_PER_RULE,
     has_control_chars, is_scope_token, rules_size,
@@ -257,9 +257,11 @@ class ToolAccessAdapter:
 
     # ---- the policy ---------------------------------------------------------------------------------------------
     @staticmethod
-    def build_policy(db, service, now: Optional[datetime] = None) -> dict:
+    def build_policy(db, service, now: Optional[datetime] = None, extra_members: Optional[dict] = None) -> dict:
         """The evaluator's input for one server (src/tool_policy/evaluate.py): its unscoped-tools default, each
-        scoped tool's scopes and challenge, and its unexpired rules with groups expanded to their members' subs."""
+        scoped tool's scopes and challenge, and its unexpired rules with groups expanded to their members' subs.
+        ``extra_members`` ({group id: [sub]}) adds members that are not stored (the what-if check's "a member of
+        this group"); the policy feed never passes it."""
         now = now or utc_now()
         names = {t.id: t.name for t in MCPToolCRUD.get_by_service(db, str(service.id))}
         sizes = ToolScopeCRUD.scope_sizes(db)
@@ -275,12 +277,90 @@ class ToolAccessAdapter:
                    if not is_expired(r, now)]
         groups = {e["subject"]["id"] for e in entries if e["subject"]["kind"] == SUBJECT_GROUP}
         members = UserGroupCRUD.members_by_group(db, groups) if groups else {}
+        for gid, subs in (extra_members or {}).items():
+            members[gid] = [*members.get(gid, []), *subs]
         return {
             "rules_version": RULES_VERSION,
             "unscoped_tools": service.unscoped_tools,
             "tool_scopes": dict(sorted(tool_scopes.items())),
             "rules": expand_groups(entries, members),
         }
+
+    # ---- checking a token or a "what if" subject (#37, 1.6 PR 5) ------------------------------------------------
+    @staticmethod
+    def _check_scopes(scopes) -> list:
+        names = list(dict.fromkeys(s for s in (scopes or []) if s))
+        if len(names) > MAX_CHECK_SCOPES:
+            raise ValidationFailedError(code="access.check_invalid_scope", params={"max": MAX_CHECK_SCOPES},
+                                        fallback=f"At most {MAX_CHECK_SCOPES} scopes can be added")
+        for name in names:
+            if not is_scope_token(name):
+                raise ValidationFailedError(code="access.check_invalid_scope", params={"scope": name[:128]},
+                                            fallback="A scope is printable ASCII without spaces, quotes or backslashes")
+        return names
+
+    @classmethod
+    def check_access(cls, db, service, *, jti: Optional[str] = None, client_id: Optional[str] = None,
+                     user_id: Optional[str] = None, group_id: Optional[str] = None, scopes=(),
+                     now: Optional[datetime] = None) -> dict:
+        """The verdict for every tool of the server (removed ones left out) for one token or a "what if" subject,
+        computed with the evaluator on the policy the server receives. Read only: nothing is stored or signed.
+
+        Subject: ``jti`` (a token issued for this server: personal, OAuth access or refresh; its own claims), or a
+        client and/or a user, or a client and/or "a member of" a group (a member that is not stored, so the group's
+        rules apply to it however many members the group has). ``scopes`` are added to the subject's (a what-if
+        subject has none of its own). Returns {"claims", "base_scopes", "added_scopes", "token", "subject_ids"
+        (canonical client / user / group ids of a what-if subject), "tools"}; each tool
+        is {"id", "name", "state", "decision", "reason", "rule_ids", "scopes", "challenge"}."""
+        added = cls._check_scopes(scopes)
+        what_if = [v for v in (client_id, user_id, group_id) if v]
+        if (jti and what_if) or (user_id and group_id) or not (jti or what_if):
+            raise ValidationFailedError(code="access.check_subject",
+                                        fallback="Name a token (jti), or a client and/or a user or a group")
+        now = now or utc_now()
+        token = None
+        extra_members = None
+        ids = {}
+        if jti:
+            token = OAuthTokenCRUD.get(db, jti.strip())
+            if token is None:
+                raise ValidationFailedError(code="access.subject_not_found", params={"kind": "token"},
+                                            fallback="No token with this id")
+            if normalize_audience(token.audience or "") != normalize_audience(service.effective_audience or ""):
+                raise ValidationFailedError(code="access.token_other_service",
+                                            fallback="This token was issued for another server")
+            claims = {"sub": token.sub, "client_id": token.client_id, "scope": token.scope or ""}
+            if token.kind != "refresh":
+                # A refresh token's jti is never presented to a server; its access tokens carry their own
+                claims["jti"] = token.jti
+        else:
+            claims = {"scope": ""}
+            if client_id:
+                # A client on its own is a client_credentials token: its sub is the client id
+                claims["client_id"] = claims["sub"] = ids["client"] = cls._subject(db, service, SUBJECT_CLIENT,
+                                                                                    client_id)
+            if user_id:
+                claims["sub"] = ids["user"] = cls._subject(db, service, SUBJECT_USER, user_id)
+            if group_id:
+                gid = ids["group"] = cls._subject(db, service, SUBJECT_GROUP, group_id)
+                claims["sub"] = WHAT_IF_MEMBER_PREFIX + gid
+                extra_members = {gid: [claims["sub"]]}
+        base = claims["scope"].split()
+        claims["scope"] = " ".join(dict.fromkeys(base + added))
+        policy = cls.build_policy(db, service, now, extra_members=extra_members)
+        ts = epoch_utc(now)
+        tools = [{"id": str(t.id), "name": t.name, "state": t.state,
+                  **evaluate(policy, claims, t.name, approved=t.state == TOOL_STATE_APPROVED, now=ts)}
+                 for t in MCPToolCRUD.get_by_service(db, str(service.id), include_removed=False)]
+        return {"claims": claims, "base_scopes": base, "added_scopes": [s for s in added if s not in base],
+                "token": token, "subject_ids": ids, "tools": tools}
+
+
+# A what-if "member of group G" is evaluated as a token whose sub is this prefix + G: never a real user id (those
+# are UUIDs), so no user rule can match it, and the group's rules are expanded to it as to a stored member.
+WHAT_IF_MEMBER_PREFIX = "what-if-member-of:"
+# Scopes a what-if check may add
+MAX_CHECK_SCOPES = 64
 
 
 class _Probe:
