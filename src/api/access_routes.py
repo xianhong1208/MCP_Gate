@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -26,7 +26,7 @@ from src.adapters.exceptions import AdapterError
 from src.audit import ActorType, AuditAction, AuditService, AuditStatus, ResourceType
 from src.identity import get_current_user
 from src.oauth import service as oauth
-from src.tool_policy.evaluate import RULES_VERSION
+from src.tool_policy.evaluate import ALLOWED, HIDDEN, NEEDS_SCOPE, RULES_VERSION
 from src.tool_policy.policy import challenge_scope
 from src.tool_policy.validation import (
     MAX_RULES_BYTES_PER_SERVICE, MAX_RULES_PER_SERVICE, MAX_SCOPES_PER_TOOL, MAX_TOOLS_PER_RULE, is_scope_token,
@@ -115,6 +115,56 @@ def get_service_access(service_id: str, db: Session = Depends(get_db), _: AdminU
         "tools": tools, "rules": [_rule_info(db, r, now) for r in ToolAccessAdapter.list_rules(db, service)],
         "scopes": scopes, "policy": ToolAccessAdapter.build_policy(db, service, now),
         "rules_version": RULES_VERSION, "limits": LIMITS,
+    }
+
+
+@router.get("/api/services/{service_id}/access/check")
+def check_service_access(service_id: str, jti: Optional[str] = Query(None, max_length=512),
+                         client_id: Optional[str] = Query(None, max_length=512),
+                         user_id: Optional[str] = Query(None, max_length=64),
+                         group_id: Optional[str] = Query(None, max_length=64),
+                         scope: Optional[str] = Query(None, max_length=4096),
+                         db: Session = Depends(get_db), _: AdminUser = Depends(get_current_user)):
+    """What a token may do with this server's tools, or what it would be allowed if it were someone else ("what
+    if"), as MCP Gate decides it: the evaluator (src/tool_policy/evaluate.py) on the same policy the server receives
+    through the policy feed. Read only: nothing is stored, audited or signed, and the server is not contacted.
+
+    Subject, one of: `jti` = a token issued for this server (personal, OAuth access or refresh token; its own
+    subject, client and scopes); or `client_id` and/or `user_id`; or `client_id` and/or `group_id` (a member of that
+    group). `scope` (space-separated) adds scopes to the subject's. Each tool of the server (removed ones left out)
+    gets `decision` allowed / needs_scope / hidden, the `reason`, its `scopes`, the step-up `challenge` and the
+    `rules` that decided it."""
+    service = _service(db, service_id)
+    try:
+        result = ToolAccessAdapter.check_access(db, service, jti=jti, client_id=client_id, user_id=user_id,
+                                                group_id=group_id, scopes=(scope or "").split())
+    except AdapterError as e:
+        raise _adapter_exc(e)
+    now = utc_now()
+    rules = {str(r.id): _rule_info(db, r, now) for r in ToolAccessAdapter.list_rules(db, service)}
+    tools = []
+    counts = {ALLOWED: 0, NEEDS_SCOPE: 0, HIDDEN: 0}
+    for tool in result["tools"]:
+        counts[tool["decision"]] += 1
+        tools.append({**tool, "rules": [rules[r] for r in tool["rule_ids"] if r in rules]})
+    token = result["token"]
+    ids = result["subject_ids"]
+
+    def named(kind, value):
+        return {"id": value, "label": _subject_label(db, kind, value)} if value else None
+
+    return {
+        "service_id": str(service.id), "service_name": service.name, "rules_version": RULES_VERSION,
+        "subject": {
+            "token": None if token is None else {
+                "jti": token.jti, "kind": token.kind, "label": token.label, "status": token.to_dict()["status"],
+                "client_id": token.client_id, "sub": token.sub},
+            "client": named(SUBJECT_CLIENT, ids.get("client")),
+            "user": named(SUBJECT_USER, ids.get("user")),
+            "group": named(SUBJECT_GROUP, ids.get("group")),
+        },
+        "scopes": result["claims"]["scope"].split(), "base_scopes": result["base_scopes"],
+        "added_scopes": result["added_scopes"], "counts": counts, "tools": tools,
     }
 
 

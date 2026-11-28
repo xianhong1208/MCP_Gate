@@ -1333,6 +1333,8 @@
     },
     "access": {
       "challenge_not_in_scopes": "追加授權要求的 scope 必須是這個 tool 所在的組合之一。",
+      "check_invalid_scope": "scope 只能用可列印的 ASCII 字元，不能有空白、引號或反斜線（最多 64 個）。",
+      "check_subject": "請選擇一張 token，或是 client 和（或）使用者、群組。",
       "expires_in_past": "到期時間必須在未來。",
       "invalid_effect": "規則只能是「拒絕」或「限定」。",
       "invalid_subject_kind": "不認得的對象類型。",
@@ -1346,6 +1348,7 @@
       "scope_name_unsafe": "scope {{scope}} 含有追加授權無法帶的字元。",
       "scope_not_permitted": "這台 server 不能授予 scope {{scope}}。",
       "subject_not_found": "這個對象已經不存在。",
+      "token_other_service": "這張 token 是簽給另一台 server 的。",
       "too_many_scopes": "一個 tool 最多只能在 {{max}} 個組合中。",
       "too_many_tools": "一條規則最多只能列 {{max}} 個 tools。",
       "unknown_scope": "這台 server 沒有 scope {{scope}}。",
@@ -1676,6 +1679,92 @@
       "bundleHint": "核准並把 tool 放進組合",
       "added": "{{name}} 已放入 {{bundle}}",
       "addFailed": "已核准，但放入組合失敗：{{message}}"
+    },
+    "check": {
+      "count": {
+        "allowed_other": "{{count}} 個允許",
+        "needs_scope_other": "{{count}} 個需要組合",
+        "hidden_other": "{{count}} 個隱藏"
+      },
+      "decision": {
+        "allowed": "允許",
+        "needs_scope": "需要組合",
+        "hidden": "隱藏"
+      },
+      "reason": {
+        "viaBundle": "透過組合 {{scopes}}。",
+        "noBundle": "不在任何組合中：這台 server 的任何 token 都能呼叫。",
+        "missingScope": "會列出，但 token 要持有 {{scope}} 才能呼叫（client 會被要求追加授權）。",
+        "denied": "被 {{rules}} 的拒絕規則隱藏。",
+        "outsideOnly": "已隱藏：不在 {{rules}} 的「只能使用這些 tools」規則內。",
+        "notApproved": "已隱藏：這個 tool 目前的定義還沒核准。",
+        "unscopedRequired": "已隱藏：它不在任何組合中，而這台 server 要求 tool 必須在組合中。",
+        "unknown": "已隱藏（{{reason}}）。"
+      },
+      "live": {
+        "listed": "有列出",
+        "listedHint": "以這張 token 的身分重新整理時，server 有列出這個 tool。",
+        "notListed": "沒有列出",
+        "notListedHint": "MCP Gate 允許這張 token 看到這個 tool，但 server 沒有列出。",
+        "probeOnly": "只列給 MCP Gate",
+        "probeOnlyHint": "server 的 middleware 會把所有 tools 列給 MCP Gate 檢視用的 token 副本，但對 token 本身會隱藏這個 tool。",
+        "exposed": "server 有列出",
+        "exposedHint": "MCP Gate 對這張 token 隱藏這個 tool，但 server 列出了：那裡沒有執行這條規則或組合。",
+        "unverified": "有列出",
+        "unverifiedHint": "server 有列出；不知道它的 middleware 會不會對 token 隱藏（沒有政策 feed 狀態）。"
+      },
+      "seeRules": "規則",
+      "disagree": {
+        "title": "server 列出的和 MCP Gate 的判定不一致",
+        "exposed": "MCP Gate 對這張 token 隱藏，server 卻列出：{{list}}。這台 server 沒有執行這些規則或組合（請看「存取控制」分頁）。",
+        "notListed": "這張 token 應該看得到，server 卻沒有列出：{{list}}。server 自己篩選了 tools，或已經不再提供。"
+      },
+      "agree": {
+        "same": "server 列出的和 MCP Gate 的判定一致。",
+        "probeOnly_other": "server 列出的一致。它另外把 {{count}} 個 tools 列給 MCP Gate 檢視用的 token 副本，對 token 本身則由 middleware 隱藏。"
+      },
+      "inspectTitle": "MCP Gate 對這張 token 的判定",
+      "inspectHint": "依 MCP Gate 送給 server 的組合與規則，這張 token 能呼叫什麼。重新整理後可以和 server 列出的比對。",
+      "tokenTitle": "這張 token 能呼叫的 tools",
+      "tokenSubtitle": "MCP Gate 對以下 server 每個 tool 的判定：",
+      "tokenNoService": "這張 token 沒有綁定已登錄的 server。",
+      "tokenInactive": "這張 token 已失效，不能呼叫任何 tool。",
+      "notEnforcedNote": "這台 server 還沒有執行這些判定；在那之前，token 看到的 tools 可能比這裡標示為允許的還多。"
+    },
+    "whatIf": {
+      "title": "假設檢查",
+      "subtitle": "在簽發 token 或修改規則之前，先檢查某個對象在這台 server 能呼叫什麼。不會簽發或儲存任何東西。",
+      "kindLabel": "對象類型",
+      "kind": {
+        "pat": "Personal token",
+        "client": "OAuth Client",
+        "user": "使用者",
+        "group": "群組成員"
+      },
+      "subjectLabel": "對象",
+      "subjectHelp": {
+        "pat": "用這張 token 本身的 scopes，加上你另外加入的。",
+        "client": "client 為自己取得的 token（client credentials）。",
+        "user": "這位使用者的任何 token；加入 client 後，該 client 的規則也會套用。",
+        "group": "群組中的任何人，即使群組還沒有成員。"
+      },
+      "clientLabel": "透過 client",
+      "clientHelp": "這個 client 的規則也會套用。",
+      "anyClient": "不套用 client 規則",
+      "addScopesLabel": "加入 scopes",
+      "scopesLabel": "Scopes",
+      "patScopes": "這張 token 已持有：{{scopes}}。",
+      "patScopesHelp": "這張 token 本身沒有 scope。",
+      "scopesHelp": "token 會持有的 scopes。",
+      "noScopes": "這台 server 沒有其他 scope。",
+      "run": "檢查",
+      "nothingIssued": "唯讀：不會簽發 token。",
+      "withScopes": "持有 scopes：{{scopes}}",
+      "resultToken": "Personal token {{name}}",
+      "resultClient": "OAuth Client {{name}}",
+      "resultUser": "使用者 {{name}}{{through}}",
+      "resultGroup": "{{name}} 的成員{{through}}",
+      "through": "，透過 {{client}}"
     }
   },
   "groups": {

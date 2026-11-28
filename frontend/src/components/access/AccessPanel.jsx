@@ -12,6 +12,7 @@ import {
 } from '../../utils/access'
 import LastChecked from '../LastChecked'
 import BundleToolsDialog from './BundleToolsDialog'
+import { WhatIfCard } from './Verdicts'
 import { BundleFormDialog, BundleName, RuleDialog, ToolScopesDialog } from './AccessDialogs'
 import { Alert, Badge, Button, Card, CardHeader, EmptyState, IconButton, SegmentedControl } from '../ui'
 
@@ -239,6 +240,9 @@ export default function AccessPanel({ service, access, policyStatus, tokens, onC
             )}
             <p className="mt-3 border-t border-border pt-3 text-xs text-muted-foreground">{t('access.rules.order')}</p>
           </Card>
+
+          {/* What if: the verdict per tool for a subject, before issuing anything */}
+          <WhatIfCard serviceId={service.id} access={access} tokens={tokens} lists={lists} />
         </div>
 
         {/* Bundles available on this server */}
