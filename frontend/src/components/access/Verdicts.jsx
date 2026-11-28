@@ -241,7 +241,6 @@ export function TokenToolsCard({ token, policyStatus }) {
         description={token.service_id
           ? <>{t('access.check.tokenSubtitle')} <Link to={`/services/${encodeURIComponent(token.service_id)}?tab=access`} className="text-link transition-colors duration-200 hover:text-link-hover">{token.service_name}</Link></>
           : t('access.check.tokenNoService')}
-        action={check && <VerdictCounts counts={check.counts} />}
       />
       {!token.service_id ? null : !active ? (
         <p className="text-sm text-muted-foreground" data-testid="token-tools-inactive">{t('access.check.tokenInactive')}</p>
@@ -252,7 +251,12 @@ export function TokenToolsCard({ token, policyStatus }) {
           {e && e.key !== 'enforced' && (
             <div className="mb-3"><Alert tone={e.tone === 'warning' ? 'warning' : 'neutral'} title={t(`access.enforcement.${e.key}.title`)}>{t('access.check.notEnforcedNote')}</Alert></div>
           )}
-          {check && <VerdictList check={check} serviceId={token.service_id} />}
+          {check && (
+            <>
+              <div className="mb-2"><VerdictCounts counts={check.counts} /></div>
+              <VerdictList check={check} serviceId={token.service_id} />
+            </>
+          )}
         </>
       )}
     </Card>
